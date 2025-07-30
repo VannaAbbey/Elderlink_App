@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "586605125696",
+    "project_id": "elderlink-firebase",
+    "storage_bucket": "elderlink-firebase.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:586605125696:android:4fba427fe35c86ba75bfa5",
+        "android_client_info": {
+          "package_name": "com.group8.elderlink_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDrjZZdzIwvFMnv71qOCIx7EF1rjmmqPno"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
