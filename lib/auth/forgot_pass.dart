@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
 
 class TextStyles {
   static const TextStyle buttontext = TextStyle(
@@ -8,8 +9,76 @@ class TextStyles {
   );
 }
 
-class ForgotPasswordScreen extends StatelessWidget {
+class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
+
+  @override
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
+}
+
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final TextEditingController _emailController = TextEditingController();
+  final AuthService _authService = AuthService();
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleResetPassword() async {
+    if (_emailController.text.trim().isEmpty) {
+      _showDialog('Error', 'Please enter your email address.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await _authService.resetPassword(email: _emailController.text.trim());
+      if (mounted) {
+        _showDialog(
+          'Success', 
+          'Password reset email sent! Please check your inbox.',
+          isSuccess: true,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showDialog('Error', e.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  void _showDialog(String title, String message, {bool isSuccess = false}) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              if (isSuccess) {
+                Navigator.pop(context); // Go back to login screen
+              }
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +141,7 @@ class ForgotPasswordScreen extends StatelessWidget {
                       Padding(
                         padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.1),
                         child: const Text(
-                          "Select which contain details to \nbe use to reset your password:",
+                          "Enter your email address and we'll send you a password reset link:",
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 18, color: Colors.black),
                         ),
@@ -80,88 +149,61 @@ class ForgotPasswordScreen extends StatelessWidget {
 
                       SizedBox(height: screenHeight * 0.04),
 
-                      // ✉️ Email
+                      // ✉️ Email Input
                       Padding(
                         padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.08),
-                        child: Card(
-                          elevation: 2,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            side: const BorderSide(color: Colors.black87, width: 2),
-                          ),
-                          child: Container(
-                            height: screenHeight * 0.12,
-                            padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.15),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.email,
-                                  size: screenHeight * 0.07,
-                                  color: const Color(0xFF3D7795),
-                                ),
-                                SizedBox(width: screenWidth * 0.05),
-                                Expanded(
-                                  child: Text(
-                                    'via Email\nAddress',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      color: const Color(0xFF3D7795),
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                        child: TextField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: InputDecoration(
+                            hintText: 'Enter your email address',
+                            filled: true,
+                            fillColor: const Color(0xFFC1E5E9),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(30),
+                              borderSide: BorderSide.none,
                             ),
+                            prefixIcon: const Icon(Icons.email, color: Colors.black54),
                           ),
                         ),
                       ),
 
-                      SizedBox(height: screenHeight * 0.025),
+                      SizedBox(height: screenHeight * 0.04),
 
-                      // 📞 Phone
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.08),
-                        child: Card(
-                          elevation: 2,
+                      // � Send Reset Email Button
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1D5B78),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            side: const BorderSide(color: Colors.black87, width: 2),
+                            borderRadius: BorderRadius.circular(30),
                           ),
-                          child: Container(
-                            height: screenHeight * 0.12,
-                            padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.15),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.phone,
-                                  size: screenHeight * 0.07,
-                                  color: const Color(0xFF3D7795),
-                                ),
-                                SizedBox(width: screenWidth * 0.05),
-                                Expanded(
-                                  child: Text(
-                                    'via Contact\nNumber',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      color: const Color(0xFF3D7795),
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: screenWidth * 0.20,
+                            vertical: screenHeight * 0.015,
                           ),
                         ),
+                        onPressed: _isLoading ? null : _handleResetPassword,
+                        child: _isLoading 
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Text(
+                              'SEND RESET EMAIL',
+                              style: TextStyles.buttontext,
+                            ),
                       ),
 
-                      SizedBox(height: screenHeight * 0.05),
+                      SizedBox(height: screenHeight * 0.02),
 
                       // 🔙 Back Button
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1D5B78),
+                          backgroundColor: Colors.grey,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
                           ),

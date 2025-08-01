@@ -133,7 +133,11 @@ class RegisterSuccessScreen extends StatelessWidget {
                           ),
                         ),
                         onPressed: () {
-                          Navigator.pop(context);
+                          Navigator.pushNamedAndRemoveUntil(
+                            context,
+                            '/login',
+                            (route) => false,
+                          );
                         },
                         child: const Text(
                           'LET\'S GO!',

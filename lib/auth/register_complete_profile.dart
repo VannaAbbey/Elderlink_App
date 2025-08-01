@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../services/auth_service.dart';
 
 class RegisterProfileScreen extends StatefulWidget {
-  const RegisterProfileScreen({super.key});
+  final String selectedRole;
+  
+  const RegisterProfileScreen({super.key, required this.selectedRole});
 
   @override
   State<RegisterProfileScreen> createState() => _RegisterProfileScreenState();
@@ -12,8 +15,184 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreed = false;
+  bool _isLoading = false;
   DateTime? _selectedDate;
+  
+  final TextEditingController _firstNameController = TextEditingController();
+  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
   final TextEditingController _birthdayController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final AuthService _authService = AuthService();
+
+  @override
+  void dispose() {
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _birthdayController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleRegistration() async {
+    // Validation
+    if (!_validateInputs()) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final userData = {
+        'firstName': _firstNameController.text.trim(),
+        'lastName': _lastNameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'birthday': _selectedDate?.toIso8601String(),
+        'profileCompleted': true,
+      };
+
+      final userCredential = await _authService.registerWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        role: widget.selectedRole,
+        userData: userData,
+      );
+
+      if (userCredential != null && mounted) {
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          '/register_success',
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorDialog(e.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  bool _validateInputs() {
+    if (_firstNameController.text.trim().isEmpty ||
+        _lastNameController.text.trim().isEmpty ||
+        _emailController.text.trim().isEmpty ||
+        _passwordController.text.trim().isEmpty ||
+        _confirmPasswordController.text.trim().isEmpty ||
+        _phoneController.text.trim().isEmpty ||
+        _selectedDate == null) {
+      _showErrorDialog('Please fill in all fields.');
+      return false;
+    }
+
+    if (_passwordController.text.trim() != _confirmPasswordController.text.trim()) {
+      _showErrorDialog('Passwords do not match.');
+      return false;
+    }
+
+    if (_passwordController.text.trim().length < 6) {
+      _showErrorDialog('Password must be at least 6 characters long.');
+      return false;
+    }
+
+    if (!_agreed) {
+      _showErrorDialog('Please agree to the terms and conditions.');
+      return false;
+    }
+
+    return true;
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTermsAndPrivacyDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text(
+          'Terms and Privacy Policy',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF2D5260),
+          ),
+        ),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Terms of Service',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF216386),
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\n'
+                '[PLACEHOLDER FOR TERMS OF SERVICE CONTENT]\n\n',
+                style: TextStyle(fontSize: 14),
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Privacy Policy',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF216386),
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\n'
+                '[PLACEHOLDER FOR PRIVACY CONTENT]',
+                style: TextStyle(fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Close',
+              style: TextStyle(
+                color: Color(0xFF216386),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _pickDate() async {
     DateTime now = DateTime.now();
@@ -115,9 +294,15 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                             ),
                             const SizedBox(height: 25),
 
-                            TextField(decoration: customInput('First Name')),
+                            TextField(
+                              controller: _firstNameController,
+                              decoration: customInput('First Name')
+                            ),
                             const SizedBox(height: 15),
-                            TextField(decoration: customInput('Last Name')),
+                            TextField(
+                              controller: _lastNameController,
+                              decoration: customInput('Last Name')
+                            ),
                             const SizedBox(height: 15),
                             TextField(
                               controller: _birthdayController,
@@ -130,16 +315,19 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                             ),
                             const SizedBox(height: 15),
                             TextField(
+                              controller: _phoneController,
                               keyboardType: TextInputType.phone,
                               decoration: customInput('Phone Number'),
                             ),
                             const SizedBox(height: 15),
                             TextField(
+                              controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               decoration: customInput('Email'),
                             ),
                             const SizedBox(height: 15),
                             TextField(
+                              controller: _passwordController,
                               obscureText: _obscurePassword,
                               decoration: customInput(
                                 'Password',
@@ -159,6 +347,7 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                             ),
                             const SizedBox(height: 15),
                             TextField(
+                              controller: _confirmPasswordController,
                               obscureText: _obscureConfirm,
                               decoration: customInput(
                                 'Confirm Password',
@@ -196,21 +385,30 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                                     },
                                   ),
                                   const SizedBox(width: 4),
-                                  const Text.rich(
-                                    TextSpan(
-                                      text: 'Agree to the ',
-                                      style: TextStyle(fontSize: 15),
-                                      children: [
-                                        TextSpan(
-                                          text: 'Terms and Privacy',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Color(0xFF2D5260),
+                                  Flexible(
+                                    child: Text.rich(
+                                      TextSpan(
+                                        text: 'Agree to the ',
+                                        style: const TextStyle(fontSize: 15),
+                                        children: [
+                                          WidgetSpan(
+                                            child: GestureDetector(
+                                              onTap: _showTermsAndPrivacyDialog,
+                                              child: const Text(
+                                                'Terms and Privacy',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color(0xFF2D5260),
+                                                  decoration: TextDecoration.underline,
+                                                  fontSize: 15,
+                                                ),
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
+                                      textAlign: TextAlign.center,
                                     ),
-                                    textAlign: TextAlign.center,
                                   ),
                                 ],
                               ),
@@ -231,18 +429,25 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                                   ),
                                 ),
                                 onPressed: _agreed
-                                    ? () {
-                                        // Handle register action
-                                      }
+                                    ? _isLoading ? null : _handleRegistration
                                     : null,
-                                child: const Text(
-                                  'Register',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
+                                child: _isLoading 
+                                  ? const SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                  : const Text(
+                                      'Register',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
                               ),
                             ),
                             const SizedBox(height: 20),

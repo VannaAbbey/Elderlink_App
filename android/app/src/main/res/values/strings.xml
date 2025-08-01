@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ElderLink</string>
+    
+    <!-- Facebook Configuration -->
+    <!-- Replace with your actual Facebook App ID -->
+    <string name="facebook_app_id">1234567890123456</string>
+    <!-- Replace with your actual Facebook Client Token -->
+    <string name="facebook_client_token">your_facebook_client_token_here</string>
+    <string name="fb_login_protocol_scheme">fb1234567890123456</string>
+</resources>
