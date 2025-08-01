@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'register_complete_profile.dart';
 
 class TextStyles {
   static const TextStyle header = TextStyle(
@@ -35,6 +36,8 @@ class RegisterChooseRoleScreen extends StatefulWidget {
 }
 
 class _RegisterChooseRoleScreenState extends State<RegisterChooseRoleScreen> {
+  String? selectedRole;
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -89,6 +92,12 @@ class _RegisterChooseRoleScreenState extends State<RegisterChooseRoleScreen> {
                               title: 'Caregiver',
                               description:
                                   'Implements care tasks, tracks progress, and assists the elderly.',
+                              isSelected: selectedRole == 'caregiver',
+                              onTap: () {
+                                setState(() {
+                                  selectedRole = 'caregiver';
+                                });
+                              },
                             ),
                             const SizedBox(height: 25),
                             RoleCard(
@@ -96,15 +105,30 @@ class _RegisterChooseRoleScreenState extends State<RegisterChooseRoleScreen> {
                               title: 'Nurse',
                               description:
                                   'Provides expert health guidance, oversight, and health assessments.',
+                              isSelected: selectedRole == 'nurse',
+                              onTap: () {
+                                setState(() {
+                                  selectedRole = 'nurse';
+                                });
+                              },
                             ),
                             const SizedBox(height: 25),
 
                             ElevatedButton(
-                              onPressed: () {
-                                // TODO: Submit logic
-                              },
+                              onPressed: selectedRole != null ? () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => RegisterProfileScreen(
+                                      selectedRole: selectedRole!,
+                                    ),
+                                  ),
+                                );
+                              } : null,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF1D5B78),
+                                backgroundColor: selectedRole != null 
+                                  ? const Color(0xFF1D5B78) 
+                                  : Colors.grey,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(30),
                                 ),
@@ -140,68 +164,97 @@ class RoleCard extends StatelessWidget {
   final String imagePath;
   final String title;
   final String description;
+  final bool isSelected;
+  final VoidCallback onTap;
 
   const RoleCard({
     required this.imagePath,
     required this.title,
     required this.description,
+    required this.isSelected,
+    required this.onTap,
     super.key,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFF00588E)),
-        borderRadius: BorderRadius.circular(12),
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFA5D4DC),
-            Color.fromARGB(255, 225, 242, 244),
-            Color.fromARGB(255, 241, 245, 246)
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isSelected ? const Color(0xFF1D5B78) : const Color(0xFF00588E),
+            width: isSelected ? 3 : 1,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: isSelected 
+              ? [
+                  const Color(0xFF1D5B78).withOpacity(0.2),
+                  const Color(0xFFA5D4DC),
+                  const Color.fromARGB(255, 225, 242, 244)
+                ]
+              : [
+                  const Color(0xFFA5D4DC),
+                  const Color.fromARGB(255, 225, 242, 244),
+                  const Color.fromARGB(255, 241, 245, 246)
+                ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
         ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.asset(
-              imagePath,
-              width: 110, // ✅ Slightly larger
-              height: 110,
-              fit: BoxFit.cover,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                imagePath,
+                width: 110, // ✅ Slightly larger
+                height: 110,
+                fit: BoxFit.cover,
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      if (isSelected) ...[
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.check_circle,
+                          color: Color(0xFF1D5B78),
+                          size: 24,
+                        ),
+                      ],
+                    ],
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  description,
-                  style: const TextStyle(fontSize: 13),
-                  textAlign: TextAlign.center,
-                  softWrap: true,
-                ),
-              ],
+                  const SizedBox(height: 5),
+                  Text(
+                    description,
+                    style: const TextStyle(fontSize: 13),
+                    textAlign: TextAlign.center,
+                    softWrap: true,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -1,10 +1,27 @@
 import 'package:flutter/material.dart';
-import '../auth/get_started.dart'; // make sure the path is correct
-import '../auth/register_choose_role.dart';
-import '../auth/forgot_pass.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+import 'auth/get_started.dart'; 
+import 'auth/login.dart';
+import 'auth/register_choose_role.dart';
+import 'auth/forgot_pass.dart';
+import 'auth/register_success.dart';
+import 'caregiver/home.dart';
+import 'nurse/home.dart';
 
-
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    print('Firebase initialized successfully');
+  } catch (e) {
+    print('Firebase initialization failed: $e');
+    // Continue without Firebase for now
+  }
+  
   runApp(const MyApp());
 }
 
@@ -37,8 +54,12 @@ class MyApp extends StatelessWidget {
       routes: {
         '/': (context) =>
             const GetStartedPage(), // ✅ This becomes the first screen
+        '/login': (context) => const LoginScreen(),
         '/register_choose_role': (context) => const RegisterChooseRoleScreen(),
         '/forgot_pass': (context) => const ForgotPasswordScreen(),
+        '/register_success': (context) => const RegisterSuccessScreen(),
+        '/caregiver_home': (context) => const CaregiverHomeScreen(),
+        '/nurse_home': (context) => const NurseHomeScreen(),
       },
     );
   }

@@ -1,29 +1,20 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 
-void main() {
-  runApp(
-    const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: CaregiverHomeScreen(),
-    ),
-  );
-}
-
-class CaregiverHomeScreen extends StatefulWidget {
-  const CaregiverHomeScreen({super.key});
+class NurseHomeScreen extends StatefulWidget {
+  const NurseHomeScreen({super.key});
 
   @override
-  State<CaregiverHomeScreen> createState() => _CaregiverHomeScreenState();
+  State<NurseHomeScreen> createState() => _NurseHomeScreenState();
 }
 
-class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+class _NurseHomeScreenState extends State<NurseHomeScreen> {
   bool isSidebarOpen = false;
   int selectedIndex = 0;
   final AuthService _authService = AuthService();
   
   // User data
-  String userName = 'Caregiver';
+  String userName = 'Nurse';
   String firstName = 'Loading...';
   bool isLoading = true;
 
@@ -41,7 +32,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         if (userData != null && mounted) {
           setState(() {
             firstName = userData['firstName'] ?? '';
-            userName = userData['role'] == 'caregiver' ? 'Caregiver' : 'Nurse';
+            userName = userData['role'] == 'nurse' ? 'Nurse' : 'Caregiver';
             if (firstName.isEmpty) firstName = user.email?.split('@')[0] ?? 'User';
             isLoading = false;
           });
@@ -164,7 +155,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                               fontSize: 15,
                             ),
                             filled: true,
-                            fillColor: Color(0xFFD8F4FF),
+                            fillColor: const Color(0xFFD8F4FF),
                             contentPadding: const EdgeInsets.symmetric(
                               vertical: 9,
                               horizontal: 14,
@@ -193,11 +184,11 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // ✅ MODIFIED: Light blue background for "Today's Tasks"
+                    // Nurse-specific content
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Color.fromRGBO(183, 221, 245, 0.25),
+                        color: const Color.fromRGBO(183, 221, 245, 0.25),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Column(
@@ -209,13 +200,13 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                               Row(
                                 children: const [
                                   Icon(
-                                    Icons.task,
+                                    Icons.medical_services,
                                     color: Color(0xFF00588E),
                                     size: 45,
                                   ),
                                   SizedBox(width: 6),
                                   Text(
-                                    "Today's Tasks",
+                                    "Today's Medical Tasks",
                                     style: TextStyle(
                                       fontSize: 24,
                                       fontWeight: FontWeight.w700,
@@ -233,23 +224,23 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          _taskCard(
+                          _medicalTaskCard(
                             'Lola Celia',
-                            '15 minutes Walking Exercise',
-                            '10:00 AM',
-                            Color(0xFFFFB0A5),
+                            'Blood Pressure Check',
+                            '9:00 AM',
+                            const Color(0xFFFFB0A5),
                           ),
-                          _taskCard(
+                          _medicalTaskCard(
                             'Lolo Adam',
-                            'Serve a Dietary Lunch',
+                            'Medication Administration',
                             '11:00 AM',
-                            Color(0xFFB7DDF5),
+                            const Color(0xFFB7DDF5),
                           ),
-                          _taskCard(
+                          _medicalTaskCard(
                             'Lola Andrea',
-                            'Take a Bath',
-                            '1:00 PM',
-                            Color(0xFFB7DDF5),
+                            'Health Assessment',
+                            '2:00 PM',
+                            const Color(0xFFB7DDF5),
                           ),
                         ],
                       ),
@@ -258,10 +249,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                     const SizedBox(height: 30),
                     Row(
                       children: const [
-                        Icon(Icons.home, color: Color(0xFF00588E), size: 45),
+                        Icon(Icons.local_hospital, color: Color(0xFF00588E), size: 45),
                         SizedBox(width: 8),
                         Text(
-                          "Elderly Houses",
+                          "Medical Centers",
                           style: TextStyle(
                             fontSize: 24,
                             fontWeight: FontWeight.w700,
@@ -275,23 +266,23 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(12),
-                        color: Color(0XFFE7EFFF),
+                        color: const Color(0XFFE7EFFF),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.home, size: 40, color: Colors.blue),
+                          const Icon(Icons.local_hospital, size: 40, color: Colors.blue),
                           const SizedBox(width: 10),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: const [
                               Text(
-                                'House of St. Sebastian',
+                                'St. Sebastian Medical Center',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              Text('Females with Psychological Needs'),
+                              Text('Specialized Elderly Care'),
                             ],
                           ),
                         ],
@@ -355,7 +346,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                               ),
                               padding: const EdgeInsets.symmetric(
                                 vertical: 10,
-                                horizontal: 60, // Adjusted to fit sidebar width
+                                horizontal: 60,
                               ),
                             ),
                             onPressed: _handleLogout,
@@ -377,7 +368,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             ],
           ],
         ),
-        // Replace your existing 'bottomNavigationBar' with this:
         bottomNavigationBar: SafeArea(
           top: false,
           child: Container(
@@ -430,7 +420,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     );
   }
 
-  Widget _taskCard(String name, String task, String time, Color bgColor) {
+  Widget _medicalTaskCard(String name, String task, String time, Color bgColor) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.all(12),
@@ -442,7 +432,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             color: Colors.black.withOpacity(0.1),
             spreadRadius: 1,
             blurRadius: 6,
-            offset: const Offset(0, 3), // subtle shadow below the card
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -470,7 +460,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
 
   Widget _sidebarItem(IconData icon, String title) {
     return ListTile(
-      leading: Icon(icon, color: Color(0xFF00588e)),
+      leading: Icon(icon, color: const Color(0xFF00588e)),
       title: Text(title),
       onTap: () {
         setState(() => isSidebarOpen = false);

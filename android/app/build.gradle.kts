@@ -3,12 +3,28 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services") //added for firebase backend - july 30, 2025
+}
+
+dependencies { 
+  // Import the Firebase BoM
+  implementation(platform("com.google.firebase:firebase-bom:34.0.0")) //added for firebase backend - july 30, 2025
+
+  // Firebase Authentication
+  implementation("com.google.firebase:firebase-auth")
+  
+  // Google Sign-In
+  implementation("com.google.android.gms:play-services-auth:20.7.0")
+
+  // TODO: Add the dependencies for Firebase products you want to use
+  // When using the BoM, don't specify versions in Firebase dependencies
+  // https://firebase.google.com/docs/android/setup#available-libraries
 }
 
 android {
     namespace = "com.example.elderlink_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -21,10 +37,10 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.elderlink_app"
+        applicationId = "com.group8.elderlink_app" //updated package name - july 30, 2025
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/auth_service.dart';
 
 class TextStyles {
   static const TextStyle header = TextStyle(
@@ -35,6 +37,143 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool isPasswordVisible = false;
+  bool isLoading = false;
+  
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final AuthService _authService = AuthService();
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    if (_emailController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
+      _showErrorDialog('Please fill in all fields.');
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final userCredential = await _authService.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      if (userCredential != null && mounted) {
+        // Get user data to determine role
+        final userData = await _authService.getUserData(userCredential.user!.uid);
+        
+        if (userData != null) {
+          final role = userData['role'] as String;
+          
+          // Navigate based on role
+          if (role == 'caregiver') {
+            Navigator.pushReplacementNamed(context, '/caregiver_home');
+          } else if (role == 'nurse') {
+            Navigator.pushReplacementNamed(context, '/nurse_home');
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorDialog(e.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleSocialLogin(String provider) async {
+    // Development workaround for platform channel issues
+    if (kDebugMode && provider != 'google') {
+      _showErrorDialog('${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is temporarily disabled in development. Please use Google Sign-In or email login.');
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      UserCredential? userCredential;
+      
+      switch (provider) {
+        case 'google':
+          userCredential = await _authService.signInWithGoogle();
+          break;
+        case 'facebook':
+          userCredential = await _authService.signInWithFacebook();
+          break;
+        case 'apple':
+          userCredential = await _authService.signInWithApple();
+          break;
+      }
+
+      if (userCredential != null && mounted) {
+        // Get user data to determine role
+        final userData = await _authService.getUserData(userCredential.user!.uid);
+        
+        if (userData != null) {
+          final role = userData['role'] as String;
+          
+          // Navigate based on role
+          if (role == 'caregiver') {
+            Navigator.pushReplacementNamed(context, '/caregiver_home');
+          } else if (role == 'nurse') {
+            Navigator.pushReplacementNamed(context, '/nurse_home');
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        String errorMessage = e.toString();
+        
+        // Provide more user friendly error messages
+        if (errorMessage.contains('platform error') || errorMessage.contains('channel')) {
+          errorMessage = 'Social login is currently unavailable. Please try email login or configure the platform settings.';
+        } else if (errorMessage.contains('not supported')) {
+          errorMessage = '${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is not available on this device.';
+        } else if (errorMessage.contains('not available')) {
+          errorMessage = 'This sign-in method needs additional setup. Please use email login for now.';
+        }
+        
+        _showErrorDialog(errorMessage);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,6 +219,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 25),
                             TextField(
+                              controller: _emailController,
+                              keyboardType: TextInputType.emailAddress,
                               decoration: InputDecoration(
                                 hintText: 'Email',
                                 filled: true,
@@ -92,6 +233,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 15),
                             TextField(
+                              controller: _passwordController,
                               obscureText: !isPasswordVisible,
                               decoration: InputDecoration(
                                 hintText: 'Password',
@@ -128,8 +270,17 @@ class _LoginScreenState extends State<LoginScreen> {
                                     horizontal: 95,
                                   ),
                                 ),
-                                onPressed: () {},
-                                child: const Text('LOGIN', style: TextStyles.buttontext),
+                                onPressed: isLoading ? null : _handleLogin,
+                                child: isLoading 
+                                  ? const SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                  : const Text('LOGIN', style: TextStyles.buttontext),
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -166,30 +317,15 @@ class _LoginScreenState extends State<LoginScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                               children: [
                                 GestureDetector(
-                                  onTap: () async {
-                                    final url = Uri.parse('https://accounts.google.com/');
-                                    if (await canLaunchUrl(url)) {
-                                      await launchUrl(url);
-                                    }
-                                  },
+                                  onTap: () => _handleSocialLogin('google'),
                                   child: Image.asset('assets/images/google.png', height: 47),
                                 ),
                                 GestureDetector(
-                                  onTap: () async {
-                                    final url = Uri.parse('https://facebook.com/login/');
-                                    if (await canLaunchUrl(url)) {
-                                      await launchUrl(url);
-                                    }
-                                  },
+                                  onTap: () => _handleSocialLogin('facebook'),
                                   child: Image.asset('assets/images/fb.png', height: 50),
                                 ),
                                 GestureDetector(
-                                  onTap: () async {
-                                    final url = Uri.parse('https://appleid.apple.com/');
-                                    if (await canLaunchUrl(url)) {
-                                      await launchUrl(url);
-                                    }
-                                  },
+                                  onTap: () => _handleSocialLogin('apple'),
                                   child: Image.asset('assets/images/apple.png', height: 47),
                                 ),
                               ],
