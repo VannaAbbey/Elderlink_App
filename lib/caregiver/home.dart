@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
 void main() {
   runApp(
@@ -20,59 +21,16 @@ class CaregiverHomeScreen extends StatefulWidget {
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   bool isSidebarOpen = false;
   int selectedIndex = 0;
-  final AuthService _authService = AuthService();
-  
-  // User data
-  String userName = 'Caregiver';
-  String firstName = 'Loading...';
-  bool isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadUserData();
-  }
-
-  Future<void> _loadUserData() async {
-    try {
-      final user = _authService.currentUser;
-      if (user != null) {
-        final userData = await _authService.getUserData(user.uid);
-        if (userData != null && mounted) {
-          setState(() {
-            firstName = userData['firstName'] ?? '';
-            userName = userData['role'] == 'caregiver' ? 'Caregiver' : 'Nurse';
-            if (firstName.isEmpty) firstName = user.email?.split('@')[0] ?? 'User';
-            isLoading = false;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          firstName = 'User';
-          isLoading = false;
-        });
-      }
-    }
-  }
 
   Future<void> _handleLogout() async {
-    try {
-      await _authService.signOut();
-      if (mounted) {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          '/login',
-          (route) => false,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error signing out: $e')),
-        );
-      }
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    await authProvider.signOut();
+    if (mounted) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        '/get_started',
+        (route) => false,
+      );
     }
   }
 
@@ -128,12 +86,17 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  isLoading ? 'Loading...' : 'Hello $userName $firstName,',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
+                                Consumer<AuthProvider>(
+                                  builder: (context, authProvider, child) {
+                                    final firstName = authProvider.userFirstName;
+                                    return Text(
+                                      'Hello Caregiver $firstName,',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    );
+                                  },
                                 ),
                                 const Text('Hope you are doing well'),
                               ],
@@ -329,14 +292,19 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                       children: [
                         const SizedBox(height: 50),
                         Center(
-                          child: Text(
-                            isLoading ? 'Loading...' : '$userName $firstName',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black,
-                              fontFamily: 'Poppins',
-                            ),
+                          child: Consumer<AuthProvider>(
+                            builder: (context, authProvider, child) {
+                              final firstName = authProvider.userFirstName;
+                              return Text(
+                                'Caregiver $firstName',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black,
+                                  fontFamily: 'Poppins',
+                                ),
+                              );
+                            },
                           ),
                         ),
                         const Divider(),

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../services/auth_service.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
 class TextStyles {
   static const TextStyle header = TextStyle(
@@ -37,11 +37,9 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool isPasswordVisible = false;
-  bool isLoading = false;
   
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final AuthService _authService = AuthService();
 
   @override
   void dispose() {
@@ -51,110 +49,80 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    
     if (_emailController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       _showErrorDialog('Please fill in all fields.');
       return;
     }
 
-    setState(() {
-      isLoading = true;
-    });
+    final success = await authProvider.signInWithEmailAndPassword(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
 
-    try {
-      final userCredential = await _authService.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-
-      if (userCredential != null && mounted) {
-        // Get user data to determine role
-        final userData = await _authService.getUserData(userCredential.user!.uid);
-        
-        if (userData != null) {
-          final role = userData['role'] as String;
-          
-          // Navigate based on role
-          if (role == 'caregiver') {
-            Navigator.pushReplacementNamed(context, '/caregiver_home');
-          } else if (role == 'nurse') {
-            Navigator.pushReplacementNamed(context, '/nurse_home');
-          }
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        _showErrorDialog(e.toString());
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
+    if (mounted) {
+      if (success) {
+        // Navigation is handled by AuthWrapper based on user role
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/caregiver_home', // This will be redirected by AuthWrapper
+          (route) => false,
+        );
+      } else {
+        _showErrorDialog(authProvider.error ?? 'Login failed. Please try again.');
       }
     }
   }
 
   Future<void> _handleSocialLogin(String provider) async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    
     // Development workaround for platform channel issues
     if (kDebugMode && provider != 'google') {
       _showErrorDialog('${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is temporarily disabled in development. Please use Google Sign-In or email login.');
       return;
     }
 
-    setState(() {
-      isLoading = true;
-    });
-
+    bool success = false;
+    
     try {
-      UserCredential? userCredential;
-      
       switch (provider) {
         case 'google':
-          userCredential = await _authService.signInWithGoogle();
+          success = await authProvider.signInWithGoogle();
           break;
         case 'facebook':
-          userCredential = await _authService.signInWithFacebook();
+          success = await authProvider.signInWithFacebook();
           break;
         case 'apple':
-          userCredential = await _authService.signInWithApple();
+          success = await authProvider.signInWithApple();
           break;
       }
 
-      if (userCredential != null && mounted) {
-        // Get user data to determine role
-        final userData = await _authService.getUserData(userCredential.user!.uid);
-        
-        if (userData != null) {
-          final role = userData['role'] as String;
+      if (mounted) {
+        if (success) {
+          // Navigation is handled by AuthWrapper based on user role
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/caregiver_home', // This will be redirected by AuthWrapper
+            (route) => false,
+          );
+        } else {
+          String errorMessage = authProvider.error ?? 'Social login failed. Please try again.';
           
-          // Navigate based on role
-          if (role == 'caregiver') {
-            Navigator.pushReplacementNamed(context, '/caregiver_home');
-          } else if (role == 'nurse') {
-            Navigator.pushReplacementNamed(context, '/nurse_home');
+          // Provide more user friendly error messages
+          if (errorMessage.contains('platform error') || errorMessage.contains('channel')) {
+            errorMessage = 'Social login is currently unavailable. Please try email login or configure the platform settings.';
+          } else if (errorMessage.contains('not supported')) {
+            errorMessage = '${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is not available on this device.';
+          } else if (errorMessage.contains('not available')) {
+            errorMessage = 'This sign-in method needs additional setup. Please use email login for now.';
           }
+          
+          _showErrorDialog(errorMessage);
         }
       }
     } catch (e) {
       if (mounted) {
-        String errorMessage = e.toString();
-        
-        // Provide more user friendly error messages
-        if (errorMessage.contains('platform error') || errorMessage.contains('channel')) {
-          errorMessage = 'Social login is currently unavailable. Please try email login or configure the platform settings.';
-        } else if (errorMessage.contains('not supported')) {
-          errorMessage = '${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is not available on this device.';
-        } else if (errorMessage.contains('not available')) {
-          errorMessage = 'This sign-in method needs additional setup. Please use email login for now.';
-        }
-        
-        _showErrorDialog(errorMessage);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
+        _showErrorDialog('An unexpected error occurred. Please try again.');
       }
     }
   }
@@ -257,31 +225,33 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
                             const SizedBox(height: 25),
-                            Center(
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF1D5B78),
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(30),
+                            Consumer<AuthProvider>(
+                              builder: (context, authProvider, child) {
+                                return ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1D5B78),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                      horizontal: 95,
+                                    ),
                                   ),
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                    horizontal: 95,
-                                  ),
-                                ),
-                                onPressed: isLoading ? null : _handleLogin,
-                                child: isLoading 
-                                  ? const SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                      ),
-                                    )
-                                  : const Text('LOGIN', style: TextStyles.buttontext),
-                              ),
+                                  onPressed: authProvider.isLoading ? null : _handleLogin,
+                                  child: authProvider.isLoading 
+                                    ? const SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                        ),
+                                      )
+                                    : const Text('LOGIN', style: TextStyles.buttontext),
+                                );
+                              },
                             ),
                             const SizedBox(height: 20),
                             GestureDetector(
