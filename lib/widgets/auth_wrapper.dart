@@ -12,8 +12,17 @@ class AuthWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AuthProvider>(
       builder: (context, authProvider, child) {
-        // Show loading indicator while checking authentication state
-        if (authProvider.isLoading && authProvider.currentUser == null) {
+        print('DEBUG: AuthWrapper build - isAuthenticated: ${authProvider.isAuthenticated}, userData: ${authProvider.userData != null}');
+        
+        // If user is not authenticated, show get started page
+        if (!authProvider.isAuthenticated) {
+          print('DEBUG: User not authenticated, showing GetStartedPage');
+          return const GetStartedPage();
+        }
+
+        // If user is authenticated but userData is null, show minimal loading
+        if (authProvider.userData == null) {
+          print('DEBUG: User authenticated but no userData, showing minimal loading');
           return const Scaffold(
             body: Center(
               child: CircularProgressIndicator(),
@@ -21,28 +30,22 @@ class AuthWrapper extends StatelessWidget {
           );
         }
 
-        // If user is authenticated, navigate to appropriate home screen
-        if (authProvider.isAuthenticated) {
-          // Wait for user data to load before deciding which home screen
-          if (authProvider.userData == null) {
-            return const Scaffold(
-              body: Center(
-                child: CircularProgressIndicator(),
-              ),
-            );
-          }
-
-          // Navigate based on user role
-          final userRole = authProvider.userRole;
-          if (userRole == 'nurse') {
-            return const NurseHomeScreen();
-          } else {
+        // User is authenticated and has data, navigate based on role
+        final userRole = authProvider.userRole;
+        print('DEBUG: User authenticated with role: $userRole');
+        
+        switch (userRole) {
+          case 'administrator':
+            print('DEBUG: Navigating to CaregiverHomeScreen (admin)');
             return const CaregiverHomeScreen();
-          }
+          case 'nurse':
+            print('DEBUG: Navigating to NurseHomeScreen');
+            return const NurseHomeScreen();
+          case 'caregiver':
+          default:
+            print('DEBUG: Navigating to CaregiverHomeScreen (default)');
+            return const CaregiverHomeScreen();
         }
-
-        // If user is not authenticated, show get started page
-        return const GetStartedPage();
       },
     );
   }

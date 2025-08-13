@@ -79,9 +79,27 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               children: [
                                 Consumer<AuthProvider>(
                                   builder: (context, authProvider, child) {
+                                    // Wait for user data to be loaded
+                                    if (authProvider.userData == null) {
+                                      return const Text(
+                                        'Hello Nurse,',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      );
+                                    }
+                                    
                                     final firstName = authProvider.userFirstName;
+                                    // Ensure firstName is not empty or default
+                                    final displayName = (firstName.isEmpty || firstName == 'User') 
+                                        ? '' 
+                                        : firstName;
+                                    
                                     return Text(
-                                      'Hello Nurse $firstName,',
+                                      displayName.isEmpty 
+                                          ? 'Hello Nurse,'
+                                          : 'Hello Nurse $displayName,',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 16,
@@ -104,7 +122,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     const SizedBox(height: 20),
                     Align(
                       alignment: Alignment.center,
-                      child: Container(
+                      child: SizedBox(
                         width: MediaQuery.of(context).size.width * 0.85,
                         child: TextField(
                           decoration: InputDecoration(
@@ -285,9 +303,29 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         Center(
                           child: Consumer<AuthProvider>(
                             builder: (context, authProvider, child) {
+                              // Wait for user data to be loaded
+                              if (authProvider.userData == null) {
+                                return const Text(
+                                  'Nurse',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
+                                    fontFamily: 'Poppins',
+                                  ),
+                                );
+                              }
+                              
                               final firstName = authProvider.userFirstName;
+                              // Ensure firstName is not empty or default
+                              final displayName = (firstName.isEmpty || firstName == 'User') 
+                                  ? '' 
+                                  : firstName;
+                              
                               return Text(
-                                'Nurse $firstName',
+                                displayName.isEmpty 
+                                    ? 'Nurse'
+                                    : 'Nurse $displayName',
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
@@ -345,7 +383,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               borderRadius: BorderRadius.circular(10),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.grey.withOpacity(0.2),
+                  color: Colors.grey.withValues(alpha: 0.2),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -397,7 +435,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             spreadRadius: 1,
             blurRadius: 6,
             offset: const Offset(0, 3),

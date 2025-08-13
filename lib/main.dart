@@ -20,6 +20,11 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     print('Firebase initialized successfully');
+    
+    // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
+    // WARNING: This will delete ALL user data!
+    // await _initializeDatabase();
+    
   } catch (e) {
     print('Firebase initialization failed: $e');
     // Continue without Firebase for now
@@ -73,3 +78,15 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+
+// Helper function to initialize database with admin account
+// WARNING: This will delete ALL existing user data!
+// Future<void> _initializeDatabase() async {
+//   try {
+//     final authService = AuthService();
+//     await authService.clearAndReinitializeDatabase();
+//     print('Database initialization completed');
+//   } catch (e) {
+//     print('Error during database initialization: $e');
+//   }
+// }

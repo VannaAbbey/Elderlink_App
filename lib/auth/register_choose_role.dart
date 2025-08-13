@@ -72,7 +72,7 @@ class _RegisterChooseRoleScreenState extends State<RegisterChooseRoleScreen> {
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.blue.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Column(
@@ -191,7 +191,7 @@ class RoleCard extends StatelessWidget {
           gradient: LinearGradient(
             colors: isSelected 
               ? [
-                  const Color(0xFF1D5B78).withOpacity(0.2),
+                  const Color(0xFF1D5B78).withValues(alpha: 0.2),
                   const Color(0xFFA5D4DC),
                   const Color.fromARGB(255, 225, 242, 244)
                 ]

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/auth_wrapper.dart';
 
 class TextStyles {
   static const TextStyle header = TextStyle(
@@ -56,21 +58,86 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    final success = await authProvider.signInWithEmailAndPassword(
-      email: _emailController.text.trim(),
-      password: _passwordController.text.trim(),
-    );
+    try {
+      // First, check if the email exists in our Firestore database
+      final email = _emailController.text.trim();
+      final userExists = await _checkIfUserExists(email);
+      
+      final success = await authProvider.signInWithEmailAndPassword(
+        email: email,
+        password: _passwordController.text.trim(),
+      );
 
-    if (mounted) {
-      if (success) {
-        // Navigation is handled by AuthWrapper based on user role
-        Navigator.of(context).pushNamedAndRemoveUntil(
-          '/caregiver_home', // This will be redirected by AuthWrapper
-          (route) => false,
-        );
-      } else {
-        _showErrorDialog(authProvider.error ?? 'Login failed. Please try again.');
+      if (mounted) {
+        if (success) {
+          // Let AuthWrapper handle navigation based on user role
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const AuthWrapper()),
+            (route) => false,
+          );
+        } else {
+          // Handle specific authentication errors
+          String errorMessage = authProvider.error ?? 'Login failed. Please try again.';
+          
+          // Handle special error codes from AuthService
+          if (errorMessage.contains('email-not-found')) {
+            errorMessage = 'Email account does not exist!';
+          } 
+          else if (errorMessage.contains('invalid-credential')) {
+            // For invalid-credential, check if user exists in our database
+            if (!userExists) {
+              errorMessage = 'Email account does not exist!';
+            } else {
+              errorMessage = 'Incorrect password. Please try again.';
+            }
+          }
+          else if (errorMessage.contains('invalid-password')) {
+            errorMessage = 'Incorrect password. Please try again.';
+          }
+          else if (errorMessage.contains('account-disabled')) {
+            errorMessage = 'This account has been disabled.';
+          } 
+          else if (errorMessage.contains('too-many-attempts')) {
+            errorMessage = 'Too many failed login attempts. Please try again later.';
+          } 
+          else if (errorMessage.contains('network-error')) {
+            errorMessage = 'Network error. Please check your internet connection.';
+          }
+          
+          _showErrorDialog(errorMessage);
+        }
       }
+    } catch (e) {
+      if (mounted) {
+        _showErrorDialog('An unexpected error occurred. Please try again.');
+      }
+    }
+  }
+
+  // Helper method to check if user exists in Firestore
+  Future<bool> _checkIfUserExists(String email) async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final querySnapshot = await firestore
+          .collection('users')
+          .where('user_email', isEqualTo: email)
+          .limit(1)
+          .get();
+      
+      // Also check old field name for backward compatibility
+      if (querySnapshot.docs.isEmpty) {
+        final oldQuerySnapshot = await firestore
+            .collection('users')
+            .where('email', isEqualTo: email)
+            .limit(1)
+            .get();
+        return oldQuerySnapshot.docs.isNotEmpty;
+      }
+      
+      return querySnapshot.docs.isNotEmpty;
+    } catch (e) {
+      print('Error checking if user exists: $e');
+      return true; // If we can't check, assume user exists to avoid wrong messaging
     }
   }
 
@@ -100,9 +167,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (mounted) {
         if (success) {
-          // Navigation is handled by AuthWrapper based on user role
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            '/caregiver_home', // This will be redirected by AuthWrapper
+          // Let AuthWrapper handle navigation based on user role
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const AuthWrapper()),
             (route) => false,
           );
         } else {
