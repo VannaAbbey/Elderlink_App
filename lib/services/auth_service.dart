@@ -146,74 +146,8 @@ class AuthService {
     }
   }
 
-  // Clear all existing user records and reinitialize with admin account
-  // WARNING: This will delete ALL user data - use only for development/testing
-  Future<void> clearAndReinitializeDatabase() async {
-    try {
-      print('WARNING: Clearing all user data...');
-      
-      // Get all user documents
-      final usersSnapshot = await _firestore.collection('users').get();
-      
-      // Delete all existing user documents
-      for (QueryDocumentSnapshot doc in usersSnapshot.docs) {
-        await doc.reference.delete();
-      }
-      
-      print('All user records cleared');
-      
-      // Initialize admin account
-      await initializeAdminAccount();
-      
-      print('Database reinitialized with administrator account');
-    } catch (e) {
-      print('Error clearing database: $e');
-      throw Exception('Failed to clear and reinitialize database: $e');
-    }
-  }
-
-  // Initialize administrator account (U001)
-  // This method should be called once during app setup
-  Future<void> initializeAdminAccount() async {
-    try {
-      // Check if admin account already exists
-      final adminQuery = await _firestore.collection('users')
-          .where('user_id', isEqualTo: 'U001')
-          .limit(1)
-          .get();
-      
-      if (adminQuery.docs.isEmpty) {
-        // Create admin user in Firebase Auth
-        UserCredential adminCredential = await _auth.createUserWithEmailAndPassword(
-          email: 'admin@elderlink.com',
-          password: 'AdminElderLink2024!', // Strong default password - should be changed
-        );
-
-        if (adminCredential.user != null) {
-          // Create admin document in Firestore
-          await _firestore.collection('users').doc(adminCredential.user!.uid).set({
-            'user_id': 'U001',
-            'user_email': 'admin@elderlink.com',
-            'user_type': 'administrator',
-            'user_fname': 'System',
-            'user_lname': 'Administrator',
-            'user_bday': null, // No birthday for system account
-            'user_contactNum': null, // No phone for system account
-            'user_activationStatus': true, // Always active
-            'user_profilePic': '', // Empty for now
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-          
-          print('Administrator account (U001) created successfully');
-        }
-      } else {
-        print('Administrator account (U001) already exists');
-      }
-    } catch (e) {
-      print('Error initializing admin account: $e');
-      throw Exception('Failed to initialize administrator account: $e');
-    }
-  }
+  // U001 is reserved for administrator, but admin account is not managed on mobile side.
+  // User IDs will start from U002 for regular users.
 
   // Reset password
   Future<void> resetPassword({required String email}) async {
