@@ -49,10 +49,10 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
 
     try {
       final userData = {
-        'firstName': _firstNameController.text.trim(),
-        'lastName': _lastNameController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'birthday': _selectedDate?.toIso8601String(),
+        'firstName': _firstNameController.text.trim(), // This will be mapped to user_fname in AuthService
+        'lastName': _lastNameController.text.trim(), // This will be mapped to user_lname in AuthService
+        'phone': _phoneController.text.trim(), // This will be mapped to user_contactNum in AuthService
+        'birthday': _selectedDate?.toIso8601String(), // This will be mapped to user_bday in AuthService
         'profileCompleted': true,
       };
 
@@ -64,11 +64,16 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       );
 
       if (userCredential != null && mounted) {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          '/register_success',
-          (route) => false,
-        );
+        // Sign out the user after registration so they go through login flow
+        await _authService.signOut();
+        
+        if (mounted) {
+          Navigator.pushNamedAndRemoveUntil(
+            context,
+            '/register_success',
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -267,7 +272,7 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.95),
+                          color: Colors.white.withValues(alpha: 0.95),
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Column(

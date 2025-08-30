@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:provider/provider.dart';
 import 'firebase_options.dart';
+import 'providers/auth_provider.dart';
+import 'widgets/auth_wrapper.dart';
 import 'auth/get_started.dart'; 
 import 'auth/login.dart';
 import 'auth/register_choose_role.dart';
@@ -17,12 +20,24 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     print('Firebase initialized successfully');
+    
+    // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
+    // WARNING: This will delete ALL user data!
+    // await _initializeDatabase();
+    
   } catch (e) {
     print('Firebase initialization failed: $e');
     // Continue without Firebase for now
   }
   
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -50,10 +65,9 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      initialRoute: '/', // ✅ START HERE
+      home: const AuthWrapper(),
       routes: {
-        '/': (context) =>
-            const GetStartedPage(), // ✅ This becomes the first screen
+        '/get_started': (context) => const GetStartedPage(),
         '/login': (context) => const LoginScreen(),
         '/register_choose_role': (context) => const RegisterChooseRoleScreen(),
         '/forgot_pass': (context) => const ForgotPasswordScreen(),
@@ -64,3 +78,15 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+
+// Helper function to initialize database with admin account
+// WARNING: This will delete ALL existing user data!
+// Future<void> _initializeDatabase() async {
+//   try {
+//     final authService = AuthService();
+//     await authService.clearAndReinitializeDatabase();
+//     print('Database initialization completed');
+//   } catch (e) {
+//     print('Error during database initialization: $e');
+//   }
+// }

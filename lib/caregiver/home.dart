@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
 void main() {
   runApp(
@@ -20,59 +21,16 @@ class CaregiverHomeScreen extends StatefulWidget {
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   bool isSidebarOpen = false;
   int selectedIndex = 0;
-  final AuthService _authService = AuthService();
-  
-  // User data
-  String userName = 'Caregiver';
-  String firstName = 'Loading...';
-  bool isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadUserData();
-  }
-
-  Future<void> _loadUserData() async {
-    try {
-      final user = _authService.currentUser;
-      if (user != null) {
-        final userData = await _authService.getUserData(user.uid);
-        if (userData != null && mounted) {
-          setState(() {
-            firstName = userData['firstName'] ?? '';
-            userName = userData['role'] == 'caregiver' ? 'Caregiver' : 'Nurse';
-            if (firstName.isEmpty) firstName = user.email?.split('@')[0] ?? 'User';
-            isLoading = false;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          firstName = 'User';
-          isLoading = false;
-        });
-      }
-    }
-  }
 
   Future<void> _handleLogout() async {
-    try {
-      await _authService.signOut();
-      if (mounted) {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          '/login',
-          (route) => false,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error signing out: $e')),
-        );
-      }
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    await authProvider.signOut();
+    if (mounted) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        '/get_started',
+        (route) => false,
+      );
     }
   }
 
@@ -128,12 +86,35 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  isLoading ? 'Loading...' : 'Hello $userName $firstName,',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
+                                Consumer<AuthProvider>(
+                                  builder: (context, authProvider, child) {
+                                    // Wait for user data to be loaded
+                                    if (authProvider.userData == null) {
+                                      return const Text(
+                                        'Hello Caregiver,',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      );
+                                    }
+                                    
+                                    final firstName = authProvider.userFirstName;
+                                    // Ensure firstName is not empty or default
+                                    final displayName = (firstName.isEmpty || firstName == 'User') 
+                                        ? '' 
+                                        : firstName;
+                                    
+                                    return Text(
+                                      displayName.isEmpty 
+                                          ? 'Hello Caregiver,'
+                                          : 'Hello Caregiver $displayName,',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    );
+                                  },
                                 ),
                                 const Text('Hope you are doing well'),
                               ],
@@ -150,7 +131,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                     const SizedBox(height: 20),
                     Align(
                       alignment: Alignment.center,
-                      child: Container(
+                      child: SizedBox(
                         width: MediaQuery.of(context).size.width * 0.85,
                         child: TextField(
                           decoration: InputDecoration(
@@ -329,14 +310,39 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                       children: [
                         const SizedBox(height: 50),
                         Center(
-                          child: Text(
-                            isLoading ? 'Loading...' : '$userName $firstName',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black,
-                              fontFamily: 'Poppins',
-                            ),
+                          child: Consumer<AuthProvider>(
+                            builder: (context, authProvider, child) {
+                              // Wait for user data to be loaded
+                              if (authProvider.userData == null) {
+                                return const Text(
+                                  'Caregiver',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
+                                    fontFamily: 'Poppins',
+                                  ),
+                                );
+                              }
+                              
+                              final firstName = authProvider.userFirstName;
+                              // Ensure firstName is not empty or default
+                              final displayName = (firstName.isEmpty || firstName == 'User') 
+                                  ? '' 
+                                  : firstName;
+                              
+                              return Text(
+                                displayName.isEmpty 
+                                    ? 'Caregiver'
+                                    : 'Caregiver $displayName',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black,
+                                  fontFamily: 'Poppins',
+                                ),
+                              );
+                            },
                           ),
                         ),
                         const Divider(),
@@ -387,7 +393,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
               borderRadius: BorderRadius.circular(10),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.grey.withOpacity(0.2),
+                  color: Colors.grey.withValues(alpha: 0.2),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -439,7 +445,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             spreadRadius: 1,
             blurRadius: 6,
             offset: const Offset(0, 3), // subtle shadow below the card
