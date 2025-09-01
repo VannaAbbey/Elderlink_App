@@ -4,6 +4,30 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
 
 class AuthProvider extends ChangeNotifier {
+  // Update user profile in Firestore
+  Future<void> updateUserProfile(Map<String, dynamic> updatedData) async {
+    if (_currentUser == null) return;
+    try {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+
+      // Update Firestore document
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .update(updatedData);
+
+      // Refresh local user data
+      await _loadUserData();
+    } catch (e) {
+      _error = 'Failed to update profile: $e';
+      notifyListeners();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
   final AuthService _authService = AuthService();
   
   User? _currentUser;

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import 'edit_profile.dart';
+import 'settings.dart';
+import 'help_support.dart';
 
 void main() {
   runApp(
@@ -480,6 +483,22 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       title: Text(title),
       onTap: () {
         setState(() => isSidebarOpen = false);
+        if (title == 'Edit Profile') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const EditProfile()),
+          );
+        } else if (title == 'Settings') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const Settings()),
+          );
+        } else if (title == 'Help & Support') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const HelpSupport()),
+          );
+        }
       },
     );
   }
