@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart';
+import 'notifications.dart';
 
 class AddTaskScreen extends StatefulWidget {
   const AddTaskScreen({super.key});
@@ -179,7 +180,11 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                     IconButton(
                       icon: const Icon(Icons.notifications, color: Color(0xFF00588e), size: 35),
                       onPressed: () {
-                        // TODO: Implement notification logic
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const NotificationsScreen(),
+                          ),
+                        );
                       },
                     ),
                   ],

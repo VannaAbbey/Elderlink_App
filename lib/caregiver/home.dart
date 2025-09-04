@@ -8,6 +8,7 @@ import 'add_task.dart';
 import 'emergency_modal.dart';
 import 'incident.dart';
 import 'shift.dart';
+import 'notifications.dart';
 import 'caregiver_bottom_navbar.dart';
 
 void main() {
@@ -134,10 +135,15 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                   ),
                                 ],
                               ),
-                              const Icon(
-                                Icons.notifications,
-                                color: Color(0XFF1D66A0),
-                                size: 35,
+                              IconButton(
+                                icon: const Icon(Icons.notifications, color: Color(0XFF1D66A0), size: 35),
+                                onPressed: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) => const NotificationsScreen(),
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),

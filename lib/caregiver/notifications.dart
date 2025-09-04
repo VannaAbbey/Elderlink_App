@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-class PastAddedLogsScreen extends StatelessWidget {
-  const PastAddedLogsScreen({Key? key}) : super(key: key);
+class NotificationsScreen extends StatelessWidget {
+  const NotificationsScreen({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -21,9 +21,9 @@ class PastAddedLogsScreen extends StatelessWidget {
             Expanded(
               child: Center(
                 child: Text(
-                  'Past Added Logs',
+                  'Notifications',
                   style: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 25,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF22688E),
                   ),
@@ -55,7 +55,7 @@ class PastAddedLogsScreen extends StatelessWidget {
               children: [
                 const SizedBox(height: 24),
                 // TODO: Replace with backend data integration in the future
-                // Card for past log (placeholder data)
+                // Card for notification (placeholder data)
                 Card(
                   color: Color(0xFFE8F0FE),
                   elevation: 4,
@@ -66,7 +66,7 @@ class PastAddedLogsScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
                         Text(
-                          'May 27, 2025',
+                          'September 4, 2025',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -75,7 +75,7 @@ class PastAddedLogsScreen extends StatelessWidget {
                         ),
                         SizedBox(height: 8),
                         Text(
-                          'I would like to add that Lola Andrea wanted to try more dancing exercises in the afternoon...',
+                          'Caregiver Matthew has a new task assigned: "Check Vitals" for Lolo Mario.',
                           style: TextStyle(
                             fontSize: 16,
                             color: Colors.black,
@@ -86,7 +86,7 @@ class PastAddedLogsScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                // Additional placeholder cards here...
+                // Add more cards for additional placeholder data if needed
               ],
             ),
           ),

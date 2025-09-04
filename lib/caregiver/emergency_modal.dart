@@ -140,6 +140,7 @@ Future<void> showEmergencyModal(BuildContext context) async {
                         children: [
                           Checkbox(
                             value: acknowledged,
+                            activeColor: const Color(0xFF00588e),
                             onChanged: (val) {
                               setState(() {
                                 acknowledged = val ?? false;
