@@ -5,10 +5,10 @@ class CaregiverBottomNavBar extends StatelessWidget {
   final Function(int) onNavTap;
 
   const CaregiverBottomNavBar({
-    Key? key,
+    super.key,
     required this.selectedIndex,
     required this.onNavTap,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

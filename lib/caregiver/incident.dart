@@ -19,7 +19,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    Future<void> _handleLogout() async {
+    Future<void> handleLogout() async {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.signOut();
       if (mounted) {
@@ -165,7 +165,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
           ],
         ),
         CaregiverSidebar(
-          onLogout: _handleLogout,
+          onLogout: handleLogout,
           isSidebarOpen: isSidebarOpen,
           toggleSidebar: toggleSidebar,
           parentContext: context,
