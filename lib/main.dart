@@ -78,15 +78,3 @@ class MyApp extends StatelessWidget {
     );
   }
 }
-
-// Helper function to initialize database with admin account
-// WARNING: This will delete ALL existing user data!
-// Future<void> _initializeDatabase() async {
-//   try {
-//     final authService = AuthService();
-//     await authService.clearAndReinitializeDatabase();
-//     print('Database initialization completed');
-//   } catch (e) {
-//     print('Error during database initialization: $e');
-//   }
-// }
