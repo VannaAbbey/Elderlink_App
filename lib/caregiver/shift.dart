@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart';
+import 'notifications.dart';
 import 'past_added_logs.dart';
 
 class ShiftScreen extends StatefulWidget {
@@ -17,114 +18,120 @@ class _ShiftScreenState extends State<ShiftScreen> {
       barrierDismissible: false,
       builder: (BuildContext ctx) {
         TextEditingController _controller = TextEditingController();
-        return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 50),
-          child: Container(
-            width: 340,
-            padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 15),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        bool acknowledged = false;
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 50),
+              child: Container(
+                width: 340,
+                padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 15),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(width: 30),
-                    // Write additional log modal:
-                    Expanded(
-                      child: Center(
-                        child: Text(
-                          'Additional Log',
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF22688E),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const SizedBox(width: 30),
+                        Expanded(
+                          child: Center(
+                            child: Text(
+                              'Additional Log',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF22688E),
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ],
+                    ),
+                    const Divider(),
+                    Container(
+                      margin: const EdgeInsets.all(5),
+                      child: TextField(
+                        controller: _controller,
+                        maxLines: 15,
+                        style: const TextStyle(fontSize: 16),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Type additional handover log here.',
+                          hintStyle: TextStyle(fontStyle: FontStyle.italic, fontSize: 15),
+                          isDense: true,
+                          contentPadding: EdgeInsets.all(12)
+                        ),
+                        onChanged: (_) {
+                          setState(() {});
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Checkbox(
+                          value: acknowledged,
+                          activeColor: const Color(0xFF00588e),
+                          onChanged: (val) {
+                            setState(() {
+                              acknowledged = val ?? false;
+                            });
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            'I acknowledge and accept full responsibility that the information that I provided is accurate and complete.',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 40,
+                      child: ElevatedButton(
+                        onPressed: (_controller.text.trim().isNotEmpty && acknowledged)
+                            ? () {
+                                // TODO: Submit logic
+                              }
+                            : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: (_controller.text.trim().isNotEmpty && acknowledged)
+                              ? Color(0xFF22688E)
+                              : Colors.grey,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(32),
+                          ),
+                          elevation: 4,
+                        ),
+                        child: const Text(
+                          'Submit',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
                           ),
                         ),
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
-                      onPressed: () => Navigator.of(ctx).pop(),
-                    ),
+  // End of dialog
                   ],
                 ),
-                const Divider(),
-                Container(
-                  margin: const EdgeInsets.all(5),
-                  child: TextField(
-                    controller: _controller,
-                    maxLines: 15,
-                    style: const TextStyle(fontSize: 16),
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      hintText: 'Type additional handover log here.',
-                      hintStyle: TextStyle(fontStyle: FontStyle.italic, fontSize: 15),
-                      isDense: true,
-                      contentPadding: EdgeInsets.all(12)
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 40,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      // TODO: Save changes logic
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF22688E),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(32),
-                      ),
-                      elevation: 4,
-                    ),
-                    child: const Text(
-                      'Save Changes',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 40,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      // TODO: Submit logic
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF22688E),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(32),
-                      ),
-                      elevation: 4,
-                    ),
-                    child: const Text(
-                      'Submit',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8), // Space at the bottom
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -175,7 +182,11 @@ class _ShiftScreenState extends State<ShiftScreen> {
                     IconButton(
                       icon: const Icon(Icons.notifications, color: Color(0xFF00588e), size: 35),
                       onPressed: () {
-                        // TODO: Implement notification logic
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const NotificationsScreen(),
+                          ),
+                        );
                       },
                     ),
                   ],
