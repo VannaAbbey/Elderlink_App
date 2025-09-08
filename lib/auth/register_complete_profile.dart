@@ -12,6 +12,50 @@ class RegisterProfileScreen extends StatefulWidget {
 }
 
 class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
+  // Password validation rules
+  List<String> _getUnmetPasswordRules(String password) {
+    List<String> unmet = [];
+    if (password.length < 8) {
+      unmet.add('Minimum: 8 characters');
+    }
+    if (!RegExp(r'[A-Z]').hasMatch(password)) {
+      unmet.add('At least 1 uppercase letter');
+    }
+    if (!RegExp(r'[a-z]').hasMatch(password)) {
+      unmet.add('At least 1 lowercase letter');
+    }
+    if (!RegExp(r'[0-9]').hasMatch(password)) {
+      unmet.add('At least 1 number');
+    }
+    if (!RegExp(r'[!@#\$%^&*(),.?":{}|<>_~`\-]').hasMatch(password)) {
+      unmet.add('At least 1 special character');
+    }
+    return unmet;
+  }
+
+  void _showPasswordRulesDialog(List<String> unmetRules) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Password Requirements Not Met'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Your password must meet the following criteria:'),
+            const SizedBox(height: 8),
+            ...unmetRules.map((rule) => Text('- $rule')),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreed = false;
@@ -105,8 +149,9 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       return false;
     }
 
-    if (_passwordController.text.trim().length < 6) {
-      _showErrorDialog('Password must be at least 6 characters long.');
+    final unmetRules = _getUnmetPasswordRules(_passwordController.text.trim());
+    if (unmetRules.isNotEmpty) {
+      _showPasswordRulesDialog(unmetRules);
       return false;
     }
 
