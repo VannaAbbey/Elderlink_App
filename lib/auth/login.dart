@@ -78,32 +78,37 @@ class _LoginScreenState extends State<LoginScreen> {
         } else {
           // Handle specific authentication errors
           String errorMessage = authProvider.error ?? 'Login failed. Please try again.';
-          
+
           // Handle special error codes from AuthService
           if (errorMessage.contains('email-not-found')) {
             errorMessage = 'Email account does not exist!';
-          } 
+          }
+          // Catch both custom and default Firebase wrong password errors
+          else if (errorMessage.contains('Wrong password entered! Please try again!') ||
+                   errorMessage.contains('The supplied auth credential is incorrect, malformed or has expired')) {
+            errorMessage = 'Wrong password entered! Please try again!';
+          }
           else if (errorMessage.contains('invalid-credential')) {
             // For invalid-credential, check if user exists in our database
             if (!userExists) {
               errorMessage = 'Email account does not exist!';
             } else {
-              errorMessage = 'Incorrect password. Please try again.';
+              errorMessage = 'Wrong password entered! Please try again!';
             }
           }
           else if (errorMessage.contains('invalid-password')) {
-            errorMessage = 'Incorrect password. Please try again.';
+            errorMessage = 'Wrong password entered! Please try again!';
           }
           else if (errorMessage.contains('account-disabled')) {
             errorMessage = 'This account has been disabled.';
-          } 
+          }
           else if (errorMessage.contains('too-many-attempts')) {
             errorMessage = 'Too many failed login attempts. Please try again later.';
-          } 
+          }
           else if (errorMessage.contains('network-error')) {
             errorMessage = 'Network error. Please check your internet connection.';
           }
-          
+
           _showErrorDialog(errorMessage);
         }
       }
