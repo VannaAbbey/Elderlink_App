@@ -46,6 +46,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
         return [
           {'name': 'Lolo Adam', 'task': 'Take a bath', 'time': '11:00 AM', 'image': 'elderly.png'},
           {'name': 'Lolo Mario', 'task': 'Serve a Dietary Lunch', 'time': '12:00 PM', 'image': 'elderly.png'},
+          {'name': 'Lolo Sofronio', 'task': 'Do Walking Exercise', 'time': '3:00 PM', 'image': 'elderly.png'},
         ];
       case 1:
         return [
@@ -269,7 +270,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                                               TimeOfDay? startTime;
                                               TimeOfDay? endTime;
                                               TextEditingController activityController = TextEditingController();
-                                              final List<String> elderlyList = ['Lolo Sandro', 'Lolo Adam', 'Lolo Mario']; // Placeholder data
+                                              final List<String> elderlyList = ['Lolo Sandro', 'Lolo Adam', 'Lolo Mario', 'Lolo Sofronio']; // Placeholder data
                                               final List<String> frequencyList = ['Once a day', 'Everyday', 'Every other day', 'Once a week']; 
                                               return StatefulBuilder(
                                                 builder: (context, setState) {
