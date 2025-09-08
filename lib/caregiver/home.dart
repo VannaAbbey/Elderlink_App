@@ -28,6 +28,14 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+  // Helper to get upcoming tasks from AddTaskScreen logic
+  List<Map<String, String>> getUpcomingTasks() {
+    return [ // ALl placeholder data at the moment
+      {'name': 'Lolo Adam', 'task': 'Take a bath', 'time': '11:00 AM', 'image': 'elderly.png'},
+      {'name': 'Lolo Mario', 'task': 'Serve a Dietary Lunch', 'time': '12:00 PM', 'image': 'elderly.png'},
+      {'name': 'Lolo Sofronio', 'task': 'Do Walking Exercise', 'time': '3:00 PM', 'image': 'elderly.png'},
+    ];
+  }
   bool isSidebarOpen = false;
   int selectedIndex = 0;
 
@@ -52,8 +60,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       showEmergencyModal(context);
       return;
     }
-    // Map navigation indexes to screens, skipping index 2
-    int screenIndex = index > 2 ? index - 1 : index;
     setState(() {
       selectedIndex = index;
     });
@@ -223,34 +229,30 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                         ),
                                       ],
                                     ),
-                                    const Text(
-                                      "See All",
-                                      style: TextStyle(
-                                        color: Colors.blue,
-                                        fontWeight: FontWeight.w600,
+                                    GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          selectedIndex = 1; // 1 is the index for AddTaskScreen (Upcoming Tasks tab)
+                                        });
+                                      },
+                                      child: const Text(
+                                        "See All",
+                                        style: TextStyle(
+                                          color: Colors.blue,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
                                   ],
                                 ),
                                 const SizedBox(height: 10),
-                                _taskCard(
-                                  'Lola Celia',
-                                  '15 minutes Walking Exercise',
-                                  '10:00 AM',
-                                  Color(0xFFFFB0A5),
-                                ),
-                                _taskCard(
-                                  'Lolo Adam',
-                                  'Serve a Dietary Lunch',
-                                  '11:00 AM',
+                                // Show first 3 upcoming tasks as cards
+                                ...getUpcomingTasks().take(3).map((task) => _taskCard(
+                                  task['name'] ?? '',
+                                  task['task'] ?? '',
+                                  task['time'] ?? '',
                                   Color(0xFFB7DDF5),
-                                ),
-                                _taskCard(
-                                  'Lola Andrea',
-                                  'Take a Bath',
-                                  '1:00 PM',
-                                  Color(0xFFB7DDF5),
-                                ),
+                                )),
                               ],
                             ),
                           ),
@@ -329,27 +331,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     );
   }
 
-  Widget _navIcon(String assetPath, int index) {
-    return GestureDetector(
-      onTap: () => onNavTap(index),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: selectedIndex == index
-              ? const Color.fromARGB(255, 255, 255, 255)
-              : Colors.transparent,
-          shape: BoxShape.circle,
-        ),
-        child: Image.asset(
-          assetPath,
-          height: 38,
-          width: 38,
-          fit: BoxFit.contain,
-        ),
-      ),
-    );
-  }
-
   Widget _taskCard(String name, String task, String time, Color bgColor) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -359,10 +340,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
+            color: Colors.black.withOpacity(0.1),
             spreadRadius: 1,
             blurRadius: 6,
-            offset: const Offset(0, 3), // subtle shadow below the card
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -389,6 +370,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   }
 }
 
+
+// Move CaregiverSidebar to top-level
 class CaregiverSidebar extends StatelessWidget {
   final VoidCallback onLogout;
   final bool isSidebarOpen;
