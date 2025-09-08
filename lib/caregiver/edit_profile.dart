@@ -291,13 +291,13 @@ class _EditProfileState extends State<EditProfile> {
                                                                     const SizedBox(height: 6),
                                                                     TextFormField(
                                                                       controller: bottomSheetEmailController,
+                                                                      enabled: false,
                                                                       decoration: const InputDecoration(
                                                                         border: OutlineInputBorder(
                                                                           borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                         ),
                                                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                       ),
-                                                                      validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                     ),
                                                                   ],
                                                                 ),
