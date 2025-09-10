@@ -28,6 +28,14 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      authProvider.refreshUserData();
+    });
+  }
   // Helper to get upcoming tasks from AddTaskScreen logic
   List<Map<String, String>> getUpcomingTasks() {
     return [ // ALl placeholder data at the moment
@@ -93,14 +101,19 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             children: [
                               Row(
                                 children: [
-                                  GestureDetector(
-                                    onTap: toggleSidebar,
-                                    child: const CircleAvatar(
-                                      radius: 24,
-                                      backgroundImage: AssetImage(
-                                        'assets/images/caregiver.png', // Placeholder
-                                      ),
-                                    ),
+                                  Consumer<AuthProvider>(
+                                    builder: (context, authProvider, child) {
+                                      final profilePicUrl = authProvider.userProfilePic;
+                                      return GestureDetector(
+                                        onTap: toggleSidebar,
+                                        child: CircleAvatar(
+                                          radius: 24,
+                                          backgroundImage: (profilePicUrl.isNotEmpty)
+                                            ? NetworkImage(profilePicUrl)
+                                            : const AssetImage('assets/images/people_icon.png') as ImageProvider,
+                                        ),
+                                      );
+                                    },
                                   ),
                                   const SizedBox(width: 10),
                                   Column(
@@ -351,7 +364,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         children: [
           const CircleAvatar(
             radius: 25,
-            backgroundImage: AssetImage('assets/profile.jpg'),
+            backgroundImage: AssetImage('assets/images/people_icon.png'),
           ),
           const SizedBox(width: 15),
           Expanded(
