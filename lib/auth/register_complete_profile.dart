@@ -12,6 +12,50 @@ class RegisterProfileScreen extends StatefulWidget {
 }
 
 class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
+  // Password validation rules
+  List<String> _getUnmetPasswordRules(String password) {
+    List<String> unmet = [];
+    if (password.length < 8) {
+      unmet.add('Minimum: 8 characters');
+    }
+    if (!RegExp(r'[A-Z]').hasMatch(password)) {
+      unmet.add('At least 1 uppercase letter');
+    }
+    if (!RegExp(r'[a-z]').hasMatch(password)) {
+      unmet.add('At least 1 lowercase letter');
+    }
+    if (!RegExp(r'[0-9]').hasMatch(password)) {
+      unmet.add('At least 1 number');
+    }
+    if (!RegExp(r'[!@#\$%^&*(),.?":{}|<>_~`\-]').hasMatch(password)) {
+      unmet.add('At least 1 special character');
+    }
+    return unmet;
+  }
+
+  void _showPasswordRulesDialog(List<String> unmetRules) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Password Requirements Not Met'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Your password must meet the following criteria:'),
+            const SizedBox(height: 8),
+            ...unmetRules.map((rule) => Text('- $rule')),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreed = false;
@@ -49,10 +93,10 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
 
     try {
       final userData = {
-        'firstName': _firstNameController.text.trim(),
-        'lastName': _lastNameController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'birthday': _selectedDate?.toIso8601String(),
+        'firstName': _firstNameController.text.trim(), // This will be mapped to user_fname in AuthService
+        'lastName': _lastNameController.text.trim(), // This will be mapped to user_lname in AuthService
+        'phone': _phoneController.text.trim(), // This will be mapped to user_contactNum in AuthService
+        'birthday': _selectedDate?.toIso8601String(), // This will be mapped to user_bday in AuthService
         'profileCompleted': true,
       };
 
@@ -64,11 +108,16 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       );
 
       if (userCredential != null && mounted) {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          '/register_success',
-          (route) => false,
-        );
+        // Sign out the user after registration so they go through login flow
+        await _authService.signOut();
+        
+        if (mounted) {
+          Navigator.pushNamedAndRemoveUntil(
+            context,
+            '/register_success',
+            (route) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -100,8 +149,9 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       return false;
     }
 
-    if (_passwordController.text.trim().length < 6) {
-      _showErrorDialog('Password must be at least 6 characters long.');
+    final unmetRules = _getUnmetPasswordRules(_passwordController.text.trim());
+    if (unmetRules.isNotEmpty) {
+      _showPasswordRulesDialog(unmetRules);
       return false;
     }
 
@@ -267,7 +317,7 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.95),
+                          color: Colors.white.withValues(alpha: 0.95),
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Column(

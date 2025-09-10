@@ -16,6 +16,7 @@ class AuthService {
   // Get current user
   User? get currentUser => _auth.currentUser;
 
+
   // Check platform availability for social sign-in
   Future<bool> _isPlatformSupported(String provider) async {
     try {
@@ -53,7 +54,12 @@ class AuthService {
       );
       return result;
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      if (e.code == 'wrong-password') {
+        throw Exception('Wrong password entered! Please try again!');
+      }
+      throw Exception(e.message ?? 'Sign in failed');
+    } catch (e) {
+      throw Exception('Sign in error: $e');
     }
   }
 
@@ -70,23 +76,45 @@ class AuthService {
         password: password,
       );
 
-      // Create user document in Firestore
-      if (result.user != null) {
-        await _firestore.collection('users').doc(result.user!.uid).set({
-          'uid': result.user!.uid,
-          'email': email,
-          'role': role,
-          'createdAt': FieldValue.serverTimestamp(),
-          ...userData,
-        });
+      // Parse phone number to int, preserving leading zeros by storing as string first
+      String phoneStr = userData['phone'] ?? '';
+      int? phoneNum;
+      if (phoneStr.isNotEmpty) {
+        phoneStr = phoneStr.replaceAll(RegExp(r'[^\d]'), '');
+        phoneNum = int.tryParse(phoneStr);
       }
 
+      // Parse birthday string to Timestamp
+      Timestamp? birthdayTimestamp;
+      if (userData['birthday'] != null && userData['birthday'].toString().isNotEmpty) {
+        try {
+          DateTime birthdayDate = DateTime.parse(userData['birthday']);
+          birthdayDate = DateTime(birthdayDate.year, birthdayDate.month, birthdayDate.day);
+          birthdayTimestamp = Timestamp.fromDate(birthdayDate);
+        } catch (e) {
+          print('Error parsing birthday: $e');
+        }
+      }
+      if (result.user != null) {
+        await _firestore.collection('users').doc(result.user!.uid).set({
+          'user_email': email,
+          'user_type': role,
+          'user_fname': userData['firstName'] ?? '',
+          'user_lname': userData['lastName'] ?? '',
+          'user_bday': birthdayTimestamp,
+          'user_contactNum': phoneNum,
+          'user_activationStatus': true,
+          'user_profilePic': '',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
       return result;
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw Exception(e.message ?? 'Registration failed');
+    } catch (e) {
+      throw Exception('Registration error: $e');
     }
   }
-
   // Sign out
   Future<void> signOut() async {
     try {
@@ -95,6 +123,9 @@ class AuthService {
       throw Exception('Error signing out: $e');
     }
   }
+
+  // U001 is reserved for administrator, but admin account is not managed on mobile side.
+  // User IDs will start from U002 for regular users.
 
   // Reset password
   Future<void> resetPassword({required String email}) async {
@@ -119,22 +150,11 @@ class AuthService {
   String _handleAuthException(FirebaseAuthException e) {
     switch (e.code) {
       case 'user-not-found':
-        return 'No user found with this email address.';
+        return 'email-not-found'; // Special code for login.dart to handle
       case 'wrong-password':
-      case 'invalid-credential':
-        return 'Error: Incorrect Password! Please try again.';
-      case 'email-already-in-use':
-        return 'An account already exists with this email address.';
-      case 'weak-password':
-        return 'The password provided is too weak.';
-      case 'invalid-email':
-        return 'The email address is not valid.';
-      case 'too-many-requests':
-        return 'Too many requests. Try again later.';
-      case 'operation-not-allowed':
-        return 'Signing in with Email and Password is not enabled.';
+        return 'invalid-password'; // Specific code for wrong password
       default:
-        return 'An unexpected error occurred. Please try again.';
+        return e.code;
     }
   }
 
@@ -146,16 +166,10 @@ class AuthService {
         throw Exception('Google Sign-In is not supported on this platform');
       }
 
-      // Initialize Google Sign In
-      final GoogleSignIn googleSignIn = GoogleSignIn(
-        scopes: ['email', 'profile'],
-      );
-      
-      // Trigger the authentication flow
-      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
-      
+      // Trigger the sign-in flow
+      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
       if (googleUser == null) {
-        return null; // User cancelled the sign-in
+        return null; // User cancelled
       }
 
       // Obtain the auth details from the request
@@ -307,13 +321,16 @@ class AuthService {
           }
         }
 
-        // Create new user document
+        // Create new user document with UID as user_id and document ID
         await _firestore.collection('users').doc(user.uid).set({
-          'uid': user.uid,
-          'email': user.email,
-          'firstName': firstName,
-          'lastName': lastName,
-          'role': 'caregiver', // Default role for social sign-ins
+          'user_email': user.email,
+          'user_fname': firstName,
+          'user_lname': lastName,
+          'user_bday': null, // Null for social sign-ins (no birthday provided)
+          'user_contactNum': null, // Null for social sign-ins (no phone provided)
+          'user_type': 'caregiver', // Default role for social sign-ins
+          'user_activationStatus': true, // Boolean: true for active
+          'user_profilePic': '', // Empty for now, to be added later
           'provider': provider,
           'createdAt': FieldValue.serverTimestamp(),
         });
