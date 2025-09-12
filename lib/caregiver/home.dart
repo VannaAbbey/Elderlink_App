@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile.dart';
-import 'settings.dart';
+import 'settings.dart' as app_settings;
 import 'help_support.dart';
 import 'add_task.dart';
 import 'emergency_modal.dart';
@@ -28,6 +29,14 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+  String _formatTime(DateTime? dateTime) {
+    if (dateTime == null) return '';
+    final hour = dateTime.hour;
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final ampm = hour >= 12 ? 'PM' : 'AM';
+    final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
+    return '$hour12:$minute $ampm';
+  }
   @override
   void initState() {
     super.initState();
@@ -37,12 +46,31 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     });
   }
   // Helper to get upcoming tasks from AddTaskScreen logic
-  List<Map<String, String>> getUpcomingTasks() {
-    return [ // ALl placeholder data at the moment
-      {'name': 'Lolo Adam', 'task': 'Take a bath', 'time': '11:00 AM', 'image': 'elderly.png'},
-      {'name': 'Lolo Mario', 'task': 'Serve a Dietary Lunch', 'time': '12:00 PM', 'image': 'elderly.png'},
-      {'name': 'Lolo Sofronio', 'task': 'Do Walking Exercise', 'time': '3:00 PM', 'image': 'elderly.png'},
-    ];
+  // Remove placeholder and use Firestore stream from AddTaskScreen
+  Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
+    return FirebaseFirestore.instance
+      .collection('care_tasks')
+      .where('task_status', arrayContains: 'Upcoming')
+      .snapshots()
+      .map((snapshot) {
+        final now = DateTime.now();
+        List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+          final data = doc.data();
+          return {
+            'elderly_fname': data['elderly_fname'] ?? '',
+            'task_description': data['task_description'] ?? '',
+            'task_start': (data['task_start'] is Timestamp) ? (data['task_start'] as Timestamp).toDate() : data['task_start'],
+            'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
+          };
+        }).toList();
+        // Sort by task_date closest to today
+        tasks.sort((a, b) {
+          final aDate = a['task_date'] as DateTime? ?? now;
+          final bDate = b['task_date'] as DateTime? ?? now;
+          return (aDate.difference(now).inDays).abs().compareTo((bDate.difference(now).inDays).abs());
+        });
+        return tasks;
+      });
   }
   bool isSidebarOpen = false;
   int selectedIndex = 0;
@@ -260,12 +288,30 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 // Show first 3 upcoming tasks as cards
-                                ...getUpcomingTasks().take(3).map((task) => _taskCard(
-                                  task['name'] ?? '',
-                                  task['task'] ?? '',
-                                  task['time'] ?? '',
-                                  Color(0xFFB7DDF5),
-                                )),
+                                StreamBuilder<List<Map<String, dynamic>>>(
+                                  stream: getUpcomingTasksStream(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState == ConnectionState.waiting) {
+                                      return const Center(child: CircularProgressIndicator());
+                                    }
+                                    final tasks = snapshot.data ?? [];
+                                    if (tasks.isEmpty) {
+                                      return const Center(child: Text('No upcoming tasks.'));
+                                    }
+                                    return Column(
+                                      children: tasks.take(3).map((task) => _taskCard(
+                                        task['elderly_fname'] ?? '',
+                                        task['task_description'] ?? '',
+                                        task['task_start'] != null
+                                          ? (task['task_start'] is DateTime
+                                              ? _formatTime(task['task_start'])
+                                              : task['task_start'].toString())
+                                          : '',
+                                        Color(0xFFB7DDF5),
+                                      )).toList(),
+                                    );
+                                  },
+                                ),
                               ],
                             ),
                           ),
@@ -476,7 +522,7 @@ class CaregiverSidebar extends StatelessWidget {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
-                        MaterialPageRoute(builder: (context) => const Settings()),
+                        MaterialPageRoute(builder: (context) => const app_settings.Settings()),
                       );
                     },
                   ),
