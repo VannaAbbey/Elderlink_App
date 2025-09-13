@@ -88,33 +88,6 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
     }
     return assignedElderly;
   }
-  Color _getCardColor(int tab) {
-    switch (tab) {
-      case 0: // Upcoming
-      case 1: // Complete
-        return const Color(0xFFE6F3FA); // Blue
-      case 2: // Incomplete
-        return const Color(0xFFE6FAF0); // Green
-      case 3: // Missed
-        return const Color(0xFFFDE6E6); // Red
-      default:
-        return Colors.white;
-    }
-  }
-
-  Color _getTextColor(int tab) {
-    switch (tab) {
-      case 0:
-      case 1:
-        return const Color(0xFF00588e); // Blue text
-      case 2:
-        return const Color(0xFF1B7F5A); // Green text
-      case 3:
-        return const Color(0xFFD32F2F); // Red text
-      default:
-        return Colors.black;
-    }
-  }
 
   Stream<List<Map<String, dynamic>>> getTasksStream(String status) {
     return FirebaseFirestore.instance
@@ -216,7 +189,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
               child: Scaffold(
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
-                  backgroundColor: const Color(0x00FFFFFF),
+                  backgroundColor: Colors.white,
                   title: const Text('List of Tasks',
                       style: TextStyle(
                           color: Color(0xFF00588e),
