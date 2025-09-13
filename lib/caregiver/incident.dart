@@ -47,7 +47,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
               child: Scaffold(
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
-                  backgroundColor: Colors.transparent,
+                  backgroundColor: const Color(0x00FFFFFF),
                   title: const Text('Incident Report',
                       style: TextStyle(
                           color: Color(0xFF00588e),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../providers/auth_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile.dart';
@@ -136,9 +137,19 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                         onTap: toggleSidebar,
                                         child: CircleAvatar(
                                           radius: 24,
-                                          backgroundImage: (profilePicUrl.isNotEmpty)
-                                            ? NetworkImage(profilePicUrl)
-                                            : const AssetImage('assets/images/people_icon.png') as ImageProvider,
+                                          backgroundColor: Colors.grey[200],
+                                          child: ClipOval(
+                                            child: profilePicUrl.isNotEmpty
+                                              ? CachedNetworkImage(
+                                                  imageUrl: profilePicUrl,
+                                                  width: 48,
+                                                  height: 48,
+                                                  fit: BoxFit.cover,
+                                                  placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
+                                                  errorWidget: (context, url, error) => Image.asset('assets/images/people_icon.png', width: 48, height: 48, fit: BoxFit.cover),
+                                                )
+                                              : Image.asset('assets/images/people_icon.png', width: 48, height: 48, fit: BoxFit.cover),
+                                          ),
                                         ),
                                       );
                                     },
