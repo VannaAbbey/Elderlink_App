@@ -93,6 +93,13 @@ flutter:
     - assets/images/shiftIcon.png
     - assets/images/background1.png
     - assets/images/people_icon.png
+    - assets/images/Sebastian.png
+    - assets/images/Emmanuel.png
+    - assets/images/Charbell.png
+    - assets/images/Rose.png
+    - assets/images/Gabriel.png
+    - assets/images/profile.png
+    - assets/images/profile2.png
   
   fonts:
     - family: Poppins

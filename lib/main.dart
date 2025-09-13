@@ -4,37 +4,36 @@ import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'providers/auth_provider.dart';
 import 'widgets/auth_wrapper.dart';
-import 'auth/get_started.dart'; 
+import 'auth/get_started.dart';
 import 'auth/login.dart';
 import 'auth/register_choose_role.dart';
 import 'auth/forgot_pass.dart';
 import 'auth/register_success.dart';
 import 'caregiver/home.dart';
 import 'nurse/home.dart';
+import 'nurse/vital_monitoring.dart';
+import 'nurse/incident_report.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
     print('Firebase initialized successfully');
-    
+
     // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
     // WARNING: This will delete ALL user data!
     // await _initializeDatabase();
-    
   } catch (e) {
     print('Firebase initialization failed: $e');
     // Continue without Firebase for now
   }
-  
+
   runApp(
     MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
-      ],
+      providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],
       child: const MyApp(),
     ),
   );
@@ -74,6 +73,8 @@ class MyApp extends StatelessWidget {
         '/register_success': (context) => const RegisterSuccessScreen(),
         '/caregiver_home': (context) => const CaregiverHomeScreen(),
         '/nurse_home': (context) => const NurseHomeScreen(),
+        '/vital_monitoring': (context) => const VitalMonitoringScreen(),
+        '/incident_report': (context) => const IncidentReportScreen(),
       },
     );
   }
