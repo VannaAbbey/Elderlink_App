@@ -12,6 +12,7 @@ import 'incident.dart';
 import 'shift.dart';
 import 'notifications.dart';
 import 'caregiver_bottom_navbar.dart';
+import 'houses.dart';
 
 void main() {
   runApp(
@@ -35,9 +36,14 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     final hour = dateTime.hour;
     final minute = dateTime.minute.toString().padLeft(2, '0');
     final ampm = hour >= 12 ? 'PM' : 'AM';
-    final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
+    final hour12 = hour > 12
+        ? hour - 12
+        : hour == 0
+        ? 12
+        : hour;
     return '$hour12:$minute $ampm';
   }
+
   @override
   void initState() {
     super.initState();
@@ -46,33 +52,41 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       authProvider.refreshUserData();
     });
   }
+
   // Helper to get upcoming tasks from AddTaskScreen logic
   // Remove placeholder and use Firestore stream from AddTaskScreen
   Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
     return FirebaseFirestore.instance
-      .collection('care_tasks')
-      .where('task_status', arrayContains: 'Upcoming')
-      .snapshots()
-      .map((snapshot) {
-        final now = DateTime.now();
-        List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
-          final data = doc.data();
-          return {
-            'elderly_fname': data['elderly_fname'] ?? '',
-            'task_description': data['task_description'] ?? '',
-            'task_start': (data['task_start'] is Timestamp) ? (data['task_start'] as Timestamp).toDate() : data['task_start'],
-            'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
-          };
-        }).toList();
-        // Sort by task_date closest to today
-        tasks.sort((a, b) {
-          final aDate = a['task_date'] as DateTime? ?? now;
-          final bDate = b['task_date'] as DateTime? ?? now;
-          return (aDate.difference(now).inDays).abs().compareTo((bDate.difference(now).inDays).abs());
+        .collection('care_tasks')
+        .where('task_status', arrayContains: 'Upcoming')
+        .snapshots()
+        .map((snapshot) {
+          final now = DateTime.now();
+          List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+            final data = doc.data();
+            return {
+              'elderly_fname': data['elderly_fname'] ?? '',
+              'task_description': data['task_description'] ?? '',
+              'task_start': (data['task_start'] is Timestamp)
+                  ? (data['task_start'] as Timestamp).toDate()
+                  : data['task_start'],
+              'task_date': (data['task_date'] is Timestamp)
+                  ? (data['task_date'] as Timestamp).toDate()
+                  : data['task_date'],
+            };
+          }).toList();
+          // Sort by task_date closest to today
+          tasks.sort((a, b) {
+            final aDate = a['task_date'] as DateTime? ?? now;
+            final bDate = b['task_date'] as DateTime? ?? now;
+            return (aDate.difference(now).inDays).abs().compareTo(
+              (bDate.difference(now).inDays).abs(),
+            );
+          });
+          return tasks;
         });
-        return tasks;
-      });
   }
+
   bool isSidebarOpen = false;
   int selectedIndex = 0;
 
@@ -132,7 +146,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                 children: [
                                   Consumer<AuthProvider>(
                                     builder: (context, authProvider, child) {
-                                      final profilePicUrl = authProvider.userProfilePic;
+                                      final profilePicUrl =
+                                          authProvider.userProfilePic;
                                       return GestureDetector(
                                         onTap: toggleSidebar,
                                         child: CircleAvatar(
@@ -140,15 +155,33 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                           backgroundColor: Colors.grey[200],
                                           child: ClipOval(
                                             child: profilePicUrl.isNotEmpty
-                                              ? CachedNetworkImage(
-                                                  imageUrl: profilePicUrl,
-                                                  width: 48,
-                                                  height: 48,
-                                                  fit: BoxFit.cover,
-                                                  placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
-                                                  errorWidget: (context, url, error) => Image.asset('assets/images/people_icon.png', width: 48, height: 48, fit: BoxFit.cover),
-                                                )
-                                              : Image.asset('assets/images/people_icon.png', width: 48, height: 48, fit: BoxFit.cover),
+                                                ? CachedNetworkImage(
+                                                    imageUrl: profilePicUrl,
+                                                    width: 48,
+                                                    height: 48,
+                                                    fit: BoxFit.cover,
+                                                    placeholder: (context, url) =>
+                                                        const CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                        ),
+                                                    errorWidget:
+                                                        (
+                                                          context,
+                                                          url,
+                                                          error,
+                                                        ) => Image.asset(
+                                                          'assets/images/people_icon.png',
+                                                          width: 48,
+                                                          height: 48,
+                                                          fit: BoxFit.cover,
+                                                        ),
+                                                  )
+                                                : Image.asset(
+                                                    'assets/images/people_icon.png',
+                                                    width: 48,
+                                                    height: 48,
+                                                    fit: BoxFit.cover,
+                                                  ),
                                           ),
                                         ),
                                       );
@@ -156,7 +189,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                   ),
                                   const SizedBox(width: 10),
                                   Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Consumer<AuthProvider>(
                                         builder: (context, authProvider, child) {
@@ -170,15 +204,18 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                               ),
                                             );
                                           }
-                                          
-                                          final firstName = authProvider.userFirstName;
+
+                                          final firstName =
+                                              authProvider.userFirstName;
                                           // Ensure firstName is not empty or default
-                                          final displayName = (firstName.isEmpty || firstName == 'User') 
-                                              ? '' 
+                                          final displayName =
+                                              (firstName.isEmpty ||
+                                                  firstName == 'User')
+                                              ? ''
                                               : firstName;
-                                          
+
                                           return Text(
-                                            displayName.isEmpty 
+                                            displayName.isEmpty
                                                 ? 'Hello Caregiver,'
                                                 : 'Hello Caregiver $displayName,',
                                             style: const TextStyle(
@@ -194,11 +231,16 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                 ],
                               ),
                               IconButton(
-                                icon: const Icon(Icons.notifications, color: Color(0XFF1D66A0), size: 35),
+                                icon: const Icon(
+                                  Icons.notifications,
+                                  color: Color(0XFF1D66A0),
+                                  size: 35,
+                                ),
                                 onPressed: () {
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
-                                      builder: (context) => const NotificationsScreen(),
+                                      builder: (context) =>
+                                          const NotificationsScreen(),
                                     ),
                                   );
                                 },
@@ -255,14 +297,15 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Color.fromRGBO(183, 221, 245, 0.25),
+                              color: Color(0x3EB7DDF5),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     Row(
                                       children: const [
@@ -284,7 +327,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                     GestureDetector(
                                       onTap: () {
                                         setState(() {
-                                          selectedIndex = 1; // 1 is the index for AddTaskScreen (Upcoming Tasks tab)
+                                          selectedIndex =
+                                              1; // 1 is the index for AddTaskScreen (Upcoming Tasks tab)
                                         });
                                       },
                                       child: const Text(
@@ -302,24 +346,38 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                 StreamBuilder<List<Map<String, dynamic>>>(
                                   stream: getUpcomingTasksStream(),
                                   builder: (context, snapshot) {
-                                    if (snapshot.connectionState == ConnectionState.waiting) {
-                                      return const Center(child: CircularProgressIndicator());
+                                    if (snapshot.connectionState ==
+                                        ConnectionState.waiting) {
+                                      return const Center(
+                                        child: CircularProgressIndicator(),
+                                      );
                                     }
                                     final tasks = snapshot.data ?? [];
                                     if (tasks.isEmpty) {
-                                      return const Center(child: Text('No upcoming tasks.'));
+                                      return const Center(
+                                        child: Text('No upcoming tasks.'),
+                                      );
                                     }
                                     return Column(
-                                      children: tasks.take(3).map((task) => _taskCard(
-                                        task['elderly_fname'] ?? '',
-                                        task['task_description'] ?? '',
-                                        task['task_start'] != null
-                                          ? (task['task_start'] is DateTime
-                                              ? _formatTime(task['task_start'])
-                                              : task['task_start'].toString())
-                                          : '',
-                                        Color(0xFFB7DDF5),
-                                      )).toList(),
+                                      children: tasks
+                                          .take(3)
+                                          .map(
+                                            (task) => _taskCard(
+                                              task['elderly_fname'] ?? '',
+                                              task['task_description'] ?? '',
+                                              task['task_start'] != null
+                                                  ? (task['task_start']
+                                                            is DateTime
+                                                        ? _formatTime(
+                                                            task['task_start'],
+                                                          )
+                                                        : task['task_start']
+                                                              .toString())
+                                                  : '',
+                                              Color(0xFFB7DDF5),
+                                            ),
+                                          )
+                                          .toList(),
                                     );
                                   },
                                 ),
@@ -330,7 +388,11 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           const SizedBox(height: 30),
                           Row(
                             children: const [
-                              Icon(Icons.home, color: Color(0xFF00588E), size: 45),
+                              Icon(
+                                Icons.home,
+                                color: Color(0xFF00588E),
+                                size: 45,
+                              ),
                               SizedBox(width: 8),
                               Text(
                                 "Elderly Houses",
@@ -343,30 +405,56 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           ),
 
                           const SizedBox(height: 10),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              color: Color(0XFFE7EFFF),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.home, size: 40, color: Colors.blue),
-                                const SizedBox(width: 10),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: const [
-                                    Text(
-                                      'House of St. Sebastian',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => HousesScreen(),
+                                ),
+                              );
+                            },
+                            child: Card(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              color: const Color(0xFFE6F3FA),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.home,
+                                      size: 50,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: const [
+                                          Text(
+                                            'House of St. Sebastian',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF00588e),
+                                            ),
+                                          ),
+                                          SizedBox(height: 4),
+                                          Text(
+                                            'Females with Psychological Needs',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Color(0xFF00588e),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    Text('Females with Psychological Needs'),
                                   ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ],
@@ -376,7 +464,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
 
                   CaregiverSidebar(
                     onLogout: () async {
-                      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+                      final authProvider = Provider.of<AuthProvider>(
+                        context,
+                        listen: false,
+                      );
                       await authProvider.signOut();
                       if (mounted) {
                         Navigator.pushNamedAndRemoveUntil(
@@ -440,7 +531,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   }
 }
 
-
 // Move CaregiverSidebar to top-level
 class CaregiverSidebar extends StatelessWidget {
   final VoidCallback onLogout;
@@ -501,9 +591,14 @@ class CaregiverSidebar extends StatelessWidget {
                           );
                         }
                         final firstName = authProvider.userFirstName;
-                        final displayName = (firstName.isEmpty || firstName == 'User') ? '' : firstName;
+                        final displayName =
+                            (firstName.isEmpty || firstName == 'User')
+                            ? ''
+                            : firstName;
                         return Text(
-                          displayName.isEmpty ? 'Caregiver' : 'Caregiver $displayName',
+                          displayName.isEmpty
+                              ? 'Caregiver'
+                              : 'Caregiver $displayName',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -522,7 +617,9 @@ class CaregiverSidebar extends StatelessWidget {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
-                        MaterialPageRoute(builder: (context) => const EditProfile()),
+                        MaterialPageRoute(
+                          builder: (context) => const EditProfile(),
+                        ),
                       );
                     },
                   ),
@@ -533,7 +630,9 @@ class CaregiverSidebar extends StatelessWidget {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
-                        MaterialPageRoute(builder: (context) => const app_settings.Settings()),
+                        MaterialPageRoute(
+                          builder: (context) => const app_settings.Settings(),
+                        ),
                       );
                     },
                   ),
@@ -544,7 +643,9 @@ class CaregiverSidebar extends StatelessWidget {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
-                        MaterialPageRoute(builder: (context) => const HelpSupport()),
+                        MaterialPageRoute(
+                          builder: (context) => const HelpSupport(),
+                        ),
                       );
                     },
                   ),
@@ -583,4 +684,3 @@ class CaregiverSidebar extends StatelessWidget {
     );
   }
 }
-
