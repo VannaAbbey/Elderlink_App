@@ -168,7 +168,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
               child: Scaffold(
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
-                  backgroundColor: Colors.transparent,
+                  backgroundColor: const Color(0x00FFFFFF),
                   title: const Text('Shift Handover',
                       style: TextStyle(
                           color: Color(0xFF00588e),
