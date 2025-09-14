@@ -8,6 +8,8 @@ import 'edit_profile.dart';
 import 'medication_management.dart';
 import 'vital_monitoring.dart';
 import 'emergency.dart';
+import 'nurse_bottom_navbar.dart';
+
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -56,76 +58,67 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   }
 
   /// ✅ Modified to navigate to Medication Management when index == 3
+  // List of screens for the nurse (index 0 = dashboard, others map to pages)
+  final List<Widget> _screens = [
+    const Center(child: Text("Nurse Dashboard")), 
+    IncidentReportScreen(),
+    EmergencyScreen(),
+    MedicationManagementScreen(),
+    VitalMonitoringScreen(),
+  ];
+
   void onNavTap(int index) {
     setState(() {
       selectedIndex = index;
     });
-
-    if (index == 1) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const IncidentReportScreen()),
-      );
-    } else if (index == 2) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const EmergencyScreen()),
-      );
-    } else if (index == 3) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const MedicationManagementScreen(),
-        ),
-      );
-    } else if (index == 4) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const VitalMonitoringScreen()),
-      );
-    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        if (isSidebarOpen) {
-          setState(() => isSidebarOpen = false);
-        }
-      },
-      child: Scaffold(
-        body: Stack(
-          children: [
-            Positioned.fill(
-              child: Image.asset(
-                'assets/images/background1.png',
-                fit: BoxFit.cover,
-              ),
-            ),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: ListView(
-                  children: [
-                    _headerSection(),
-                    const SizedBox(height: 20),
-                    _searchBar(),
-                    const SizedBox(height: 20),
-                    _medicalTasksSection(),
-                    const SizedBox(height: 30),
-                    _housesSection(),
-                  ],
+ @override
+Widget build(BuildContext context) {
+  return GestureDetector(
+    onTap: () {
+      if (isSidebarOpen) {
+        setState(() => isSidebarOpen = false);
+      }
+    },
+    child: Scaffold(
+      body: selectedIndex == 0
+          ? Stack( // Nurse Dashboard
+              children: [
+                Positioned.fill(
+                  child: Image.asset(
+                    'assets/images/background1.png',
+                    fit: BoxFit.cover,
+                  ),
                 ),
-              ),
-            ),
-            if (isSidebarOpen) _buildSidebarOverlay(),
-          ],
-        ),
-        bottomNavigationBar: _bottomNavigationBar(),
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: ListView(
+                      children: [
+                        _headerSection(),
+                        const SizedBox(height: 20),
+                        _searchBar(),
+                        const SizedBox(height: 20),
+                        _medicalTasksSection(),
+                        const SizedBox(height: 30),
+                        _housesSection(),
+                      ],
+                    ),
+                  ),
+                ),
+                if (isSidebarOpen) _buildSidebarOverlay(),
+              ],
+            )
+          : _screens[selectedIndex], // other tabs
+      bottomNavigationBar: NurseBottomNavBar(
+        selectedIndex: selectedIndex,
+        onNavTap: onNavTap,
       ),
-    );
-  }
+    ),
+  );
+}
+
 
   Widget _headerSection() {
     return Row(
@@ -380,36 +373,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     );
   }
 
-  Widget _bottomNavigationBar() {
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-        decoration: BoxDecoration(
-          color: const Color(0XFFA5D4DC),
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.grey.withValues(alpha: 0.2),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _navIcon('assets/images/homeIcon.png', 0),
-            _navIcon('assets/images/addTaskIcon.png', 1),
-            _navIcon('assets/images/emerIcon.png', 2),
-            _navIcon('assets/images/incidentIcon.png', 3),
-            _navIcon('assets/images/shiftIcon.png', 4),
-          ],
-        ),
-      ),
-    );
-  }
-
+  
   Widget _navIcon(String assetPath, int index) {
     return GestureDetector(
       onTap: () => onNavTap(index),

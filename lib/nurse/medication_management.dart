@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'bottom_navbar.dart';
 import 'home.dart';
 import 'vital_monitoring.dart';
 import 'incident_report.dart';
@@ -239,41 +238,6 @@ class _MedicationManagementScreenState
             ),
           ),
         ],
-      ),
-      bottomNavigationBar: BottomNavbar(
-        selectedIndex: 3,
-        onTap: (index) {
-          switch (index) {
-            case 0:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const NurseHomeScreen()),
-              );
-              break;
-            case 1:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const IncidentReportScreen()),
-              );
-              break;
-            case 2:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const EmergencyScreen()),
-              );
-              break;
-            case 3:
-              break; // current screen
-            case 4:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const VitalMonitoringScreen(),
-                ),
-              );
-              break;
-          }
-        },
       ),
     );
   }

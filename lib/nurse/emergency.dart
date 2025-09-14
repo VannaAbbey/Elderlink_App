@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'home.dart';
 import 'medication_management.dart';
-import 'bottom_navbar.dart';
 import 'incident_report.dart';
 import 'vital_monitoring.dart';
 
@@ -202,45 +201,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               ),
             ),
         ],
-      ),
-
-      // Bottom navbar
-      bottomNavigationBar: BottomNavbar(
-        selectedIndex: 2, // Incident report is index 1
-        onTap: (index) {
-          switch (index) {
-            case 0:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const NurseHomeScreen()),
-              );
-              break;
-            case 1:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const IncidentReportScreen()),
-              );
-              break;
-            case 2:
-              break;
-            case 3:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const MedicationManagementScreen(),
-                ),
-              );
-              break;
-            case 4:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const VitalMonitoringScreen(),
-                ),
-              );
-              break;
-          }
-        },
       ),
     );
   }

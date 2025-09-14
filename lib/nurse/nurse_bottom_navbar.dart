@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
-import 'medication_management.dart';
-import 'vital_monitoring.dart';
 
-class BottomNavbar extends StatelessWidget {
+class NurseBottomNavBar extends StatelessWidget {
   final int selectedIndex;
-  final Function(int) onTap;
+  final Function(int) onNavTap;
 
-  const BottomNavbar({
+  const NurseBottomNavBar({
     super.key,
     required this.selectedIndex,
-    required this.onTap,
+    required this.onNavTap,
   });
 
   @override
@@ -32,26 +30,26 @@ class BottomNavbar extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _navIcon(context, 'assets/images/homeIcon.png', 0),
-            _navIcon(context, 'assets/images/addTaskIcon.png', 1),
-            _navIcon(context, 'assets/images/emerIcon.png', 2),
-            _navIcon(context, 'assets/images/incidentIcon.png', 3),
-            _navIcon(context, 'assets/images/shiftIcon.png', 4),
+            _navIcon('assets/images/homeIcon.png', 0),
+            _navIcon('assets/images/addTaskIcon.png', 1),
+            _navIcon('assets/images/emerIcon.png', 2),
+            _navIcon('assets/images/incidentIcon.png', 3),
+            _navIcon('assets/images/shiftIcon.png', 4),
           ],
         ),
       ),
     );
   }
 
-  Widget _navIcon(BuildContext context, String assetPath, int index) {
+  Widget _navIcon(String assetPath, int index) {
     return GestureDetector(
-      onTap: () {
-        onTap(index); // parent handles navigation
-      },
+      onTap: () => onNavTap(index),
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: selectedIndex == index ? Colors.white : Colors.transparent,
+          color: selectedIndex == index
+              ? const Color.fromARGB(255, 255, 255, 255)
+              : Colors.transparent,
           shape: BoxShape.circle,
         ),
         child: Image.asset(

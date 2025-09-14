@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'home.dart';
 import 'medication_management.dart';
-import 'bottom_navbar.dart';
 import 'incident_report.dart';
 
 class VitalMonitoringScreen extends StatefulWidget {
@@ -196,43 +195,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
             ),
           ),
         ],
-      ),
-
-      /// Bottom navigation bar
-      bottomNavigationBar: BottomNavbar(
-        selectedIndex: 4,
-        onTap: (index) {
-          switch (index) {
-            case 0:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const NurseHomeScreen()),
-              );
-              break;
-            case 1:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const IncidentReportScreen()),
-              );
-              break;
-            case 2:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const EmergencyScreen()),
-              );
-              break;
-            case 3:
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const MedicationManagementScreen(),
-                ),
-              );
-              break;
-            case 4:
-              break;
-          }
-        },
       ),
     );
   }
