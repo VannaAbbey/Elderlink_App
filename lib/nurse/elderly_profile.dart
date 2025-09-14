@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class ElderlyProfile extends StatefulWidget {
   final String elderlyId;
@@ -14,6 +16,7 @@ class ElderlyProfile extends StatefulWidget {
 class _ElderlyProfileState extends State<ElderlyProfile> {
   Map<String, dynamic> elderly = {};
   bool isLoading = true;
+  final ImagePicker _picker = ImagePicker();
 
   late String lifeStatus;
   late String healthCondition;
@@ -55,8 +58,9 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       causeController.text = elderly['elderly_causeDeath'] ?? '';
       if (elderly['elderly_deathDate'] != null &&
           elderly['elderly_deathDate'].toString().isNotEmpty) {
-        dateOfDeath =
-            DateTime.tryParse(elderly['elderly_deathDate'].toString());
+        dateOfDeath = DateTime.tryParse(
+          elderly['elderly_deathDate'].toString(),
+        );
       }
 
       // Fetch house name
@@ -90,9 +94,49 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
     }
   }
 
+  Future<void> _pickAndUploadImage() async {
+    try {
+      final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+      if (pickedFile == null) return;
+
+      final storageRef = FirebaseStorage.instance.ref().child(
+        'elderly_profilePic/${widget.elderlyId}.jpg',
+      );
+
+      // Upload to Firebase Storage
+      await storageRef.putData(await pickedFile.readAsBytes());
+
+      // Get download URL
+      final downloadUrl = await storageRef.getDownloadURL();
+
+      // Update Firestore elderly doc
+      await FirebaseFirestore.instance
+          .collection('elderly')
+          .doc(widget.elderlyId)
+          .update({'elderly_profilePic': downloadUrl});
+
+      // Update local state so UI refreshes
+      setState(() {
+        elderly['elderly_profilePic'] = downloadUrl;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile picture updated successfully!'),
+          backgroundColor: Color(0xFF00588e),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error uploading image: $e')));
+    }
+  }
+
   void showDropdownOverlay(String title, String field, List<String> options) {
-    String selectedValue =
-        field == 'elderly_mobilityStatus' ? mobilityStatus : lifeStatus;
+    String selectedValue = field == 'elderly_mobilityStatus'
+        ? mobilityStatus
+        : lifeStatus;
 
     showDialog(
       context: context,
@@ -179,9 +223,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
               onPressed: () {
                 if (dateOfDeath == null || causeController.text.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Please provide all details'),
-                    ),
+                    const SnackBar(content: Text('Please provide all details')),
                   );
                   return;
                 }
@@ -212,17 +254,31 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
               const Text(
                 'You are requested to change the details in the elderly profile. '
                 'This action cannot be undone once submitted for admin approval.',
+                textAlign: TextAlign.justify,
               ),
+              const SizedBox(height: 16),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Checkbox(
                     value: isChecked,
                     onChanged: (val) =>
                         setState(() => isChecked = val ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    activeColor: const Color(0xFF00588E), // fill when checked
+                    checkColor: Colors.white, // checkmark color
+                    side: const BorderSide(
+                      // border when unchecked
+                      color: Color(0xFF00588E),
+                      width: 2,
+                    ),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'I acknowledge that the information provided is accurate and complete.',
+                      textAlign: TextAlign.justify,
+                      style: const TextStyle(fontSize: 14),
                     ),
                   ),
                 ],
@@ -236,10 +292,11 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00588E),
                 foregroundColor: Colors.white,
                 textStyle: const TextStyle(
                   fontWeight: FontWeight.bold,
-                  fontSize: 18,
+                  fontSize: 15,
                 ),
               ),
               onPressed: isChecked
@@ -251,18 +308,17 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                  'Please provide Date of Death and Cause of Death'),
+                                'Please provide Date of Death and Cause of Death',
+                              ),
                             ),
                           );
                           return;
                         }
 
-                        final currentUser =
-                            FirebaseAuth.instance.currentUser;
+                        final currentUser = FirebaseAuth.instance.currentUser;
                         if (currentUser == null) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('User not logged in')),
+                            const SnackBar(content: Text('User not logged in')),
                           );
                           return;
                         }
@@ -275,7 +331,8 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                         if (!userDoc.exists) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text('Nurse details not found')),
+                              content: Text('Nurse details not found'),
+                            ),
                           );
                           return;
                         }
@@ -287,39 +344,42 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                         await FirebaseFirestore.instance
                             .collection('notifications')
                             .add({
-                          'elderly_id': widget.elderlyId,
-                          'elderly_name':
-                              '${elderly['elderly_fname']} ${elderly['elderly_lname']}',
-                          'elderly_profilePic':
-                              elderly['elderly_profilePic'] ?? '',
-                          'elderly_status': lifeStatus,
-                          'elderly_deathDate':
-                              lifeStatus == 'Deceased' && dateOfDeath != null
+                              'elderly_id': widget.elderlyId,
+                              'elderly_name':
+                                  '${elderly['elderly_fname']} ${elderly['elderly_lname']}',
+                              'elderly_profilePic':
+                                  elderly['elderly_profilePic'] ?? '',
+                              'elderly_status': lifeStatus,
+                              'elderly_deathDate':
+                                  lifeStatus == 'Deceased' &&
+                                      dateOfDeath != null
                                   ? Timestamp.fromDate(dateOfDeath!)
                                   : null,
-                          'elderly_causeDeath': lifeStatus == 'Deceased'
-                              ? causeController.text
-                              : '',
-                          'house_name': houseName,
-                          'updated_by': 'Nurse $nurseName',
-                          'updated_by_id': nurseId,
-                          'createdAt': FieldValue.serverTimestamp(),
-                          'action_status': 'pending',
-                          'reason_for_rejection': '',
-                        });
+                              'elderly_causeDeath': lifeStatus == 'Deceased'
+                                  ? causeController.text
+                                  : '',
+                              'house_name': houseName,
+                              'updated_by': 'Nurse $nurseName',
+                              'updated_by_id': nurseId,
+                              'createdAt': FieldValue.serverTimestamp(),
+                              'action_status': 'pending',
+                              'reason_for_rejection': '',
+                            });
 
                         Navigator.pop(context);
                         Navigator.pop(context);
 
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                              content: Text(
-                                  'Elderly details submitted for admin approval')),
+                            content: Text(
+                              'Elderly details submitted for admin approval',
+                            ),
+                          ),
                         );
                       } catch (e) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Error: $e')),
-                        );
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('Error: $e')));
                       }
                     }
                   : null,
@@ -381,39 +441,83 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Container(
-                  width: 180,
-                  height: 180,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Color(0xFF00588E),
-                  ),
-                  child: ClipOval(
-                    child: elderly['elderly_profilePic'] != null &&
-                            elderly['elderly_profilePic'].toString().isNotEmpty
-                        ? Image.network(
-                            elderly['elderly_profilePic'],
-                            fit: BoxFit.contain,
-                          )
-                        : Image.asset(
-                            'assets/images/profile.png',
-                            fit: BoxFit.contain,
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // 🔵 Profile Picture Circle
+                    Container(
+                      width: 180,
+                      height: 180,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF00588E),
+                      ),
+                      child: ClipOval(
+                        child:
+                            elderly['elderly_profilePic'] != null &&
+                                elderly['elderly_profilePic']
+                                    .toString()
+                                    .isNotEmpty
+                            ? Image.network(
+                                elderly['elderly_profilePic'],
+                                fit: BoxFit.cover,
+                              )
+                            : Image.asset(
+                                'assets/images/profile.png',
+                                fit: BoxFit.cover,
+                              ),
+                      ),
+                    ),
+
+                    // 📸 Camera icon overlapping the circle border
+                    Align(
+                      alignment: Alignment.bottomRight,
+                      child: Transform.translate(
+                        offset: const Offset(
+                          -80,
+                          70,
+                        ), // ⬅️ negative X para lumipat pakaliwa
+                        child: GestureDetector(
+                          onTap: _pickAndUploadImage,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 4,
+                                  offset: Offset(2, 2),
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(8),
+                            child: const Icon(
+                              Icons.camera_alt,
+                              size: 26,
+                              color: Color(0xFF00588E),
+                            ),
                           ),
-                  ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
-                    border: Border.all(
-                      color: Color(0xFF216386),
-                      width: 1,
-                    ),
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2), // shadow color
+                        blurRadius: 3, // soft edges
+                        spreadRadius: 2, // spread out
+                        offset: const Offset(0, 0),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -424,10 +528,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                         style: const TextStyle(
                           fontSize: 30,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFF216386),
+                          color: Color(0xFF00588e),
                         ),
                       ),
-                      const Divider(color: Color(0xFF216386), thickness: 1),
+                      const Divider(color: Color(0xFF00588e), thickness: 1),
                       const SizedBox(height: 20),
                       buildField(
                         'Full Name',
@@ -503,21 +607,27 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                           fieldFontSize,
                         ),
                       ],
+                      const SizedBox(height: 25),
+
+                      // ✅ Button INSIDE container
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00588E),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w900, // 🔥 Extra bold
+                            fontSize: 16,
+                          ),
+                        ),
+                        onPressed: showSubmitConfirmation,
+                        child: const Text("Update and Submit to Admin"),
+                      ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00588E),
-                    foregroundColor: Colors.white,
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: buttonFontSize,
-                    ),
-                  ),
-                  onPressed: showSubmitConfirmation,
-                  child: const Text('Update and Submit to Admin'),
                 ),
               ],
             ),
@@ -532,15 +642,19 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       text: TextSpan(
         children: [
           TextSpan(
-            text: '$label: ',
+            text: label, // ✅ only the label
             style: TextStyle(
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w900,
               color: Colors.black,
               fontSize: fontSize,
             ),
           ),
           TextSpan(
-            text: value,
+            text: ': ', // ✅ separator not bold
+            style: TextStyle(color: Colors.black, fontSize: fontSize),
+          ),
+          TextSpan(
+            text: value, // ✅ plain value
             style: TextStyle(color: Colors.black, fontSize: fontSize),
           ),
         ],
