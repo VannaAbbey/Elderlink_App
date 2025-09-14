@@ -140,95 +140,227 @@ class IncompleteTasksScreen extends StatelessWidget {
                     ),
                   ),
                   for (final task in grouped[key]!)
-                    Card(
-                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      color: Colors.white,
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1B7F5A),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: Image.asset(
-                                  'assets/images/people_icon.png',
-                                  fit: BoxFit.cover,
+                    InkWell(
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (BuildContext ctx) {
+                            return Dialog(
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+                              child: Container(
+                                width: 350,
+                                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Center(
+                                              child: Text(
+                                                'Task Details',
+                                                style: const TextStyle(
+                                                  fontSize: 22,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color(0xFF22688E),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
+                                            onPressed: () => Navigator.of(ctx).pop(),
+                                          ),
+                                        ],
+                                      ),
+                                      const Divider(),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.person, color: Color(0xFF22688E)),
+                                          const SizedBox(width: 8),
+                                          const Text('Name:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                          const SizedBox(width: 8),
+                                          Text(task['elderly_fname'] ?? '', style: const TextStyle(fontSize: 16)),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.assignment, color: Color(0xFF22688E)),
+                                          const SizedBox(width: 8),
+                                          const Text('Activity:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                          const SizedBox(width: 8),
+                                          Text(task['task_description'] ?? '', style: const TextStyle(fontSize: 16)),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.access_time, color: Color(0xFF22688E)),
+                                          const SizedBox(width: 8),
+                                          const Text('Time:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            '${_formatSingleTime(task['task_start'])} - ${_formatSingleTime(task['task_end'])}',
+                                            style: const TextStyle(fontSize: 16),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.repeat, color: Color(0xFF22688E)),
+                                          const SizedBox(width: 8),
+                                          const Text('Frequency:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            (task['task_frequency'] is List && task['task_frequency'].isNotEmpty)
+                                              ? (task['task_frequency'] as List).join(', ')
+                                              : (task['task_frequency']?.toString() ?? ''),
+                                            style: const TextStyle(fontSize: 16),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(Icons.error_outline, color: Color(0xFFD32F2F)),
+                                          const SizedBox(width: 8),
+                                          const Text('Reason:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFD32F2F))),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              'Missed due to scheduling conflict. This is a very long reason that should wrap and not overflow the dialog. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam euismod, nunc ut laoreet cursus, enim erat dictum urna, nec dictum erat urna.',
+                                              style: const TextStyle(fontSize: 16, color: Color(0xFFD32F2F)),
+                                              softWrap: true,
+                                              overflow: TextOverflow.visible,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.calendar_today, color: Color(0xFF22688E)),
+                                          const SizedBox(width: 8),
+                                          const Text('Date:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            task['task_date'] != null
+                                              ? '${task['task_date'].year}-${task['task_date'].month.toString().padLeft(2, '0')}-${task['task_date'].day.toString().padLeft(2, '0')}'
+                                              : '',
+                                            style: const TextStyle(fontSize: 16),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            );
+                          },
+                        );
+                      },
+                      child: Card(
+                        margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        color: Colors.white,
+                        elevation: 2,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1B7F5A),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.asset(
+                                    'assets/images/people_icon.png',
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      task['elderly_fname'] ?? '',
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF22688E)),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      task['task_description'] ?? '',
+                                      style: const TextStyle(fontSize: 15, color: Colors.black87),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Reason: Missed due to scheduling conflict', // Placeholder
+                                      style: const TextStyle(fontSize: 14, color: Colors.grey),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  Text(
-                                    task['elderly_fname'] ?? '',
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF22688E)),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        _formatSingleTime(task['task_start']),
+                                        style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 12,
+                                        height: 12,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFF1B7F5A),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 4),
-                                  Text(
-                                    task['task_description'] ?? '',
-                                    style: const TextStyle(fontSize: 15, color: Colors.black87),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Reason: Missed due to scheduling conflict', // Placeholder
-                                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        _formatSingleTime(task['task_end']),
+                                        style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 12,
+                                        height: 12,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFD32F2F),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      _formatSingleTime(task['task_start']),
-                                      style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFF1B7F5A),
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Text(
-                                      _formatSingleTime(task['task_end']),
-                                      style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFFD32F2F),
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),

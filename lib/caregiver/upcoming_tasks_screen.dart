@@ -2,6 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 class UpcomingTasksScreen extends StatelessWidget {
+  String _formatDate(DateTime? dateTime) {
+    if (dateTime == null) return '';
+    final year = dateTime.year;
+    final month = dateTime.month.toString().padLeft(2, '0');
+    final day = dateTime.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
   static String formatHeaderDate(String key) {
     try {
@@ -121,90 +128,308 @@ class UpcomingTasksScreen extends StatelessWidget {
                               ),
                             ),
                             for (final task in grouped[key]!)
-                              Card(
-                                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                color: Colors.white,
-                                elevation: 2,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(12),
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Container(
-                                        width: 56,
-                                        height: 56,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF00588e),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(12),
-                                          child: Image.asset(
-                                            'assets/images/people_icon.png',
-                                            fit: BoxFit.cover,
+                              InkWell(
+                                onTap: () {
+                                  bool showReasonInput = false;
+                                  TextEditingController reasonController = TextEditingController();
+                                  showDialog(
+                                    context: context,
+                                    builder: (BuildContext ctx) {
+                                      return StatefulBuilder(
+                                        builder: (context, setState) {
+                                          return Dialog(
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+                                            child: Container(
+                                              width: 350,
+                                              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius: BorderRadius.circular(20),
+                                              ),
+                                              child: SingleChildScrollView(
+                                                child: Column(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                                  children: [
+                                                    Row(
+                                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                      children: [
+                                                        Expanded(
+                                                          child: Center(
+                                                            child: Text(
+                                                              'Task Details',
+                                                              style: const TextStyle(
+                                                                fontSize: 22,
+                                                                fontWeight: FontWeight.bold,
+                                                                color: Color(0xFF22688E),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
+                                                          onPressed: () => Navigator.of(ctx).pop(),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const Divider(),
+                                                    const SizedBox(height: 10),
+                                                    Row(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        const Icon(Icons.person, color: Color(0xFF22688E)),
+                                                        const SizedBox(width: 8),
+                                                        const Text('Name:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                        const SizedBox(width: 8),
+                                                        Expanded(
+                                                          child: Text(
+                                                            task['elderly_fname'] ?? '',
+                                                            style: const TextStyle(fontSize: 16),
+                                                            softWrap: true,
+                                                            overflow: TextOverflow.visible,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Row(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        const Icon(Icons.assignment, color: Color(0xFF22688E)),
+                                                        const SizedBox(width: 8),
+                                                        const Text('Activity:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                        const SizedBox(width: 8),
+                                                        Expanded(
+                                                          child: Text(
+                                                            task['task_description'] ?? '',
+                                                            style: const TextStyle(fontSize: 16),
+                                                            softWrap: true,
+                                                            overflow: TextOverflow.visible,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Row(
+                                                      children: [
+                                                        const Icon(Icons.access_time, color: Color(0xFF22688E)),
+                                                        const SizedBox(width: 8),
+                                                        const Text('Time:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                        const SizedBox(width: 8),
+                                                        Text(
+                                                          '${task['task_start'] != null ? _formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? _formatTime(task['task_end']) : ''}',
+                                                          style: const TextStyle(fontSize: 16),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Row(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        const Icon(Icons.repeat, color: Color(0xFF22688E)),
+                                                        const SizedBox(width: 8),
+                                                        const Text('Frequency:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                        const SizedBox(width: 8),
+                                                        Expanded(
+                                                          child: Text(
+                                                            (task['task_frequency'] is List && task['task_frequency'].isNotEmpty)
+                                                              ? (task['task_frequency'] as List).join(', ')
+                                                              : (task['task_frequency']?.toString() ?? ''),
+                                                            style: const TextStyle(fontSize: 16),
+                                                            softWrap: true,
+                                                            overflow: TextOverflow.visible,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Row(
+                                                      children: [
+                                                        const Icon(Icons.calendar_today, color: Color(0xFF22688E)),
+                                                        const SizedBox(width: 8),
+                                                        const Text('Created:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                        const SizedBox(width: 8),
+                                                        Text(
+                                                          task['created_at'] != null
+                                                            ? (task['created_at'] is DateTime
+                                                                ? '${_formatDate(task['created_at'])} ${_formatTime(task['created_at'])}'
+                                                                : task['created_at'].toString())
+                                                            : '',
+                                                          style: const TextStyle(fontSize: 16),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 20),
+                                                    !showReasonInput
+                                                        ? Row(
+                                                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                                            children: [
+                                                              TextButton.icon(
+                                                                onPressed: () {
+                                                                  // TODO: Mark as Complete logic
+                                                                  Navigator.of(ctx).pop();
+                                                                },
+                                                                icon: const Icon(Icons.check_circle, color: Color(0xFF22688E)),
+                                                                label: const Text('Complete', style: TextStyle(color: Color(0xFF22688E), fontWeight: FontWeight.bold, fontSize: 16)),
+                                                                style: TextButton.styleFrom(
+                                                                  backgroundColor: const Color(0xFFE6F3FA),
+                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                                                                ),
+                                                              ),
+                                                              TextButton.icon(
+                                                                onPressed: () {
+                                                                  setState(() {
+                                                                    showReasonInput = true;
+                                                                  });
+                                                                },
+                                                                icon: const Icon(Icons.cancel, color: Color(0xFFD32F2F)),
+                                                                label: const Text('Incomplete', style: TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.bold, fontSize: 16)),
+                                                                style: TextButton.styleFrom(
+                                                                  backgroundColor: const Color(0xFFFDEAEA),
+                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          )
+                                                        : Column(
+                                                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                                                            children: [
+                                                              const Text('Reason for Incompletion:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFD32F2F))),
+                                                              const SizedBox(height: 10),
+                                                              Container(
+                                                                decoration: BoxDecoration(
+                                                                  color: Color(0xFFFDEAEA),
+                                                                  borderRadius: BorderRadius.circular(12),
+                                                                ),
+                                                                child: TextField(
+                                                                  controller: reasonController,
+                                                                  maxLines: 3,
+                                                                  decoration: const InputDecoration(
+                                                                    hintText: 'Type reason here',
+                                                                    hintStyle: TextStyle(fontStyle: FontStyle.italic),
+                                                                    border: InputBorder.none,
+                                                                    contentPadding: EdgeInsets.all(8),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              const SizedBox(height: 16),
+                                                              SizedBox(
+                                                                width: double.infinity,
+                                                                height: 44,
+                                                                child: ElevatedButton(
+                                                                  onPressed: () {
+                                                                    // TODO: Submit reason logic
+                                                                    Navigator.of(ctx).pop();
+                                                                  },
+                                                                  style: ElevatedButton.styleFrom(
+                                                                    backgroundColor: const Color(0xFF22688E),
+                                                                    shape: RoundedRectangleBorder(
+                                                                      borderRadius: BorderRadius.circular(16),
+                                                                    ),
+                                                                  ),
+                                                                  child: const Text('Submit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      );
+                                    },
+                                  );
+                                },
+                                child: Card(
+                                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  color: Colors.white,
+                                  elevation: 2,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          width: 56,
+                                          height: 56,
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF00588e),
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(12),
+                                            child: Image.asset(
+                                              'assets/images/people_icon.png',
+                                              fit: BoxFit.cover,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                task['elderly_fname'] ?? '',
+                                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF00588e)),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                task['task_description'] ?? '',
+                                                style: const TextStyle(fontSize: 15, color: Colors.black87),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.end,
                                           children: [
-                                            Text(
-                                              task['elderly_fname'] ?? '',
-                                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF00588e)),
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  task['task_start'] != null ? _formatTime(task['task_start']) : '',
+                                                  style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Container(
+                                                  width: 12,
+                                                  height: 12,
+                                                  decoration: const BoxDecoration(
+                                                    color: Color(0xFF1B7F5A),
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                             const SizedBox(height: 4),
-                                            Text(
-                                              task['task_description'] ?? '',
-                                              style: const TextStyle(fontSize: 15, color: Colors.black87),
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  task['task_end'] != null ? _formatTime(task['task_end']) : '',
+                                                  style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Container(
+                                                  width: 12,
+                                                  height: 12,
+                                                  decoration: const BoxDecoration(
+                                                    color: Color(0xFFD32F2F),
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ],
                                         ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Text(
-                                                task['task_start'] != null ? _formatTime(task['task_start']) : '',
-                                                style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Container(
-                                                width: 12,
-                                                height: 12,
-                                                decoration: const BoxDecoration(
-                                                  color: Color(0xFF1B7F5A),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Row(
-                                            children: [
-                                              Text(
-                                                task['task_end'] != null ? _formatTime(task['task_end']) : '',
-                                                style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Container(
-                                                width: 12,
-                                                height: 12,
-                                                decoration: const BoxDecoration(
-                                                  color: Color(0xFFD32F2F),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
