@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class PastAddedLogsScreen extends StatelessWidget {
-  const PastAddedLogsScreen({super.key});
+  const PastAddedLogsScreen({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {

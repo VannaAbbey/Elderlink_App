@@ -17,7 +17,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext ctx) {
-        TextEditingController controller = TextEditingController();
+        TextEditingController _controller = TextEditingController();
         bool acknowledged = false;
         return StatefulBuilder(
           builder: (context, setState) {
@@ -61,7 +61,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                     Container(
                       margin: const EdgeInsets.all(5),
                       child: TextField(
-                        controller: controller,
+                        controller: _controller,
                         maxLines: 15,
                         style: const TextStyle(fontSize: 16),
                         decoration: const InputDecoration(
@@ -102,13 +102,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
                       width: double.infinity,
                       height: 40,
                       child: ElevatedButton(
-                        onPressed: (controller.text.trim().isNotEmpty && acknowledged)
+                        onPressed: (_controller.text.trim().isNotEmpty && acknowledged)
                             ? () {
                                 // TODO: Submit logic
                               }
                             : null,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: (controller.text.trim().isNotEmpty && acknowledged)
+                          backgroundColor: (_controller.text.trim().isNotEmpty && acknowledged)
                               ? Color(0xFF22688E)
                               : Colors.grey,
                           shape: RoundedRectangleBorder(
