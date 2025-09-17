@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 
 class EditProfile extends StatefulWidget {
@@ -11,6 +15,8 @@ class EditProfile extends StatefulWidget {
 }
 
 class _EditProfileState extends State<EditProfile> {
+  String? _profilePicUrl;
+  final ImagePicker _picker = ImagePicker();
   bool isEditing = false;
   final _formKey = GlobalKey<FormState>();
 
@@ -21,6 +27,7 @@ class _EditProfileState extends State<EditProfile> {
 
   @override
   void initState() {
+  _loadProfilePic();
     super.initState();
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     _fullNameController = TextEditingController(text: _getFullName(authProvider));
@@ -36,6 +43,45 @@ class _EditProfileState extends State<EditProfile> {
     _emailController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadProfilePic() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final uid = authProvider.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
+      // UID not available yet, skip loading
+      return;
+    }
+    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    setState(() {
+      _profilePicUrl = doc.data()?['user_profilePic'] as String?;
+    });
+  }
+
+  Future<void> _pickAndUploadImage() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final uid = authProvider.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User ID not available. Please try again later.'), backgroundColor: Color(0xFF00588e)),
+      );
+      return;
+    }
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      final storageRef = FirebaseStorage.instance.ref().child('user_profilePic/$uid.jpg');
+      await storageRef.putData(await pickedFile.readAsBytes());
+      final downloadUrl = await storageRef.getDownloadURL();
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({'user_profilePic': downloadUrl});
+      setState(() {
+        _profilePicUrl = downloadUrl;
+      });
+      // Refresh user data so sidebar avatar updates
+      await authProvider.refreshUserData();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile picture updated!'), backgroundColor: Color(0xFF00588e)),
+      );
+    }
   }
 
   String _getFullName(AuthProvider authProvider) {
@@ -88,6 +134,20 @@ class _EditProfileState extends State<EditProfile> {
           SafeArea(
             child: Consumer<AuthProvider>(
               builder: (context, authProvider, child) {
+                final uid = authProvider.currentUser?.uid ?? '';
+                // Show loading indicator until UID and user data are available
+                if (uid.isEmpty || authProvider.userEmail.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const CircularProgressIndicator(color: Color(0xFF00588e)),
+                        const SizedBox(height: 16),
+                        const Text('Loading profile...', style: TextStyle(color: Color(0xFF00588e))),
+                      ],
+                    ),
+                  );
+                }
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     return SizedBox(
@@ -100,9 +160,41 @@ class _EditProfileState extends State<EditProfile> {
                             child: Column(
                               children: [
                                 const SizedBox(height: 16),
-                                CircleAvatar(
-                                  radius: 100,
-                                  backgroundImage: AssetImage('assets/images/caregiver.png'),
+                                Stack(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 100,
+                                      backgroundColor: Colors.grey[200],
+                                      child: ClipOval(
+                                        child: (_profilePicUrl != null && _profilePicUrl!.isNotEmpty)
+                                          ? CachedNetworkImage(
+                                              imageUrl: _profilePicUrl!,
+                                              width: 200,
+                                              height: 200,
+                                              fit: BoxFit.cover,
+                                              placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
+                                              errorWidget: (context, url, error) => Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
+                                            )
+                                          : Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      bottom: 0,
+                                      right: 0,
+                                      child: GestureDetector(
+                                        onTap: _pickAndUploadImage,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            shape: BoxShape.circle,
+                                            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                                          ),
+                                          padding: const EdgeInsets.all(8),
+                                          child: const Icon(Icons.camera_alt, color: Color(0xFF00588e)),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 30),
                                 Expanded(
@@ -291,13 +383,13 @@ class _EditProfileState extends State<EditProfile> {
                                                                     const SizedBox(height: 6),
                                                                     TextFormField(
                                                                       controller: bottomSheetEmailController,
+                                                                      enabled: false,
                                                                       decoration: const InputDecoration(
                                                                         border: OutlineInputBorder(
                                                                           borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                         ),
                                                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                       ),
-                                                                      validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                     ),
                                                                   ],
                                                                 ),
