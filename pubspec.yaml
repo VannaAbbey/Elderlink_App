@@ -51,7 +51,8 @@ dependencies:
   crypto: ^3.0.3
   
   # State management
-  provider: ^6.1.2
+  provider: ^6.0.5
+  dropdown_button2: ^2.3.9
 
 dev_dependencies:
   flutter_test:
