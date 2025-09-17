@@ -252,13 +252,11 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       firstDate: DateTime(1900),
       lastDate: now,
     );
-    if (picked != null) {
-      setState(() {
-        _selectedDate = picked;
-        _birthdayController.text = DateFormat('yyyy-MM-dd').format(picked);
-      });
+    setState(() {
+      _selectedDate = picked;
+      _birthdayController.text = DateFormat('yyyy-MM-dd').format(picked);
+    });
     }
-  }
 
   InputDecoration customInput(
     String hint, {

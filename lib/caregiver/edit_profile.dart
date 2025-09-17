@@ -356,10 +356,8 @@ class _EditProfileState extends State<EditProfile> {
                                                                           firstDate: DateTime(1900),
                                                                           lastDate: DateTime.now(),
                                                                         );
-                                                                        if (pickedDate != null) {
-                                                                          bottomSheetBirthdayController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                                                                        }
-                                                                      },
+                                                                        bottomSheetBirthdayController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                                                                                                                            },
                                                                       child: AbsorbPointer(
                                                                         child: TextFormField(
                                                                           controller: bottomSheetBirthdayController,
