@@ -10,7 +10,6 @@ import 'vital_monitoring.dart';
 import 'emergency.dart';
 import 'nurse_bottom_navbar.dart';
 
-
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
 
@@ -24,13 +23,34 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  final Map<String, String> houseDescriptions = {
-    'St. Sebastian': 'Females with Psychological Needs',
-    'St. Emmanuel': 'Females that are Bedridden',
-    'St. Charbell': 'Males that are Bedridden',
-    'St. Rose': 'Females that are Abled',
-    'St. Gabriel': 'Males that are Abled',
-  };
+  List<Map<String, dynamic>> _houses = [];
+  bool _isLoadingHouses = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHouses();
+  }
+
+  Future<void> _loadHouses() async {
+    try {
+      QuerySnapshot snapshot = await _firestore.collection('house').get();
+      setState(() {
+        _houses = snapshot.docs
+            .map((doc) => doc.data() as Map<String, dynamic>)
+            .toList();
+        _houses.sort((a, b) {
+          String idA = a['house_id'] ?? '';
+          String idB = b['house_id'] ?? '';
+          return idA.compareTo(idB);
+        });
+        _isLoadingHouses = false;
+      });
+    } catch (e) {
+      debugPrint("Error fetching houses: $e");
+      setState(() => _isLoadingHouses = false);
+    }
+  }
 
   Future<List<Map<String, dynamic>>> fetchHouses() async {
     QuerySnapshot snapshot = await _firestore.collection('house').get();
@@ -60,7 +80,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   /// ✅ Modified to navigate to Medication Management when index == 3
   // List of screens for the nurse (index 0 = dashboard, others map to pages)
   final List<Widget> _screens = [
-    const Center(child: Text("Nurse Dashboard")), 
+    const Center(child: Text("Nurse Dashboard")),
     IncidentReportScreen(),
     EmergencyScreen(),
     MedicationManagementScreen(),
@@ -73,52 +93,52 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     });
   }
 
- @override
-Widget build(BuildContext context) {
-  return GestureDetector(
-    onTap: () {
-      if (isSidebarOpen) {
-        setState(() => isSidebarOpen = false);
-      }
-    },
-    child: Scaffold(
-      body: selectedIndex == 0
-          ? Stack( // Nurse Dashboard
-              children: [
-                Positioned.fill(
-                  child: Image.asset(
-                    'assets/images/background1.png',
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: ListView(
-                      children: [
-                        _headerSection(),
-                        const SizedBox(height: 20),
-                        _searchBar(),
-                        const SizedBox(height: 20),
-                        _medicalTasksSection(),
-                        const SizedBox(height: 30),
-                        _housesSection(),
-                      ],
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        if (isSidebarOpen) {
+          setState(() => isSidebarOpen = false);
+        }
+      },
+      child: Scaffold(
+        body: selectedIndex == 0
+            ? Stack(
+                // Nurse Dashboard
+                children: [
+                  Positioned.fill(
+                    child: Image.asset(
+                      'assets/images/background1.png',
+                      fit: BoxFit.cover,
                     ),
                   ),
-                ),
-                if (isSidebarOpen) _buildSidebarOverlay(),
-              ],
-            )
-          : _screens[selectedIndex], // other tabs
-      bottomNavigationBar: NurseBottomNavBar(
-        selectedIndex: selectedIndex,
-        onNavTap: onNavTap,
+                  SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: ListView(
+                        children: [
+                          _headerSection(),
+                          const SizedBox(height: 20),
+                          _searchBar(),
+                          const SizedBox(height: 20),
+                          _medicalTasksSection(),
+                          const SizedBox(height: 30),
+                          _housesSection(),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (isSidebarOpen) _buildSidebarOverlay(),
+                ],
+              )
+            : _screens[selectedIndex], // other tabs
+        bottomNavigationBar: NurseBottomNavBar(
+          selectedIndex: selectedIndex,
+          onNavTap: onNavTap,
+        ),
       ),
-    ),
-  );
-}
-
+    );
+  }
 
   Widget _headerSection() {
     return Row(
@@ -128,9 +148,19 @@ Widget build(BuildContext context) {
           children: [
             GestureDetector(
               onTap: toggleSidebar,
-              child: const CircleAvatar(
-                radius: 24,
-                backgroundImage: AssetImage('assets/profile.jpg'),
+              child: Consumer<AuthProvider>(
+                builder: (context, authProvider, child) {
+                  final profilePic = authProvider.userData?['user_profilePic'];
+
+                  return CircleAvatar(
+                    radius: 24,
+                    backgroundImage:
+                        (profilePic != null && profilePic.isNotEmpty)
+                        ? NetworkImage(profilePic)
+                        : const AssetImage('assets/images/people_icon.png')
+                              as ImageProvider,
+                  );
+                },
               ),
             ),
             const SizedBox(width: 10),
@@ -231,7 +261,7 @@ Widget build(BuildContext context) {
                   ),
                   SizedBox(width: 6),
                   Text(
-                    "Today's Medical Tasks",
+                    "Medical Tasks",
                     style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -269,111 +299,128 @@ Widget build(BuildContext context) {
     );
   }
 
-  Widget _housesSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: const [
-            Icon(Icons.home, color: Color(0xFF00588E), size: 45),
-            SizedBox(width: 8),
-            Text(
-              "Elderly Houses",
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        FutureBuilder<List<Map<String, dynamic>>>(
-          future: fetchHouses(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Text("No houses available.");
-            }
-
-            final houses = snapshot.data!;
-            houses.sort((a, b) {
-              String idA = a['house_id'] ?? '';
-              String idB = b['house_id'] ?? '';
-              return idA.compareTo(idB);
-            });
-
-            return Column(
-              children: houses.map((house) {
-                String houseName = house['house_name'] ?? '';
-                String imageName = houseName
-                    .replaceAll('St. ', '')
-                    .replaceAll(' ', '');
-                String imagePath = 'assets/images/$imageName.png';
-                String description =
-                    houseDescriptions[houseName] ?? 'Elderly Care Facility';
-
-                return GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ElderlyListScreen(
-                          houseId: house['house_id'],
-                          houseName: house['house_name'],
-                        ),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: const Color(0XFFE7EFFF),
-                    ),
-                    child: Row(
-                      children: [
-                        Image.asset(imagePath, width: 80, height: 80),
-                        const SizedBox(width: 15),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Text(
-                                houseName,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF00588E),
-                                  fontFamily: 'Poppins',
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                description,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.black,
-                                  fontFamily: 'Poppins',
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
-            );
-          },
-        ),
-      ],
-    );
+ Widget _housesSection() {
+  if (_isLoadingHouses) {
+    return const Center(child: CircularProgressIndicator());
   }
 
-  
+  if (_houses.isEmpty) {
+    return const Text("No houses available.");
+  }
+
+  // Scrollable list ng houses
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: const [
+          Icon(Icons.home, color: Color(0xFF00588E), size: 45),
+          SizedBox(width: 8),
+          Text(
+            "Elderly Houses",
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _houses.length,
+        itemBuilder: (context, index) {
+          final house = _houses[index];
+          final houseName = house['house_name'] ?? '';
+          
+          List<String> houseImages = [
+            'assets/images/Sebastian.png',
+            'assets/images/Emmanuel.png',
+            'assets/images/Charbell.png',
+            'assets/images/Rose_of_Lima.png',
+            'assets/images/Gabriel.png',
+          ];
+
+          List<String> houseDescriptions = [
+            'Females with Psychological Needs',
+            'Females that are Bedridden',
+            'Males that are Bedridden',
+            'Females that are Abled',
+            'Males that are Abled',
+          ];
+
+          String imagePath = index < houseImages.length
+              ? houseImages[index]
+              : 'assets/images/people_icon.png';
+
+          String description = index < houseDescriptions.length
+              ? houseDescriptions[index]
+              : 'Elderly Care Facility';
+
+          return GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ElderlyListScreen(
+                    houseId: house['house_id'],
+                    houseName: houseName,
+                  ),
+                ),
+              );
+            },
+            child: Card(
+              color: const Color(0XFFE7EFFF),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 4,
+              margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Image.asset(imagePath, width: 80, height: 80),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            "House of $houseName",
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF00588E),
+                              fontFamily: 'Poppins',
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            description,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF00588E),
+                              fontFamily: 'Poppins',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    ],
+  );
+}
+
+
+
+
   Widget _navIcon(String assetPath, int index) {
     return GestureDetector(
       onTap: () => onNavTap(index),
@@ -411,8 +458,8 @@ Widget build(BuildContext context) {
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.1),
             spreadRadius: 1,
-            blurRadius: 6,
-            offset: const Offset(0, 3),
+            blurRadius: 8,
+            offset: const Offset(0, 0),
           ),
         ],
       ),
@@ -420,7 +467,7 @@ Widget build(BuildContext context) {
         children: [
           const CircleAvatar(
             radius: 25,
-            backgroundImage: AssetImage('assets/profile.jpg'),
+            backgroundImage: AssetImage('assets/people_icon.png'),
           ),
           const SizedBox(width: 15),
           Expanded(

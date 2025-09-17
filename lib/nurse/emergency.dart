@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'home.dart';
-import 'medication_management.dart';
-import 'incident_report.dart';
-import 'vital_monitoring.dart';
+import 'edit_profile.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
@@ -15,6 +14,9 @@ class EmergencyScreen extends StatefulWidget {
 class _EmergencyScreenState extends State<EmergencyScreen> {
   DateTime _selectedDate = DateTime.now();
   bool _showCalendar = false;
+  bool isSidebarOpen = false; // 🔹 added for sidebar state
+
+  String? nurseName;
 
   // Dummy emergency data
   final List<Map<String, String>> emergencies = [
@@ -41,6 +43,45 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     });
   }
 
+  void toggleSidebar() {
+    setState(() {
+      isSidebarOpen = !isSidebarOpen;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNurseData();
+  }
+
+  Future<void> _loadNurseData() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (doc.exists) {
+          setState(() {
+            nurseName = "${doc['user_fname']}";
+          });
+        } else {
+          setState(() {
+            nurseName = null; // para lumabas "No name found"
+          });
+        }
+      }
+    } catch (e) {
+      print("❌ Error loading nurse data: $e");
+      setState(() {
+        nurseName = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -61,10 +102,13 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(
-                        Icons.menu,
-                        size: 30,
-                        color: Color(0xFF00588E),
+                      GestureDetector(
+                        onTap: toggleSidebar, // 🔹 open/close sidebar
+                        child: const Icon(
+                          Icons.menu,
+                          size: 30,
+                          color: Color(0xFF00588E),
+                        ),
                       ),
                       const Text(
                         'Emergency Record',
@@ -200,16 +244,110 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 ),
               ),
             ),
+
+          // Sidebar Overlay (correctly inside Stack)
+          if (isSidebarOpen) _buildSidebarOverlay(),
         ],
       ),
     );
   }
 
-  Widget _navIcon(String assetPath) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-      child: Image.asset(assetPath, height: 38, width: 38, fit: BoxFit.contain),
+  Widget _buildSidebarOverlay() {
+    return Stack(
+      children: [
+        GestureDetector(
+          onTap: toggleSidebar,
+          child: Container(color: Colors.black54),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: 0,
+          child: Material(
+            elevation: 5,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(10),
+              bottomRight: Radius.circular(10),
+            ),
+            child: Container(
+              width: 250,
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(color: Colors.white),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 50),
+                  Text(
+                    nurseName != null ? "Nurse $nurseName" : "No name found",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
+                    title: const Text("Edit Profile"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EditProfile(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.settings,
+                      color: Color(0xFF00588E),
+                    ),
+                    title: const Text("Settings"),
+                    onTap: toggleSidebar,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.help, color: Color(0xFF00588E)),
+                    title: const Text("Help & Support"),
+                    onTap: toggleSidebar,
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1D5B78),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 60,
+                        ),
+                      ),
+                      onPressed: () {
+                        // TODO: hook into AuthProvider kung gusto logout
+                        toggleSidebar();
+                      },
+                      child: const Text(
+                        'LOGOUT',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

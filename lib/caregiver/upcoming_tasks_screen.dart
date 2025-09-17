@@ -17,7 +17,7 @@ class UpcomingTasksScreen extends StatelessWidget {
     }
   }
   final DateTime? selectedFilterDate;
-  const UpcomingTasksScreen({Key? key, this.selectedFilterDate}) : super(key: key);
+  const UpcomingTasksScreen({super.key, this.selectedFilterDate});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     return FirebaseFirestore.instance

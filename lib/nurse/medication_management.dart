@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'home.dart';
-import 'vital_monitoring.dart';
-import 'incident_report.dart';
-import 'emergency.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'edit_profile.dart';
+import '../auth/login.dart';
 
 class MedicationManagementScreen extends StatefulWidget {
   const MedicationManagementScreen({super.key});
@@ -18,8 +17,41 @@ class _MedicationManagementScreenState
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   String _search = '';
+  String? nurseName;
+
 
   bool isSidebarOpen = false;
+
+  @override
+void initState() {
+  super.initState();
+  _loadNurseData();
+}
+
+Future<void> _loadNurseData() async {
+  try {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (doc.exists) {
+        setState(() {
+          nurseName = doc['user_fname'] ?? '';
+        });
+      } else {
+        setState(() {
+          nurseName = null;
+        });
+      }
+    }
+  } catch (e) {
+    print("❌ Error loading nurse data: $e");
+    setState(() => nurseName = null);
+  }
+}
 
   void toggleSidebar() {
     setState(() => isSidebarOpen = !isSidebarOpen);
@@ -45,17 +77,36 @@ class _MedicationManagementScreenState
     return list;
   }
 
+  Future<void> _handleLogout() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => const LoginScreen(),
+        ), // Replace with your login screen
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Stack(
         children: [
+          // Background image
           Positioned.fill(
             child: Image.asset(
               'assets/images/background1.png',
               fit: BoxFit.cover,
             ),
           ),
+
+          // Main content
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -63,36 +114,44 @@ class _MedicationManagementScreenState
                 children: [
                   // Header
                   Row(
-                    children: const [
-                      Icon(
-                        Icons.medication,
-                        color: Color(0xFF00588E),
-                        size: 38,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Medication Management',
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
+                    children: [
+                      GestureDetector(
+                        onTap: toggleSidebar, // Open/close sidebar
+                        child: const Icon(
+                          Icons.menu,
+                          size: 30,
                           color: Color(0xFF00588E),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Medication Management',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF00588E),
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.notifications,
+                        size: 30,
+                        color: Color(0xFF00588E),
                       ),
                     ],
                   ),
                   const SizedBox(height: 16),
 
-                  // Search
+                  // Search bar
                   TextField(
                     decoration: InputDecoration(
                       prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                      hintText: 'Search house...',
+                      hintText: "Search house...",
+                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 15),
                       filled: true,
                       fillColor: const Color(0xFFD8F4FF),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 14,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 9, horizontal: 14),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                         borderSide: const BorderSide(
@@ -108,12 +167,12 @@ class _MedicationManagementScreenState
                         ),
                       ),
                     ),
-                    onChanged: (v) =>
-                        setState(() => _search = v.trim().toLowerCase()),
+                    style: const TextStyle(fontSize: 18, color: Colors.black),
+                    onChanged: (v) => setState(() => _search = v),
                   ),
                   const SizedBox(height: 24),
 
-                  // Elderly Houses section header
+                  // Elderly Houses header
                   Row(
                     children: const [
                       Icon(Icons.home, color: Color(0xFF00588E), size: 45),
@@ -129,6 +188,7 @@ class _MedicationManagementScreenState
                   ),
                   const SizedBox(height: 12),
 
+                  // Houses list
                   FutureBuilder<List<Map<String, dynamic>>>(
                     future: fetchHouses(),
                     builder: (context, snap) {
@@ -237,8 +297,116 @@ class _MedicationManagementScreenState
               ),
             ),
           ),
+
+          // Sidebar overlay
+          if (isSidebarOpen) _buildSidebarOverlay(),
         ],
       ),
+    );
+  }
+
+  // Sidebar item helper
+  Widget _sidebarItem(IconData icon, String title, {VoidCallback? onTap}) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF00588e)),
+      title: Text(title),
+      onTap: onTap ?? () {},
+    );
+  }
+
+  // Sidebar overlay
+  Widget _buildSidebarOverlay() {
+    return Stack(
+      children: [
+        GestureDetector(
+          onTap: toggleSidebar,
+          child: Container(color: Colors.black54),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: 0,
+          child: Material(
+            elevation: 5,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(10),
+              bottomRight: Radius.circular(10),
+            ),
+            child: Container(
+              width: 250,
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(color: Colors.white),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 50),
+                  Text(
+                    nurseName != null && nurseName!.isNotEmpty
+                        ? 'Nurse $nurseName'
+                        : 'No name found',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
+                    title: const Text("Edit Profile"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const EditProfile(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.settings, color: Color(0xFF00588E)),
+                    title: const Text("Settings"),
+                    onTap: toggleSidebar,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.help, color: Color(0xFF00588E)),
+                    title: const Text("Help & Support"),
+                    onTap: toggleSidebar,
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1D5B78),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 60,
+                        ),
+                      ),
+                      onPressed: _handleLogout,
+                      child: const Text(
+                        'LOGOUT',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -330,6 +498,7 @@ class _MedicationElderlyListScreenState
 
     setState(() => filteredElderly = filtered);
   }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -515,6 +684,7 @@ class _MedicationDetailsScreenState extends State<MedicationDetailsScreen> {
 
   bool _loading = true;
   List<_MedItem> _meds = [];
+  String? nurseName;
 
   @override
   void initState() {

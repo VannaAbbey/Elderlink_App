@@ -1,9 +1,7 @@
-import 'package:elderlink_app/nurse/emergency.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'home.dart';
-import 'medication_management.dart';
-import 'incident_report.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'edit_profile.dart';
 
 class VitalMonitoringScreen extends StatefulWidget {
   const VitalMonitoringScreen({super.key});
@@ -15,24 +13,72 @@ class VitalMonitoringScreen extends StatefulWidget {
 class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   String _search = '';
+  String? nurseName;
+  bool isSidebarOpen = false;
 
   final Map<String, String> houseDescriptions = const {
-    'St. Sebastian': 'Females with Psychological Needs',
-    'St. Emmanuel': 'Females that are Bedridden',
-    'St. Charbell': 'Males that are Bedridden',
-    'St. Rose': 'Females that are Abled',
-    'St. Gabriel': 'Males that are Abled',
+    'H001': 'Females with Psychological Needs',
+    'H002': 'Females that are Bedridden',
+    'H003': 'Males that are Bedridden',
+    'H004': 'Females that are Abled',
+    'H005': 'Males that are Abled',
   };
 
-  Future<List<Map<String, dynamic>>> fetchHouses() async {
+  final Map<String, String> houseImages = const {
+    'H001': 'assets/images/Sebastian.png',
+    'H002': 'assets/images/Emmanuel.png',
+    'H003': 'assets/images/Charbell.png',
+    'H004': 'assets/images/Rose_of_Lima.png',
+    'H005': 'assets/images/Gabriel.png',
+  };
+
+  /// ✅ Cached houses (so we don’t reload every time)
+  List<Map<String, dynamic>> _houses = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNurseData();
+    _fetchHousesOnce();
+  }
+
+  Future<void> _fetchHousesOnce() async {
     final snap = await _firestore.collection('house').get();
     final list = snap.docs.map((d) => d.data()).toList();
     list.sort(
       (a, b) => (a['house_id'] ?? '').toString().compareTo(
-        (b['house_id'] ?? '').toString(),
-      ),
+            (b['house_id'] ?? '').toString(),
+          ),
     );
-    return list;
+    setState(() {
+      _houses = list;
+      _loading = false;
+    });
+  }
+
+  void toggleSidebar() {
+    setState(() => isSidebarOpen = !isSidebarOpen);
+  }
+
+  Future<void> _loadNurseData() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        if (doc.exists) {
+          setState(() => nurseName = "${doc['user_fname']}");
+        } else {
+          setState(() => nurseName = null);
+        }
+      }
+    } catch (e) {
+      print("❌ Error loading nurse data: $e");
+      setState(() => nurseName = null);
+    }
   }
 
   @override
@@ -53,49 +99,56 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                 children: [
                   // Header
                   Row(
-                    children: const [
-                      Icon(
-                        Icons.monitor_heart,
-                        color: Color(0xFF00588E),
-                        size: 38,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Vital Signs Monitoring',
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
+                    children: [
+                      GestureDetector(
+                        onTap: toggleSidebar,
+                        child: const Icon(
+                          Icons.menu,
+                          size: 30,
                           color: Color(0xFF00588E),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Vital Sign Monitoring',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF00588E),
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.notifications,
+                        size: 30,
+                        color: Color(0xFF00588E),
                       ),
                     ],
                   ),
                   const SizedBox(height: 16),
 
-                  // Search for house
+                  // Search
                   TextField(
                     decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search),
-                      hintText: 'Search house...',
+                      prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                      hintText: "Search house...",
                       filled: true,
                       fillColor: const Color(0xFFD8F4FF),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF00588E),
-                          width: 1.5,
-                        ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 9,
+                        horizontal: 14,
                       ),
-                      focusedBorder: OutlineInputBorder(
+                      border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                         borderSide: const BorderSide(
                           color: Color(0xFF00588E),
-                          width: 2,
                         ),
                       ),
                     ),
-                    onChanged: (v) =>
-                        setState(() => _search = v.trim().toLowerCase()),
+                    style: const TextStyle(fontSize: 18, color: Colors.black),
+                    onChanged: (v) => setState(() => _search = v),
                   ),
                   const SizedBox(height: 24),
 
@@ -115,90 +168,184 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  FutureBuilder<List<Map<String, dynamic>>>(
-                    future: fetchHouses(),
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting)
-                        return const Center(child: CircularProgressIndicator());
-                      if (!snap.hasData || snap.data!.isEmpty)
-                        return const Text('No houses found.');
-                      final houses = snap.data!.where((h) {
-                        final name = (h['house_name'] ?? '')
-                            .toString()
-                            .toLowerCase();
-                        return _search.isEmpty || name.contains(_search);
-                      }).toList();
+                  _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : Column(
+                          children: _houses.where((h) {
+                            final name =
+                                (h['house_name'] ?? '').toString().toLowerCase();
+                            return _search.isEmpty || name.contains(_search);
+                          }).map((house) {
+                            final houseId = (house['house_id'] ?? '').toString();
+                            final houseName =
+                                (house['house_name'] ?? '').toString();
+                            final desc = houseDescriptions[houseId] ??
+                                'Elderly Care Facility';
+                            final imagePath =
+                                houseImages[houseId] ?? 'assets/images/default.png';
 
-                      return Column(
-                        children: houses.map((house) {
-                          final houseName = (house['house_name'] ?? '')
-                              .toString();
-                          final desc =
-                              houseDescriptions[houseName] ??
-                              'Elderly Care Facility';
-                          final imageName = houseName
-                              .replaceAll('St. ', '')
-                              .replaceAll(' ', '');
-                          return GestureDetector(
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => VitalElderlyListScreen(
-                                    houseId: (house['house_id'] ?? '')
-                                        .toString(),
-                                    houseName: houseName,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
-                                color: const Color(0XFFE7EFFF),
-                              ),
-                              child: Row(
-                                children: [
-                                  Image.asset(
-                                    'assets/images/$imageName.png',
-                                    width: 80,
-                                    height: 80,
-                                  ),
-                                  const SizedBox(width: 15),
-                                  Expanded(
-                                    child: Column(
-                                      children: [
-                                        Text(
-                                          houseName,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            color: Color(0xFF00588E),
-                                          ),
-                                        ),
-                                        Text(desc, textAlign: TextAlign.center),
-                                      ],
+                            return GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => VitalElderlyListScreen(
+                                      houseId: houseId,
+                                      houseName: houseName,
                                     ),
                                   ),
-                                ],
+                                );
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: const Color(0XFFE7EFFF),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Image.asset(
+                                      imagePath,
+                                      width: 80,
+                                      height: 80,
+                                      errorBuilder: (_, __, ___) => const Icon(
+                                        Icons.image_not_supported,
+                                        size: 80,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 15),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            "House of $houseName",
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF00588E),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            desc,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              color: Color(0xFF00588E),
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        }).toList(),
+                            );
+                          }).toList(),
+                        ),
+                ],
+              ),
+            ),
+          ),
+          if (isSidebarOpen) _buildSidebarOverlay(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarOverlay() {
+    return Stack(
+      children: [
+        GestureDetector(
+          onTap: toggleSidebar,
+          child: Container(color: Colors.black54),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: 0,
+          child: Material(
+            elevation: 5,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(10),
+              bottomRight: Radius.circular(10),
+            ),
+            child: Container(
+              width: 250,
+              padding: const EdgeInsets.all(16),
+              color: Colors.white,
+              child: Column(
+                children: [
+                  const SizedBox(height: 50),
+                  Text(
+                    nurseName != null ? "Nurse $nurseName" : "No name found",
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
+                    title: const Text("Edit Profile"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EditProfile(),
+                        ),
                       );
                     },
+                  ),
+                  ListTile(
+                    leading:
+                        const Icon(Icons.settings, color: Color(0xFF00588E)),
+                    title: const Text("Settings"),
+                    onTap: toggleSidebar,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.help, color: Color(0xFF00588E)),
+                    title: const Text("Help & Support"),
+                    onTap: toggleSidebar,
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1D5B78),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 60,
+                      ),
+                    ),
+                    onPressed: () {
+                      toggleSidebar();
+                    },
+                    child: const Text(
+                      'LOGOUT',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
+
 
 /// Screen 2: List elderly for selected house with SEARCH
 class VitalElderlyListScreen extends StatefulWidget {
@@ -266,8 +413,9 @@ class _VitalElderlyListScreenState extends State<VitalElderlyListScreen> {
                         .where('elderly_status', isEqualTo: 'Alive')
                         .snapshots(),
                     builder: (context, snap) {
-                      if (!snap.hasData)
+                      if (!snap.hasData) {
                         return const Center(child: CircularProgressIndicator());
+                      }
                       final docs = snap.data!.docs.where((doc) {
                         final name =
                             '${doc['elderly_fname']} ${doc['elderly_lname']}'

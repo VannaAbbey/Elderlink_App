@@ -463,7 +463,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                 fit: BoxFit.cover,
                               )
                             : Image.asset(
-                                'assets/images/profile.png',
+                                'assets/images/people_icon.png',
                                 fit: BoxFit.cover,
                               ),
                       ),

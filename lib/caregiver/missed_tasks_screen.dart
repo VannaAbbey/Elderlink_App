@@ -17,7 +17,7 @@ class MissedTasksScreen extends StatelessWidget {
     }
   }
   final DateTime? selectedFilterDate;
-  const MissedTasksScreen({Key? key, this.selectedFilterDate}) : super(key: key);
+  const MissedTasksScreen({super.key, this.selectedFilterDate});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     return FirebaseFirestore.instance

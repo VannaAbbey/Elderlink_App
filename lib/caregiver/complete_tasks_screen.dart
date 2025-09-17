@@ -17,7 +17,7 @@ class CompleteTasksScreen extends StatelessWidget {
     }
   }
   final DateTime? selectedFilterDate;
-  const CompleteTasksScreen({Key? key, this.selectedFilterDate}) : super(key: key);
+  const CompleteTasksScreen({super.key, this.selectedFilterDate});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     return FirebaseFirestore.instance

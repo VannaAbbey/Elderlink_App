@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 // Widget for Alive profiles grid
 class AliveProfilesGrid extends StatelessWidget {
   final List<Map<String, String>> profiles;
-  const AliveProfilesGrid({required this.profiles});
+  const AliveProfilesGrid({super.key, required this.profiles});
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +55,7 @@ class AliveProfilesGrid extends StatelessWidget {
 // Widget for Deceased profiles grid
 class DeceasedProfilesGrid extends StatelessWidget {
   final List<Map<String, String>> profiles;
-  const DeceasedProfilesGrid({required this.profiles});
+  const DeceasedProfilesGrid({super.key, required this.profiles});
 
   @override
   Widget build(BuildContext context) {

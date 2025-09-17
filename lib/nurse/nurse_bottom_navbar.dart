@@ -31,10 +31,10 @@ class NurseBottomNavBar extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             _navIcon('assets/images/homeIcon.png', 0),
-            _navIcon('assets/images/addTaskIcon.png', 1),
+            _navIcon('assets/images/Nurse/Bottom Navigation/SelectedIncidentReport_Icon.png', 1),
             _navIcon('assets/images/emerIcon.png', 2),
-            _navIcon('assets/images/incidentIcon.png', 3),
-            _navIcon('assets/images/shiftIcon.png', 4),
+            _navIcon('assets/images/Nurse/Bottom Navigation/SelectedMedicationMgmt_Icon.png', 3),
+            _navIcon('assets/images/Nurse/Bottom Navigation/SelectedVitalSign_Icon.png', 4),
           ],
         ),
       ),

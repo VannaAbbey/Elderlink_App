@@ -206,7 +206,7 @@ class _EditProfileState extends State<EditProfile> {
                                       children: [
                                         Center(
                                           child: Text(
-                                            'Caregiver ${authProvider.userFirstName}',
+                                            'Nurse ${authProvider.userFirstName}',
                                             style: TextStyle(
                                               fontSize: 28,
                                               fontWeight: FontWeight.bold,

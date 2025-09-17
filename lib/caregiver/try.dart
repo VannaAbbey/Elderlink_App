@@ -1,164 +1,120 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
+import '../providers/auth_provider.dart';
 import 'notifications.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 class IncidentScreen extends StatefulWidget {
   const IncidentScreen({super.key});
+
   @override
   State<IncidentScreen> createState() => _IncidentScreenState();
 }
 
 class _IncidentScreenState extends State<IncidentScreen> {
   bool isSidebarOpen = false;
-  bool isOnDuty = false;
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
 
   String? selectedElderly;
+  List<String> elderlyList = [];
   final TextEditingController reportController = TextEditingController();
-  List<Map<String, dynamic>> elderlyList = []; // Will contain elderly data
-  String caregiverName = '';
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   @override
-  void initState() {
-    super.initState();
-    _loadAssignedElderly();
-    _loadCaregiverName();
-  }
+void initState() {
+  super.initState();
 
-  Future<void> _loadAssignedElderly() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return; // Not logged in
+  // Ensure context is fully ready before using Provider
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    loadElderlyListForToday();
+  });
+}
 
-    // Step 0: Get caregiver document ID from users collection
-    final caregiverSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .where('user_email', isEqualTo: currentUser.email)
-        .where('user_type', isEqualTo: 'caregiver')
-        .get();
+  Future<void> loadElderlyListForToday() async {
+  try {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final caregiverId = authProvider.user?.uid;
+    if (caregiverId == null) return;
 
-    if (caregiverSnapshot.docs.isEmpty) return;
-    final caregiverId = caregiverSnapshot.docs.first.id;
+    final now = DateTime.now();
+    final today = DateFormat('EEEE').format(now); // Monday, Tuesday, etc.
 
-    final today = DateTime.now();
-    final dayOfWeek = DateFormat('EEEE').format(today); // Monday, Tuesday, etc.
-    final currentTime = DateFormat('HH:mm').format(today);
-
-    // Step 1: Get current house assignments for this caregiver
-    final assignSnapshot = await FirebaseFirestore.instance
+    // 1️⃣ Get today's schedule for this caregiver
+    final scheduleQuery = await _firestore
         .collection('cg_house_assign')
         .where('caregiver_id', isEqualTo: caregiverId)
         .where('is_current', isEqualTo: true)
         .get();
 
-    List<String> eligibleHouseIds = [];
-    for (var doc in assignSnapshot.docs) {
-      final data = doc.data();
-      final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-      final timeRange = Map<String, dynamic>.from(data['time_range'] ?? {});
-      final shiftStart = timeRange['start'] ?? '00:00';
-      final shiftEnd = timeRange['end'] ?? '23:59';
-      final houseId = data['house_id'];
-
-      // Check if today is in assigned days and current time is in range
-      if (daysAssigned.contains(dayOfWeek) &&
-          _isTimeInRange(currentTime, shiftStart, shiftEnd)) {
-        eligibleHouseIds.add(houseId);
-        isOnDuty = true; // ✅ Caregiver is currently on shift
+    String? assignedHouseId;
+    for (var doc in scheduleQuery.docs) {
+      final daysAssigned = List<String>.from(doc['days_assigned'] ?? []);
+      if (daysAssigned.contains(today)) {
+        assignedHouseId = doc['house_id'];
+        break;
       }
     }
 
-    if (eligibleHouseIds.isEmpty) return;
+    if (assignedHouseId == null) {
+      setState(() => elderlyList = []);
+      return;
+    }
 
-    // Step 2: Get elderly assigned to this caregiver
-    final elderlyAssignSnapshot = await FirebaseFirestore.instance
+    // 2️⃣ Get all elderly IDs assigned to this caregiver
+    final assignmentQuery = await _firestore
         .collection('elderly_caregiver_assign')
         .where('caregiver_id', isEqualTo: caregiverId)
-        .where('status', isEqualTo: 'active')
         .get();
 
-    List<String> eligibleElderlyIds = elderlyAssignSnapshot.docs
+    final elderlyIds = assignmentQuery.docs
         .map((doc) => doc['elderly_id'] as String)
         .toList();
-
-    if (eligibleElderlyIds.isEmpty) return;
-
-    // Step 3: Fetch elderly details and filter by house
-    final elderlySnapshot = await FirebaseFirestore.instance
-        .collection('elderly')
-        .where(FieldPath.documentId, whereIn: eligibleElderlyIds)
-        .get();
-
-    final filteredElderly = elderlySnapshot.docs
-        .where((doc) => eligibleHouseIds.contains(doc['house_id']))
-        .map(
-          (doc) => {
-            'id': doc.id,
-            'name': '${doc['elderly_fname']} ${doc['elderly_lname']}',
-          },
-        )
-        .toList();
-
-    // Safe, case-insensitive alphabetical sort
-    filteredElderly.sort((a, b) {
-      final nameA = (a['name'] ?? '');
-      final nameB = (b['name'] ?? '');
-      return nameA.toLowerCase().compareTo(nameB.toLowerCase());
-    });
-
-    setState(() {
-      elderlyList = filteredElderly;
-    });
-  }
-
-  Future<void> _loadCaregiverName() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
-
-    print("🔎 Current user email: ${currentUser.email}");
-
-    final caregiverSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .where('user_email', isEqualTo: currentUser.email)
-        .where('user_type', isEqualTo: 'caregiver')
-        .get();
-
-    print("📌 Docs found: ${caregiverSnapshot.docs.length}");
-
-    if (caregiverSnapshot.docs.isNotEmpty) {
-      final data = caregiverSnapshot.docs.first.data();
-      print("✅ Caregiver data: $data");
-
-      setState(() {
-        caregiverName = "${data['user_fname']} ${data['user_lname']}";
-      });
-    } else {
-      setState(() {
-        caregiverName = "No caregiver found";
-      });
+    if (elderlyIds.isEmpty) {
+      setState(() => elderlyList = []);
+      return;
     }
-  }
 
-  bool _isTimeInRange(String current, String start, String end) {
-    final fmt = DateFormat('HH:mm');
-    final now = fmt.parse(current);
-    final startTime = fmt.parse(start);
-    final endTime = fmt.parse(end);
-
-    // Handle overnight shifts (e.g., 22:00-06:00)
-    if (endTime.isBefore(startTime)) {
-      return now.isAfter(startTime) || now.isBefore(endTime);
-    } else {
-      return now.isAfter(startTime) && now.isBefore(endTime);
+    // 3️⃣ Fetch elderly docs in chunks
+    final chunkedIds = <List<String>>[];
+    const chunkSize = 10;
+    for (var i = 0; i < elderlyIds.length; i += chunkSize) {
+      chunkedIds.add(elderlyIds.sublist(
+        i,
+        i + chunkSize > elderlyIds.length ? elderlyIds.length : i + chunkSize,
+      ));
     }
+
+    List<String> tempElderlyList = [];
+    for (var chunk in chunkedIds) {
+      if (chunk.isEmpty) continue;
+      final elderlyQuery = await _firestore
+          .collection('elderly')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .where('house_id', isEqualTo: assignedHouseId)
+          .get();
+
+      for (var elderDoc in elderlyQuery.docs) {
+        final name =
+            '${elderDoc['elderly_fname']} ${elderDoc['elderly_lname']}';
+        tempElderlyList.add(name);
+      }
+    }
+
+    setState(() => elderlyList = tempElderlyList);
+  } catch (e) {
+    print('Error loading elderly list: $e');
+    setState(() => elderlyList = []);
   }
+}
 
   @override
   Widget build(BuildContext context) {
     Future<void> handleLogout() async {
-      await FirebaseAuth.instance.signOut();
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      await authProvider.signOut();
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(
           context,
@@ -256,22 +212,20 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                   Icons.arrow_drop_down,
                                   color: Color(0xFF00588e),
                                 ),
-                                menuMaxHeight: 200,
                                 items: elderlyList.map((elderly) {
                                   return DropdownMenuItem<String>(
-                                    value: '${elderly['name']}', // name lang
-                                    child: Text('${elderly['name']}'),
+                                    value: elderly,
+                                    child: Text(elderly),
                                   );
                                 }).toList(),
                                 onChanged: (value) {
                                   setState(() {
-                                    selectedElderly = value; // name lang
+                                    selectedElderly = value;
                                   });
                                 },
                               ),
                             ),
                           ),
-
                           const SizedBox(height: 18),
                           Container(
                             decoration: BoxDecoration(
@@ -281,7 +235,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             child: TextField(
                               controller: reportController,
                               maxLines: 20,
-                              enabled: isOnDuty,
                               decoration: const InputDecoration(
                                 hintText: 'Write the incident report here.',
                                 hintStyle: TextStyle(
@@ -297,73 +250,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             width: double.infinity,
                             child: ElevatedButton(
                               onPressed: () {
-                                if (!isOnDuty) {
-                                  // ❌ Not on schedule → show warning
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        mainAxisSize: MainAxisSize
-                                            .min, // 🔹 Sakto lang sa content width
-                                        children: const [
-                                          Icon(
-                                            Icons.warning_amber_rounded,
-                                            color: Colors.orange,
-                                            size: 28,
-                                          ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            "Not Your Schedule",
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 22,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      content: const Text(
-                                        "You are not scheduled for this time. You can only forward a report during your assigned shift.",
-                                        textAlign:
-                                            TextAlign.justify, // 🔹 Justified
-                                        style: TextStyle(fontSize: 15),
-                                      ),
-                                      actions: [
-                                        ElevatedButton(
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Color(
-                                              0xFF00588E,
-                                            ), // 🔹 Blue background
-                                            foregroundColor:
-                                                Colors.white, // 🔹 White text
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 30,
-                                              vertical: 14,
-                                            ),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(
-                                                    30,
-                                                  ), // 🔹 Capsule style
-                                            ),
-                                            elevation:
-                                                3, // optional: shadow effect
-                                          ),
-                                          onPressed: () => Navigator.pop(ctx),
-                                          child: const Text(
-                                            "OK",
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                  return;
-                                }
+                                // Show confirmation dialog modal
                                 showDialog(
                                   context: context,
                                   barrierDismissible: false,
@@ -449,9 +336,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                     children: [
                                                       const Icon(
                                                         Icons.person,
-                                                        color: Color(
-                                                          0xFF00588e,
-                                                        ),
+                                                        color: Colors.black,
                                                       ),
                                                       const SizedBox(width: 8),
                                                       const Text(
@@ -459,9 +344,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                         style: TextStyle(
                                                           fontWeight:
                                                               FontWeight.bold,
-                                                          color: Color(
-                                                            0xFF00588e,
-                                                          ),
                                                         ),
                                                       ),
                                                       const SizedBox(width: 4),
@@ -483,9 +365,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                     children: [
                                                       const Icon(
                                                         Icons.access_time,
-                                                        color: Color(
-                                                          0xFF00588e,
-                                                        ),
+                                                        color: Colors.black,
                                                       ),
                                                       const SizedBox(width: 8),
                                                       const Text(
@@ -493,19 +373,12 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                         style: TextStyle(
                                                           fontWeight:
                                                               FontWeight.bold,
-                                                          color: Color(
-                                                            0xFF00588e,
-                                                          ),
                                                         ),
                                                       ),
                                                       const SizedBox(width: 4),
                                                       Expanded(
                                                         child: Text(
-                                                          DateFormat(
-                                                            'MM/dd/yy | h:mm a',
-                                                          ).format(
-                                                            DateTime.now(),
-                                                          ), // current time
+                                                          '06/15/25 | 5PM', // Placeholder
                                                           style:
                                                               const TextStyle(
                                                                 fontSize: 15,
@@ -521,9 +394,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                     children: [
                                                       const Icon(
                                                         Icons.warning,
-                                                        color: Color(
-                                                          0xFF00588e,
-                                                        ),
+                                                        color: Colors.black,
                                                       ),
                                                       const SizedBox(width: 8),
                                                       const Text(
@@ -531,9 +402,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                         style: TextStyle(
                                                           fontWeight:
                                                               FontWeight.bold,
-                                                          color: Color(
-                                                            0xFF00588e,
-                                                          ),
                                                         ),
                                                       ),
                                                     ],
@@ -575,9 +443,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                     children: [
                                                       const Icon(
                                                         Icons.person,
-                                                        color: Color(
-                                                          0xFF00588e,
-                                                        ),
+                                                        color: Colors.black,
                                                       ),
                                                       const SizedBox(width: 8),
                                                       const Text(
@@ -585,15 +451,12 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                         style: TextStyle(
                                                           fontWeight:
                                                               FontWeight.bold,
-                                                          color: Color(
-                                                            0xFF00588e,
-                                                          ),
                                                         ),
                                                       ),
                                                       const SizedBox(width: 4),
                                                       Expanded(
                                                         child: Text(
-                                                          caregiverName, // Placeholder
+                                                          'Matthew Sandoval II', // Placeholder
                                                           style:
                                                               const TextStyle(
                                                                 fontSize: 15,
@@ -626,8 +489,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                       Expanded(
                                                         child: const Text(
                                                           'I acknowledge that the information provided is accurate and complete. I accept full responsibility and understand that this submission is final and cannot be modified.',
-                                                          textAlign:
-                                                              TextAlign.justify,
                                                           style: TextStyle(
                                                             fontSize: 13,
                                                           ),
@@ -722,16 +583,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                 );
                               },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: isOnDuty
-                                    ? const Color(
-                                        0xFF00588e,
-                                      ) // 🔹 Blue if on schedule
-                                    : const Color.fromARGB(
-                                        255,
-                                        215,
-                                        215,
-                                        215,
-                                      ), // 🔹 Gray if not schedule
+                                backgroundColor: const Color(0xFF00588e),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(30),
                                 ),

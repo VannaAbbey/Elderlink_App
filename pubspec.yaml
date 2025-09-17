@@ -97,10 +97,13 @@ flutter:
     - assets/images/Sebastian.png
     - assets/images/Emmanuel.png
     - assets/images/Charbell.png
-    - assets/images/Rose.png
+    - assets/images/Rose_of_Lima.png
     - assets/images/Gabriel.png
     - assets/images/profile.png
     - assets/images/profile2.png
+    - 'assets/images/Nurse/Bottom Navigation/SelectedIncidentReport_Icon.png'
+    - 'assets/images/Nurse/Bottom Navigation/SelectedMedicationMgmt_Icon.png'
+    - 'assets/images/Nurse/Bottom Navigation/SelectedVitalSign_Icon.png'
   
   fonts:
     - family: Poppins
