@@ -56,9 +56,12 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   // Helper to get upcoming tasks from AddTaskScreen logic
   // Remove placeholder and use Firestore stream from AddTaskScreen
   Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
+  final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+  final caregiverId = user?.uid;
     return FirebaseFirestore.instance
         .collection('care_tasks')
         .where('task_status', arrayContains: 'Upcoming')
+        .where('caregiver_id', isEqualTo: caregiverId)
         .snapshots()
         .map((snapshot) {
           final now = DateTime.now();
@@ -75,13 +78,11 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                   : data['task_date'],
             };
           }).toList();
-          // Sort by task_date closest to today
+          // Sort by task_start closest to now
           tasks.sort((a, b) {
-            final aDate = a['task_date'] as DateTime? ?? now;
-            final bDate = b['task_date'] as DateTime? ?? now;
-            return (aDate.difference(now).inDays).abs().compareTo(
-              (bDate.difference(now).inDays).abs(),
-            );
+            final aStart = a['task_start'] as DateTime? ?? now;
+            final bStart = b['task_start'] as DateTime? ?? now;
+            return aStart.compareTo(bStart);
           });
           return tasks;
         });

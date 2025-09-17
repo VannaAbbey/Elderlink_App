@@ -122,7 +122,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
               case 'Only once':
                 shouldShow = filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
                 break;
-              case 'Everyday':
+              case 'Every Workday':
                 shouldShow = !filterDate.isBefore(startDate);
                 break;
               case 'Every other day': {
@@ -216,18 +216,16 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                   children: [
                     const SizedBox(height: 12),
                     // Navigation tabs
-                    Container(
-                      color: const Color(0xFFE6F3FA),
-                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: IntrinsicWidth(
+                      Container(
+                        color: const Color(0xFFE6F3FA),
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.start,
                             children: List.generate(_tabs.length, (index) {
                               final bool selected = _selectedTab == index;
                               return Padding(
-                                padding: const EdgeInsets.only(left: 3.0, right: 3.0),
+                                padding: const EdgeInsets.symmetric(horizontal: 3.0),
                                 child: GestureDetector(
                                   onTap: () {
                                     setState(() {
@@ -235,6 +233,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                                     });
                                   },
                                   child: Container(
+                                    constraints: const BoxConstraints(minWidth: 80, maxWidth: 140),
                                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                                     decoration: selected
                                         ? BoxDecoration(
@@ -244,6 +243,8 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                                         : null,
                                     child: Text(
                                       _tabs[index],
+                                      textAlign: TextAlign.center,
+                                      overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         color: selected ? Colors.white : const Color(0xFF00588e),
                                         fontWeight: selected ? FontWeight.bold : FontWeight.normal,
@@ -257,7 +258,6 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                           ),
                         ),
                       ),
-                    ),
                     // Date filter row (moved below tabs, above cards)
                     Padding(
                       padding: const EdgeInsets.only(top: 8, right: 16, left: 16, bottom: 4),
@@ -273,11 +273,31 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                           IconButton(
                             icon: const Icon(Icons.event, color: Color(0xFF22688E)),
                             onPressed: () async {
+                              // Fetch caregiver assigned days from cg_house_assign
+                              List<String> caregiverAssignedDays = [];
+                              final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+                              final caregiverId = user?.uid;
+                              if (caregiverId != null) {
+                                final assignSnap = await FirebaseFirestore.instance
+                                  .collection('cg_house_assign')
+                                  .where('caregiver_id', isEqualTo: caregiverId)
+                                  .get();
+                                if (assignSnap.docs.isNotEmpty) {
+                                  caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
+                                }
+                              }
                               final picked = await showDatePicker(
                                 context: context,
                                 initialDate: _selectedFilterDate ?? DateTime.now(),
                                 firstDate: DateTime(2020),
                                 lastDate: DateTime(2100),
+                                selectableDayPredicate: (date) {
+                                  String weekday = [
+                                    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+                                  ][date.weekday - 1];
+                                  // Only allow days where caregiver is assigned
+                                  return caregiverAssignedDays.contains(weekday);
+                                },
                               );
                               setState(() {
                                 _selectedFilterDate = picked;

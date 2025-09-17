@@ -50,7 +50,7 @@ class MissedTasksScreen extends StatelessWidget {
             switch (freq) {
               case 'Only once':
                 return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-              case 'Everyday':
+              case 'Every Workday':
                 return !filterDate.isBefore(startDate);
               case 'Every other day': {
                 final diff = filterDate.difference(startDate).inDays;
