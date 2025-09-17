@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 class TaskDetailsDialog extends StatelessWidget {
   final Map<String, dynamic> task;
-  const TaskDetailsDialog({Key? key, required this.task}) : super(key: key);
+  const TaskDetailsDialog({super.key, required this.task});
 
   @override
   Widget build(BuildContext context) {
@@ -234,8 +234,7 @@ class CompleteTasksScreen extends StatelessWidget {
   }
 
   final DateTime? selectedFilterDate;
-  const CompleteTasksScreen({Key? key, this.selectedFilterDate})
-    : super(key: key);
+  const CompleteTasksScreen({super.key, this.selectedFilterDate});
 
   /// Returns a stream of completed tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
