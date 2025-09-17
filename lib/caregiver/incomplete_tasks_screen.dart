@@ -43,8 +43,7 @@ class IncompleteTasksScreen extends StatelessWidget {
   }
 
   final DateTime? selectedFilterDate;
-  const IncompleteTasksScreen({Key? key, this.selectedFilterDate})
-    : super(key: key);
+  const IncompleteTasksScreen({super.key, this.selectedFilterDate});
 
   /// Returns a stream of incomplete tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {

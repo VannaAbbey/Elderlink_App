@@ -64,11 +64,11 @@ class TaskActionButtons extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onClose;
   const TaskActionButtons({
-    Key? key,
+    super.key,
     required this.onEdit,
     required this.onDelete,
     required this.onClose,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +97,7 @@ class TaskActionButtons extends StatelessWidget {
 class EditTaskDialog extends StatefulWidget {
   final Map<String, dynamic> task;
   final BuildContext parentContext;
-  const EditTaskDialog({Key? key, required this.task, required this.parentContext}) : super(key: key);
+  const EditTaskDialog({super.key, required this.task, required this.parentContext});
 
   @override
   State<EditTaskDialog> createState() => _EditTaskDialogState();
@@ -399,7 +399,7 @@ class TaskDetailsDialog extends StatelessWidget {
   final bool showReasonInput;
   final TextEditingController reasonController;
   const TaskDetailsDialog({
-    Key? key,
+    super.key,
     required this.task,
     required this.onEdit,
     required this.onDelete,
@@ -408,7 +408,7 @@ class TaskDetailsDialog extends StatelessWidget {
     required this.onClose,
     required this.showReasonInput,
     required this.reasonController,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -520,22 +520,22 @@ class TaskDetailsDialog extends StatelessWidget {
                           final onceDate = task['freq_once_date'];
                           if (onceDate != null) {
                             if (onceDate is DateTime) {
-                              return 'Only once (' + formatDate(onceDate) + ')';
+                              return 'Only once (${formatDate(onceDate)})';
                             } else if (onceDate is String) {
-                              return 'Only once (' + onceDate + ')';
+                              return 'Only once ($onceDate)';
                             }
                           }
                           return 'Only once';
                         } else if (freq == 'Every Workday') {
                           final everydayDays = task['everyday_days'] as List<dynamic>? ?? [];
                           if (everydayDays.isNotEmpty) {
-                            return 'Every Workday (' + everydayDays.join(', ') + ')';
+                            return 'Every Workday (${everydayDays.join(', ')})';
                           }
                           return 'Every Workday';
                         } else if (freq == 'Custom') {
                           final customDays = task['custom_days'] as List<dynamic>? ?? [];
                           if (customDays.isNotEmpty) {
-                            return 'Custom (' + customDays.join(', ') + ')';
+                            return 'Custom (${customDays.join(', ')})';
                           }
                           return 'Custom';
                         }
@@ -619,7 +619,7 @@ class UpcomingTasksScreen extends StatelessWidget {
     }
   }
   final DateTime? selectedFilterDate;
-  const UpcomingTasksScreen({Key? key, this.selectedFilterDate}) : super(key: key);
+  const UpcomingTasksScreen({super.key, this.selectedFilterDate});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     final user = FirebaseAuth.instance.currentUser;
@@ -896,22 +896,22 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                                 final onceDate = task['freq_once_date'];
                                                                 if (onceDate != null) {
                                                                   if (onceDate is DateTime) {
-                                                                    return 'Only once (' + _formatDate(onceDate) + ')';
+                                                                    return 'Only once (${_formatDate(onceDate)})';
                                                                   } else if (onceDate is String) {
-                                                                    return 'Only once (' + onceDate + ')';
+                                                                    return 'Only once ($onceDate)';
                                                                   }
                                                                 }
                                                                 return 'Only once';
                                                               } else if (freq == 'Every Workday') {
                                                                 final everydayDays = task['everyday_days'] as List<dynamic>? ?? [];
                                                                 if (everydayDays.isNotEmpty) {
-                                                                  return 'Every Workday (' + everydayDays.join(', ') + ')';
+                                                                  return 'Every Workday (${everydayDays.join(', ')})';
                                                                 }
                                                                 return 'Every Workday';
                                                               } else if (freq == 'Custom') {
                                                                 final customDays = task['custom_days'] as List<dynamic>? ?? [];
                                                                 if (customDays.isNotEmpty) {
-                                                                  return 'Custom (' + customDays.join(', ') + ')';
+                                                                  return 'Custom (${customDays.join(', ')})';
                                                                 }
                                                                 return 'Custom';
                                                               }

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'houses_grids.dart';
 
 class HousesScreen extends StatelessWidget {
-  const HousesScreen({Key? key}) : super(key: key);
+  const HousesScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
