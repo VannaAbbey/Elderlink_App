@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -164,19 +163,9 @@ class _EditProfileState extends State<EditProfile> {
                                   children: [
                                     CircleAvatar(
                                       radius: 100,
-                                      backgroundColor: Colors.grey[200],
-                                      child: ClipOval(
-                                        child: (_profilePicUrl != null && _profilePicUrl!.isNotEmpty)
-                                          ? CachedNetworkImage(
-                                              imageUrl: _profilePicUrl!,
-                                              width: 200,
-                                              height: 200,
-                                              fit: BoxFit.cover,
-                                              placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
-                                              errorWidget: (context, url, error) => Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
-                                            )
-                                          : Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
-                                      ),
+                                      backgroundImage: (_profilePicUrl != null && _profilePicUrl!.isNotEmpty)
+                                        ? NetworkImage(_profilePicUrl!)
+                                        : AssetImage('assets/images/people_icon.png') as ImageProvider,
                                     ),
                                     Positioned(
                                       bottom: 0,
@@ -217,7 +206,7 @@ class _EditProfileState extends State<EditProfile> {
                                       children: [
                                         Center(
                                           child: Text(
-                                            'Caregiver ${authProvider.userFirstName}',
+                                            'Nurse ${authProvider.userFirstName}',
                                             style: TextStyle(
                                               fontSize: 28,
                                               fontWeight: FontWeight.bold,
@@ -357,8 +346,8 @@ class _EditProfileState extends State<EditProfile> {
                                                                           lastDate: DateTime.now(),
                                                                         );
                                                                         if (pickedDate != null) {
-bottomSheetBirthdayController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-}
+                                                                          bottomSheetBirthdayController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                                                        }
                                                                       },
                                                                       child: AbsorbPointer(
                                                                         child: TextFormField(

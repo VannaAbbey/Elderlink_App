@@ -95,6 +95,16 @@ flutter:
     - assets/images/shiftIcon.png
     - assets/images/background1.png
     - assets/images/people_icon.png
+    - assets/images/SelectedIncidentReport_Icon.png
+    - assets/images/SelectedMedicationMgmt_Icon.png
+    - assets/images/SelectedVitalSign_Icon.png
+    - assets/images/Charbell_Logo.png
+    - assets/images/Sebastian_Logo.png
+    - assets/images/Rose of Lima_Logo.png
+    - assets/images/Emmanuel_Logo.png
+    - assets/images/Gabriel_Logo.png
+    - assets/images/Rose_Logo.png
+
   
   fonts:
     - family: Poppins
