@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 // Helper function to create a new task and set 'created_by' to the current caregiver's UID
 Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
@@ -588,14 +589,6 @@ class UpcomingTasksScreen extends StatelessWidget {
     return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
   }
 
-  // Utility to check if a TimeOfDay is within a range
-  bool _isTimeWithinRange(TimeOfDay picked, TimeOfDay start, TimeOfDay end) {
-    final pickedMinutes = picked.hour * 60 + picked.minute;
-    final startMinutes = start.hour * 60 + start.minute;
-    final endMinutes = end.hour * 60 + end.minute;
-    return pickedMinutes >= startMinutes && pickedMinutes <= endMinutes;
-  }
-
   // Removed unused _getCaregiverTimeRange function
   String _formatDate(DateTime? dateTime) {
     if (dateTime == null) return '';
@@ -629,10 +622,31 @@ class UpcomingTasksScreen extends StatelessWidget {
       .where('task_status', arrayContains: 'Upcoming')
       .where('caregiver_id', isEqualTo: caregiverId)
       .snapshots()
-      .map((snapshot) {
-        List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+      .asyncMap((snapshot) async {
+        List<Map<String, dynamic>> tasks = [];
+        
+        for (var doc in snapshot.docs) {
           final data = doc.data();
-          return {
+          final elderlyId = data['elderly_id'];
+          
+          // Fetch elderly profile picture
+          String profilePicUrl = '';
+          if (elderlyId != null) {
+            try {
+              final elderlyDoc = await FirebaseFirestore.instance
+                  .collection('elderly')
+                  .doc(elderlyId)
+                  .get();
+              if (elderlyDoc.exists) {
+                final elderlyData = elderlyDoc.data();
+                profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
+              }
+            } catch (e) {
+              print('DEBUG: Error fetching elderly profile pic in upcoming_tasks: $e');
+            }
+          }
+          
+          tasks.add({
             'task_id': data['task_id'] ?? doc.id,
             'elderly_fname': data['elderly_fname'] ?? '',
             'task_description': data['task_description'] ?? '',
@@ -644,8 +658,9 @@ class UpcomingTasksScreen extends StatelessWidget {
             'custom_days': data['custom_days'] ?? [],
             'everyday_days': data['everyday_days'] ?? [],
             'freq_once_date': (data['freq_once_date'] is Timestamp) ? (data['freq_once_date'] as Timestamp).toDate() : data['freq_once_date'],
-          };
-        }).toList();
+            'profile_pic': profilePicUrl,
+          });
+        }
         // ...existing filter and sort logic...
         return tasks;
       });
@@ -1143,10 +1158,51 @@ class UpcomingTasksScreen extends StatelessWidget {
                                           ),
                                           child: ClipRRect(
                                             borderRadius: BorderRadius.circular(12),
-                                            child: Image.asset(
-                                              'assets/images/people_icon.png',
-                                              fit: BoxFit.cover,
-                                            ),
+                                            child: (task['profile_pic'] != null && task['profile_pic'].isNotEmpty)
+                                                ? CachedNetworkImage(
+                                                    imageUrl: task['profile_pic'],
+                                                    width: 56,
+                                                    height: 56,
+                                                    fit: BoxFit.cover,
+                                                    placeholder: (context, url) => Container(
+                                                      width: 56,
+                                                      height: 56,
+                                                      color: Colors.grey[300],
+                                                      child: const Icon(
+                                                        Icons.person,
+                                                        color: Colors.grey,
+                                                        size: 28,
+                                                      ),
+                                                    ),
+                                                    errorWidget: (context, url, error) => Container(
+                                                      width: 56,
+                                                      height: 56,
+                                                      decoration: const BoxDecoration(
+                                                        color: Colors.white,
+                                                      ),
+                                                      child: ClipRRect(
+                                                        borderRadius: BorderRadius.circular(12),
+                                                        child: Image.asset(
+                                                          'assets/images/people_icon.png',
+                                                          fit: BoxFit.cover,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  )
+                                                : Container(
+                                                    width: 56,
+                                                    height: 56,
+                                                    decoration: const BoxDecoration(
+                                                      color: Colors.white,
+                                                    ),
+                                                    child: ClipRRect(
+                                                      borderRadius: BorderRadius.circular(12),
+                                                      child: Image.asset(
+                                                        'assets/images/people_icon.png',
+                                                        fit: BoxFit.cover,
+                                                      ),
+                                                    ),
+                                                  ),
                                           ),
                                         ),
                                         const SizedBox(width: 12),
@@ -1228,7 +1284,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                       child: ElevatedButton(
                         onPressed: () async {
                           final caregiverId = await _getCurrentCaregiverId(context);
-                          List<Map<String, dynamic>> assignedElderly = await _getAssignedElderlyForCaregiver(caregiverId);
+                          // Fetch caregiver's assigned days and time range first
                           List<String> caregiverAssignedDays = [];
                           Map<String, String> caregiverTimeRange = {'start': '00:00', 'end': '23:59'};
                           final assignSnap = await FirebaseFirestore.instance
@@ -1243,6 +1299,13 @@ class UpcomingTasksScreen extends StatelessWidget {
                               'end': timeRange['end'] ?? '23:59',
                             };
                           }
+                          // Now set selectedDay and fetch assignedElderly
+                          final now = DateTime.now();
+                          String selectedDay = caregiverAssignedDays.contains([
+                            'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1])
+                            ? ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1]
+                            : (caregiverAssignedDays.isNotEmpty ? caregiverAssignedDays.first : 'Monday');
+                          List<Map<String, dynamic>> assignedElderly = await _getAssignedElderlyForCaregiverDay(caregiverId, selectedDay);
                           final rangeStart = _parseTimeOfDay(caregiverTimeRange['start']!);
                           final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end']!);
                           showDialog(
@@ -1254,11 +1317,17 @@ class UpcomingTasksScreen extends StatelessWidget {
                               TimeOfDay? startTime;
                               TimeOfDay? endTime;
                               TextEditingController activityController = TextEditingController();
-                              final List<String> frequencyList = ['Only once', 'Every Workday', 'Custom'];
+                              final List<String> frequencyList = ['Only once', 'Every Assigned Day', 'Custom'];
                               DateTime? selectedDate;
                               List<String> selectedDaysBox = [];
                               return StatefulBuilder(
                                 builder: (context, setState) {
+                                  Future<void> updateElderlyList(String newDay) async {
+                                    assignedElderly = await _getAssignedElderlyForCaregiverDay(caregiverId, newDay);
+                                    setState(() {
+                                      selectedDay = newDay;
+                                    });
+                                  }
                                   return Dialog(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                                     insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
@@ -1297,55 +1366,112 @@ class UpcomingTasksScreen extends StatelessWidget {
                                             ),
                                             const Divider(),
                                             const SizedBox(height: 10),
-                                            Row(
+                                            // Day selector for assigned work days
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
-                                                const Icon(Icons.person, color: Color(0xFF22688E)),
-                                                const SizedBox(width: 8),
-                                                const Text('Name of the Elderly:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                Row(
+                                                  children: [
+                                                    const Icon(Icons.calendar_today, color: Color(0xFF22688E)),
+                                                    const SizedBox(width: 8),
+                                                    const Text('Assigned Day:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                    const SizedBox(width: 8),
+                                                    DropdownButton<String>(
+                                                      value: selectedDay,
+                                                      items: (() {
+                                                        const weekdayOrder = [
+                                                          'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+                                                        ];
+                                                        List<String> sortedDays = List<String>.from(caregiverAssignedDays);
+                                                        sortedDays.sort((a, b) => weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b)));
+                                                        return sortedDays.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList();
+                                                      })(),
+                                                      onChanged: (val) async {
+                                                        if (val != null) {
+                                                          await updateElderlyList(val);
+                                                          setState(() {});
+                                                        }
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 12),
+                                                Row(
+                                                  children: [
+                                                    const Icon(Icons.person, color: Color(0xFF22688E)),
+                                                    const SizedBox(width: 8),
+                                                    const Text('Name of the Elderly:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Container(
+                                                  height: 40,
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFFE6F3FA),
+                                                    borderRadius: BorderRadius.circular(20),
+                                                  ),
+                                                  padding: EdgeInsets.zero,
+                                                  child: DropdownButtonHideUnderline(
+                                                    child: DropdownButton2<String>(
+                                                      value: (() {
+                                                        // Remove duplicates by elderly_id
+                                                        final seen = <String>{};
+                                                        List<Map<String, dynamic>> sortedElderly = List<Map<String, dynamic>>.from(assignedElderly)
+                                                          .where((e) => e['elderly_id'] != null && seen.add(e['elderly_id'])).toList();
+                                                        sortedElderly.sort((a, b) => (a['elderly_fname'] ?? '').toString().toLowerCase().compareTo((b['elderly_fname'] ?? '').toString().toLowerCase()));
+                                                        final ids = sortedElderly.map((e) => e['elderly_id']).toList();
+                                                        if (ids.isEmpty) return null;
+                                                        if (selectedElderly == null || !ids.contains(selectedElderly)) {
+                                                          // If current value is not in the list, default to first
+                                                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                            setState(() {
+                                                              selectedElderly = ids.first;
+                                                            });
+                                                          });
+                                                          return ids.first;
+                                                        }
+                                                        return selectedElderly;
+                                                      })(),
+                                                      isExpanded: true,
+                                                      hint: const Text('Select Elderly', style: TextStyle(color: Color.fromARGB(255, 0, 0, 0))),
+                                                      buttonStyleData: const ButtonStyleData(
+                                                        height: 40,
+                                                        padding: EdgeInsets.zero,
+                                                        decoration: BoxDecoration(
+                                                          color: Color(0xFFE6F3FA),
+                                                          borderRadius: BorderRadius.all(Radius.circular(20)),
+                                                        ),
+                                                      ),
+                                                      dropdownStyleData: DropdownStyleData(
+                                                        maxHeight: 200,
+                                                        decoration: BoxDecoration(
+                                                          color: Color(0xFFE6F3FA),
+                                                          borderRadius: BorderRadius.circular(20),
+                                                        ),
+                                                      ),
+                                                      items: (() {
+                                                        final seen = <String>{};
+                                                        List<Map<String, dynamic>> sortedElderly = List<Map<String, dynamic>>.from(assignedElderly)
+                                                          .where((e) => e['elderly_id'] != null && seen.add(e['elderly_id'])).toList();
+                                                        sortedElderly.sort((a, b) => (a['elderly_fname'] ?? '').toString().toLowerCase().compareTo((b['elderly_fname'] ?? '').toString().toLowerCase()));
+                                                        return sortedElderly.map((elderly) {
+                                                          return DropdownMenuItem<String>(
+                                                            value: elderly['elderly_id'],
+                                                            child: Text(elderly['elderly_fname'], style: const TextStyle(color: Color.fromARGB(255, 0, 0, 0))),
+                                                          );
+                                                        }).toList();
+                                                      })(),
+                                                      onChanged: (value) {
+                                                        setState(() {
+                                                          selectedElderly = value;
+                                                        });
+                                                      },
+                                                    ),
+                                                  ),
+                                                ),
                                               ],
                                             ),
-                                            const SizedBox(height: 8),
-                                            Container(
-                                              height: 40,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFE6F3FA),
-                                                borderRadius: BorderRadius.circular(20),
-                                              ),
-                                              padding: EdgeInsets.zero,
-                                              child: DropdownButtonHideUnderline(
-                                                child: DropdownButton2<String>(
-                                                  value: selectedElderly,
-                                                  isExpanded: true,
-                                                  hint: const Text('Select Elderly', style: TextStyle(color: Color.fromARGB(255, 0, 0, 0))),
-                                                  buttonStyleData: const ButtonStyleData(
-                                                    height: 40,
-                                                    padding: EdgeInsets.zero,
-                                                    decoration: BoxDecoration(
-                                                      color: Color(0xFFE6F3FA),
-                                                      borderRadius: BorderRadius.all(Radius.circular(20)),
-                                                    ),
-                                                  ),
-                                                  dropdownStyleData: DropdownStyleData(
-                                                    maxHeight: 200,
-                                                    decoration: BoxDecoration(
-                                                      color: Color(0xFFE6F3FA),
-                                                      borderRadius: BorderRadius.circular(20),
-                                                    ),
-                                                  ),
-                                                  items: assignedElderly.map((elderly) {
-                                                    return DropdownMenuItem<String>(
-                                                      value: elderly['elderly_id'],
-                                                      child: Text(elderly['elderly_fname'], style: const TextStyle(color: Color.fromARGB(255, 0, 0, 0))),
-                                                    );
-                                                  }).toList(),
-                                                  onChanged: (value) {
-                                                    setState(() {
-                                                      selectedElderly = value;
-                                                    });
-                                                  },
-                                                ),
-                                              ),
-                                            ),
+                                            // ...existing code...
                                             const SizedBox(height: 20),
                                             Row(
                                               children: [
@@ -1376,7 +1502,19 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                               initialTime: startTime ?? rangeStart,
                                                             );
                                                             if (picked != null) {
-                                                              if (_isTimeWithinRange(picked, rangeStart, rangeEnd)) {
+                                                              // Validate using caregiver's time_range
+                                                              final pickedMinutes = picked.hour * 60 + picked.minute;
+                                                              final minMinutes = rangeStart.hour * 60 + rangeStart.minute;
+                                                              final maxMinutes = rangeEnd.hour * 60 + rangeEnd.minute;
+                                                              bool withinRange;
+                                                              if (maxMinutes >= minMinutes) {
+                                                                // Normal shift (e.g., 8am-5pm)
+                                                                withinRange = pickedMinutes >= minMinutes && pickedMinutes <= maxMinutes;
+                                                              } else {
+                                                                // Overnight shift (e.g., 10pm-6am)
+                                                                withinRange = pickedMinutes >= minMinutes || pickedMinutes <= maxMinutes;
+                                                              }
+                                                              if (withinRange) {
                                                                 setState(() {
                                                                   startTime = picked;
                                                                 });
@@ -1385,7 +1523,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                                   context: ctx,
                                                                   builder: (context) => AlertDialog(
                                                                     title: const Text('Invalid Time'),
-                                                                    content: const Text('The picked task time is beyond your work hours. Please choose another for the task.'),
+                                                                    content: Text('The picked start time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.'),
                                                                     actions: [
                                                                       TextButton(
                                                                         onPressed: () => Navigator.of(context).pop(),
@@ -1435,7 +1573,19 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                               initialTime: endTime ?? rangeEnd,
                                                             );
                                                             if (picked != null) {
-                                                              if (_isTimeWithinRange(picked, rangeStart, rangeEnd)) {
+                                                              // Validate using caregiver's time_range
+                                                              final pickedMinutes = picked.hour * 60 + picked.minute;
+                                                              final minMinutes = rangeStart.hour * 60 + rangeStart.minute;
+                                                              final maxMinutes = rangeEnd.hour * 60 + rangeEnd.minute;
+                                                              bool withinRange;
+                                                              if (maxMinutes >= minMinutes) {
+                                                                // Normal shift (e.g., 8am-5pm)
+                                                                withinRange = pickedMinutes >= minMinutes && pickedMinutes <= maxMinutes;
+                                                              } else {
+                                                                // Overnight shift (e.g., 10pm-6am)
+                                                                withinRange = pickedMinutes >= minMinutes || pickedMinutes <= maxMinutes;
+                                                              }
+                                                              if (withinRange) {
                                                                 setState(() {
                                                                   endTime = picked;
                                                                 });
@@ -1444,7 +1594,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                                   context: ctx,
                                                                   builder: (context) => AlertDialog(
                                                                     title: const Text('Invalid Time'),
-                                                                    content: const Text('The picked task time is beyond your work hours. Please choose another for the task.'),
+                                                                    content: Text('The picked end time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.'),
                                                                     actions: [
                                                                       TextButton(
                                                                         onPressed: () => Navigator.of(context).pop(),
@@ -1522,71 +1672,114 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                   ],
                                                 ),
                                                 const SizedBox(height: 8),
-                                                Container(
-                                                  height: 40,
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFFE6F3FA),
-                                                    borderRadius: BorderRadius.circular(20),
-                                                  ),
-                                                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                                                  child: InkWell(
-                                                    onTap: () async {
-                                                      List<String> tempSelectedDays = List<String>.from(selectedDaysBox);
-                                                      // Sort assigned days in standard weekday order
-                                                      const weekdayOrder = [
-                                                        'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-                                                      ];
-                                                      List<String> sortedAssignedDays = List<String>.from(caregiverAssignedDays);
-                                                      sortedAssignedDays.sort((a, b) =>
-                                                        weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b)));
-                                                      await showDialog(
+                                                GestureDetector(
+                                                  behavior: HitTestBehavior.opaque,
+                                                  onTap: () async {
+                                                    // Only show days that the selected elderly is assigned to the caregiver
+                                                    if (selectedElderly == null) {
+                                                      showDialog(
                                                         context: ctx,
-                                                        builder: (BuildContext dialogCtx) {
-                                                          return StatefulBuilder(
-                                                            builder: (dialogContext, setDialogState) {
-                                                              return AlertDialog(
-                                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                                                title: const Text('Select Days'),
-                                                                content: SizedBox(
-                                                                  width: 250,
-                                                                  child: ListView(
-                                                                    shrinkWrap: true,
-                                                                    children: sortedAssignedDays.map((day) {
-                                                                      return CheckboxListTile(
-                                                                        title: Text(day),
-                                                                        value: tempSelectedDays.contains(day),
-                                                                        onChanged: (checked) {
-                                                                          setDialogState(() {
-                                                                            if (checked == true) {
-                                                                              tempSelectedDays.add(day);
-                                                                            } else {
-                                                                              tempSelectedDays.remove(day);
-                                                                            }
-                                                                          });
-                                                                        },
-                                                                      );
-                                                                    }).toList(),
-                                                                  ),
-                                                                ),
-                                                                actions: [
-                                                                  TextButton(
-                                                                    onPressed: () {
-                                                                      Navigator.of(dialogCtx).pop();
-                                                                    },
-                                                                    child: const Text('Done'),
-                                                                  ),
-                                                                ],
-                                                              );
-                                                            },
-                                                          );
-                                                        },
+                                                        builder: (BuildContext context) => AlertDialog(
+                                                          title: const Text('Selection Required'),
+                                                          content: const Text('Please select an elderly first.'),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () => Navigator.of(context).pop(),
+                                                              child: const Text('OK'),
+                                                            ),
+                                                          ],
+                                                        ),
                                                       );
-                                                      setState(() {
-                                                        selectedDaysBox
-                                                          ..clear()
-                                                          ..addAll(tempSelectedDays);
-                                                      });
-                                                    },
+                                                      return;
+                                                    }
+                                                    
+                                                    final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
+                                                    final elderlyAssignedDays = List<String>.from(elderlyData['days_assigned'] ?? []);
+                                                    
+                                                    if (elderlyAssignedDays.isEmpty) {
+                                                      showDialog(
+                                                        context: ctx,
+                                                        builder: (BuildContext context) => AlertDialog(
+                                                          title: const Text('No Assigned Days'),
+                                                          content: const Text('No assigned days found for selected elderly.'),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () => Navigator.of(context).pop(),
+                                                              child: const Text('OK'),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                      return;
+                                                    }
+                                                    
+                                                    List<String> tempSelectedDays = List<String>.from(selectedDaysBox);
+                                                    // Filter tempSelectedDays to only include days the elderly is assigned to
+                                                    tempSelectedDays.retainWhere((day) => elderlyAssignedDays.contains(day));
+                                                    
+                                                    // Sort assigned days in standard weekday order
+                                                    const weekdayOrder = [
+                                                      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+                                                    ];
+                                                    List<String> sortedAssignedDays = List<String>.from(elderlyAssignedDays);
+                                                    sortedAssignedDays.sort((a, b) =>
+                                                      weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b)));
+                                                    
+                                                    await showDialog(
+                                                      context: ctx,
+                                                      builder: (BuildContext dialogCtx) {
+                                                        return StatefulBuilder(
+                                                          builder: (dialogContext, setDialogState) {
+                                                            return AlertDialog(
+                                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                                              title: const Text('Select Days'),
+                                                              content: SizedBox(
+                                                                width: 250,
+                                                                child: ListView(
+                                                                  shrinkWrap: true,
+                                                                  children: sortedAssignedDays.map((day) {
+                                                                    return CheckboxListTile(
+                                                                      title: Text(day),
+                                                                      value: tempSelectedDays.contains(day),
+                                                                      onChanged: (checked) {
+                                                                        setDialogState(() {
+                                                                          if (checked == true) {
+                                                                            tempSelectedDays.add(day);
+                                                                          } else {
+                                                                            tempSelectedDays.remove(day);
+                                                                          }
+                                                                        });
+                                                                      },
+                                                                    );
+                                                                  }).toList(),
+                                                                ),
+                                                              ),
+                                                              actions: [
+                                                                TextButton(
+                                                                  onPressed: () {
+                                                                    Navigator.of(dialogCtx).pop();
+                                                                  },
+                                                                  child: const Text('Done'),
+                                                                ),
+                                                              ],
+                                                            );
+                                                          },
+                                                        );
+                                                      },
+                                                    );
+                                                    setState(() {
+                                                      selectedDaysBox
+                                                        ..clear()
+                                                        ..addAll(tempSelectedDays);
+                                                    });
+                                                  },
+                                                  child: Container(
+                                                    height: 40,
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFFE6F3FA),
+                                                      borderRadius: BorderRadius.circular(20),
+                                                    ),
+                                                    padding: const EdgeInsets.symmetric(horizontal: 8),
                                                     child: Row(
                                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                       children: [
@@ -1626,34 +1819,72 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                 ],
                                               ),
                                               const SizedBox(height: 8),
-                                              Container(
-                                                height: 40,
-                                                decoration: BoxDecoration(
-                                                  color: const Color(0xFFE6F3FA),
-                                                  borderRadius: BorderRadius.circular(20),
-                                                ),
-                                                padding: const EdgeInsets.symmetric(horizontal: 8),
-                                                child: InkWell(
-                                                  onTap: () async {
-                                                    final picked = await showDatePicker(
+                                              GestureDetector(
+                                                behavior: HitTestBehavior.opaque,
+                                                onTap: () async {
+                                                  // Only allow dates matching assigned days of selected elderly
+                                                  if (selectedElderly == null) {
+                                                    showDialog(
                                                       context: ctx,
-                                                      initialDate: selectedDate ?? DateTime.now(),
-                                                      firstDate: DateTime(2020),
-                                                      lastDate: DateTime(2100),
-                                                      selectableDayPredicate: (DateTime date) {
-                                                        // Map weekday int to name
-                                                        String weekday = [
-                                                          'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-                                                        ][date.weekday - 1];
-                                                        return caregiverAssignedDays.contains(weekday);
-                                                      },
+                                                      builder: (BuildContext context) => AlertDialog(
+                                                        title: const Text('Selection Required'),
+                                                        content: const Text('Please select an elderly first.'),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(),
+                                                            child: const Text('OK'),
+                                                          ),
+                                                        ],
+                                                      ),
                                                     );
-                                                    if (picked != null) {
-                                                      setState(() {
-                                                        selectedDate = picked;
-                                                      });
-                                                    }
-                                                  },
+                                                    return;
+                                                  }
+                                                  
+                                                  final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
+                                                  final elderlyAssignedDays = List<String>.from(elderlyData['days_assigned'] ?? []);
+                                                  
+                                                  if (elderlyAssignedDays.isEmpty) {
+                                                    showDialog(
+                                                      context: ctx,
+                                                      builder: (BuildContext context) => AlertDialog(
+                                                        title: const Text('No Assigned Days'),
+                                                        content: const Text('No assigned days found for selected elderly.'),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(),
+                                                            child: const Text('OK'),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    return;
+                                                  }
+                                                  
+                                                  final picked = await showDatePicker(
+                                                    context: ctx,
+                                                    initialDate: selectedDate ?? DateTime.now(),
+                                                    firstDate: DateTime(2020),
+                                                    lastDate: DateTime(2100),
+                                                    selectableDayPredicate: (DateTime date) {
+                                                      String weekday = [
+                                                        'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+                                                      ][date.weekday - 1];
+                                                      return elderlyAssignedDays.contains(weekday);
+                                                    },
+                                                  );
+                                                  if (picked != null) {
+                                                    setState(() {
+                                                      selectedDate = picked;
+                                                    });
+                                                  }
+                                                },
+                                                child: Container(
+                                                  height: 40,
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFFE6F3FA),
+                                                    borderRadius: BorderRadius.circular(20),
+                                                  ),
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8),
                                                   child: Row(
                                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                     children: [
@@ -1716,9 +1947,15 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                     saveFrequency = selectedDaysBox;
                                                     saveDate = DateTime.now();
                                                     extraFields['custom_days'] = selectedDaysBox;
-                                                  } else if (selectedFrequency == 'Every Workday') {
+                                                  } else if (selectedFrequency == 'Every Assigned Day') {
+                                                    // Get assigned days for selected elderly
+                                                    List<String> elderlyAssignedDays = [];
+                                                    if (selectedElderly != null) {
+                                                      final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
+                                                      elderlyAssignedDays = List<String>.from(elderlyData['days_assigned'] ?? []);
+                                                    }
                                                     saveDate = DateTime.now();
-                                                    extraFields['everyday_days'] = caregiverAssignedDays;
+                                                    extraFields['everyday_days'] = elderlyAssignedDays;
                                                   }
                                                   if (valid) {
                                                     final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
@@ -1810,44 +2047,94 @@ class UpcomingTasksScreen extends StatelessWidget {
   return FirebaseAuth.instance.currentUser?.uid ?? '';
   }
 
-  Future<List<Map<String, dynamic>>> _getAssignedElderlyForCaregiver(String caregiverId) async {
-    final assignSnapshot = await FirebaseFirestore.instance
-        .collection('elderly_caregiver_assign')
-        .where('caregiver_id', isEqualTo: caregiverId)
-        .get();
 
-    final assignedIds = assignSnapshot.docs
-        .map((doc) => doc.data()['elderly_id'] as String)
-        .toList();
 
-    if (assignedIds.isEmpty) return [];
-
-    final elderlySnapshot = await FirebaseFirestore.instance
-        .collection('elderly')
-        .where(FieldPath.documentId, whereIn: assignedIds)
-        .get();
-
-    final elderlyMap = {
-      for (var doc in elderlySnapshot.docs) doc.id: doc.data()
-    };
-
-    List<Map<String, dynamic>> assignedElderly = [];
-    for (var doc in assignSnapshot.docs) {
-      final assignData = doc.data();
-      final elderlyId = assignData['elderly_id'];
-      final elderlyData = elderlyMap[elderlyId];
-      if (elderlyData != null) {
-        final sex = elderlyData['elderly_sex'] ?? '';
-        final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
-        assignedElderly.add({
-          'assign_id': assignData['assign_id'],
-          'elderly_id': elderlyId,
-          'caregiver_id': caregiverId,
-          'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
-        });
+  Future<List<Map<String, dynamic>>> _getAssignedElderlyForCaregiverDay(String caregiverId, String day) async {
+    try {
+      // Query for assignments based on your database structure
+      // Try both approaches to be compatible with different data structures
+      QuerySnapshot assignSnapshot;
+      
+      // First, try querying by individual day (if day field exists)
+      try {
+        assignSnapshot = await FirebaseFirestore.instance
+            .collection('elderly_caregiver_assign')
+            .where('caregiver_id', isEqualTo: caregiverId)
+            .where('day', isEqualTo: day)
+            .get();
+      } catch (e) {
+        // If that fails, get all assignments and filter by days_assigned array
+        assignSnapshot = await FirebaseFirestore.instance
+            .collection('elderly_caregiver_assign')
+            .where('caregiver_id', isEqualTo: caregiverId)
+            .get();
       }
+
+      List<QueryDocumentSnapshot> relevantAssignments;
+      
+      if (assignSnapshot.docs.isNotEmpty && assignSnapshot.docs.first.data().toString().contains('day')) {
+        // Use direct query results if day field exists
+        relevantAssignments = assignSnapshot.docs;
+      } else {
+        // Filter by days_assigned array
+        relevantAssignments = assignSnapshot.docs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
+          return daysAssigned.contains(day);
+        }).toList();
+      }
+
+      if (relevantAssignments.isEmpty) return [];
+
+      final assignedIds = relevantAssignments
+          .map((doc) => (doc.data() as Map<String, dynamic>)['elderly_id'] as String)
+          .toList();
+
+      if (assignedIds.isEmpty) return [];
+
+      // Fetch elderly details in chunks of 30 (Firestore limit)
+      List<QuerySnapshot> elderlySnapshots = [];
+      
+      for (int i = 0; i < assignedIds.length; i += 30) {
+        final chunk = assignedIds.skip(i).take(30).toList();
+        final chunkSnapshot = await FirebaseFirestore.instance
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+        elderlySnapshots.add(chunkSnapshot);
+      }
+
+      // Build elderlyMap from all chunks
+      final elderlyMap = <String, Map<String, dynamic>>{};
+      for (var snapshot in elderlySnapshots) {
+        for (var doc in snapshot.docs) {
+          elderlyMap[doc.id] = doc.data() as Map<String, dynamic>;
+        }
+      }
+
+      List<Map<String, dynamic>> assignedElderly = [];
+      for (var doc in relevantAssignments) {
+        final assignData = doc.data() as Map<String, dynamic>;
+        final elderlyId = assignData['elderly_id'];
+        final elderlyData = elderlyMap[elderlyId];
+        if (elderlyData != null) {
+          final sex = elderlyData['elderly_sex'] ?? '';
+          final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
+          assignedElderly.add({
+            'assign_id': assignData['assign_id'],
+            'elderly_id': elderlyId,
+            'caregiver_id': caregiverId,
+            'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
+            'days_assigned': assignData['days_assigned'] ?? (assignData.containsKey('day') ? [assignData['day']] : []),
+          });
+        }
+      }
+      
+      return assignedElderly;
+    } catch (e) {
+      print('Error in _getAssignedElderlyForCaregiverDay: $e');
+      return [];
     }
-    return assignedElderly;
   }
 
   Future<void> _saveCareTask({

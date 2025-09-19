@@ -58,16 +58,25 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
 
     if (assignedIds.isEmpty) return [];
 
-    // Batch fetch all elderly details
-    final elderlySnapshot = await FirebaseFirestore.instance
-        .collection('elderly')
-        .where(FieldPath.documentId, whereIn: assignedIds)
-        .get();
+    // Batch fetch all elderly details in chunks of 30 (Firestore limit)
+    List<QuerySnapshot> elderlySnapshots = [];
+    
+    for (int i = 0; i < assignedIds.length; i += 30) {
+      final chunk = assignedIds.skip(i).take(30).toList();
+      final chunkSnapshot = await FirebaseFirestore.instance
+          .collection('elderly')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      elderlySnapshots.add(chunkSnapshot);
+    }
 
-    // Map elderlyId to elderly data
-    final elderlyMap = {
-      for (var doc in elderlySnapshot.docs) doc.id: doc.data()
-    };
+    // Map elderlyId to elderly data from all chunks
+    final elderlyMap = <String, Map<String, dynamic>>{};
+    for (var snapshot in elderlySnapshots) {
+      for (var doc in snapshot.docs) {
+        elderlyMap[doc.id] = doc.data() as Map<String, dynamic>;
+      }
+    }
 
     // Build the result list
     List<Map<String, dynamic>> assignedElderly = [];
@@ -190,6 +199,9 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
                   backgroundColor: Colors.white,
+                  surfaceTintColor: Colors.white,
+                  scrolledUnderElevation: 0,
+                  elevation: 0,
                   title: const Text('List of Tasks',
                       style: TextStyle(
                           color: Color(0xFF00588e),

@@ -13,7 +13,7 @@ import 'shift.dart';
 import 'notifications.dart';
 import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
-import 'services/house_service.dart';
+import '../services/house_service.dart';
 
 void main() {
   runApp(

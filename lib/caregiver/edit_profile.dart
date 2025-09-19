@@ -93,19 +93,77 @@ class _EditProfileState extends State<EditProfile> {
   String _getBirthday(AuthProvider authProvider) {
     final userData = authProvider.userData;
     if (userData != null && userData['user_bday'] != null) {
-      // Firestore stores as Timestamp, convert to string
+      // Firestore stores as Timestamp, convert to formatted string
       final bday = userData['user_bday'];
-      if (bday is String) return bday;
-      if (bday is DateTime) return '${bday.year}-${bday.month}-${bday.day}';
-      if (bday.toString().contains('Timestamp')) {
+      DateTime? dateTime;
+      
+      if (bday is String) {
+        try {
+          dateTime = DateTime.parse(bday);
+        } catch (_) {
+          return bday; // Return original if parsing fails
+        }
+      } else if (bday is DateTime) {
+        dateTime = bday;
+      } else if (bday.toString().contains('Timestamp')) {
         // Try to parse Timestamp
         try {
-          final date = bday.toDate();
-          return '${date.year}-${date.month}-${date.day}';
-        } catch (_) {}
+          dateTime = bday.toDate();
+        } catch (_) {
+          return '';
+        }
+      }
+      
+      if (dateTime != null) {
+        return _formatDateToReadable(dateTime);
       }
     }
     return '';
+  }
+
+  String _formatDateToReadable(DateTime date) {
+    // Format as "Month Day, Year" (e.g., "August 6, 2003")
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    final monthName = months[date.month - 1];
+    return '$monthName ${date.day}, ${date.year}';
+  }
+
+  DateTime? _parseReadableDate(String dateString) {
+    // Parse "Month Day, Year" format back to DateTime
+    if (dateString.isEmpty) return null;
+    
+    try {
+      const months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      
+      // Split by comma to separate "Month Day" and "Year"
+      final parts = dateString.split(', ');
+      if (parts.length != 2) return DateTime.tryParse(dateString); // Fallback for other formats
+      
+      final yearStr = parts[1];
+      final monthDayPart = parts[0].split(' ');
+      if (monthDayPart.length != 2) return DateTime.tryParse(dateString);
+      
+      final monthName = monthDayPart[0];
+      final dayStr = monthDayPart[1];
+      
+      final monthIndex = months.indexOf(monthName);
+      if (monthIndex == -1) return DateTime.tryParse(dateString);
+      
+      final year = int.tryParse(yearStr);
+      final day = int.tryParse(dayStr);
+      if (year == null || day == null) return DateTime.tryParse(dateString);
+      
+      return DateTime(year, monthIndex + 1, day);
+    } catch (e) {
+      return DateTime.tryParse(dateString); // Fallback
+    }
   }
 
 
@@ -115,6 +173,8 @@ class _EditProfileState extends State<EditProfile> {
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        scrolledUnderElevation: 0,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Color(0xFF00588e)),
@@ -352,12 +412,12 @@ class _EditProfileState extends State<EditProfile> {
                                                                       onTap: () async {
                                                                         DateTime? pickedDate = await showDatePicker(
                                                                           context: context,
-                                                                          initialDate: DateTime.tryParse(bottomSheetBirthdayController.text) ?? DateTime(2000, 1, 1),
+                                                                          initialDate: _parseReadableDate(bottomSheetBirthdayController.text) ?? DateTime(2000, 1, 1),
                                                                           firstDate: DateTime(1900),
                                                                           lastDate: DateTime.now(),
                                                                         );
                                                                         if (pickedDate != null) {
-                                                                          bottomSheetBirthdayController.text = "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                                                                          bottomSheetBirthdayController.text = _formatDateToReadable(pickedDate);
                                                                         }
                                                                       },
                                                                       child: AbsorbPointer(

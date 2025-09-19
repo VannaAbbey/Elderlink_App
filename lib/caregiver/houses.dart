@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'houses_grids.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import 'services/house_service.dart';
+import '../services/house_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HousesScreen extends StatefulWidget {

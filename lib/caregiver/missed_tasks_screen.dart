@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class MissedTasksScreen extends StatelessWidget {
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
@@ -24,11 +26,31 @@ class MissedTasksScreen extends StatelessWidget {
       .collection('care_tasks')
       .where('task_status', arrayContains: 'Missed')
       .snapshots()
-      .map((snapshot) {
+      .asyncMap((snapshot) async {
         final now = DateTime.now();
-        List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+        List<Map<String, dynamic>> tasks = [];
+        
+        for (var doc in snapshot.docs) {
           final data = doc.data();
-          return {
+          
+          // Fetch elderly profile picture
+          String? profilePicUrl;
+          try {
+            final elderlyQuery = await FirebaseFirestore.instance
+                .collection('elderly')
+                .where('elderly_fname', isEqualTo: data['elderly_fname'] ?? '')
+                .limit(1)
+                .get();
+            
+            if (elderlyQuery.docs.isNotEmpty) {
+              final elderlyData = elderlyQuery.docs.first.data();
+              profilePicUrl = elderlyData['elderly_profilePic'] as String?;
+            }
+          } catch (e) {
+            print('Error fetching elderly profile picture: $e');
+          }
+          
+          tasks.add({
             'task_id': data['task_id'] ?? doc.id,
             'elderly_fname': data['elderly_fname'] ?? '',
             'task_description': data['task_description'] ?? '',
@@ -36,8 +58,9 @@ class MissedTasksScreen extends StatelessWidget {
             'task_end': (data['task_end'] is Timestamp) ? (data['task_end'] as Timestamp).toDate() : data['task_end'],
             'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
             'task_frequency': data['task_frequency'] ?? ['Only once'],
-          };
-        }).toList();
+            'elderly_profilePic': profilePicUrl,
+          });
+        }
         // Filter by selected date if set
         if (selectedFilterDate != null) {
           final filterDate = DateTime(selectedFilterDate!.year, selectedFilterDate!.month, selectedFilterDate!.day);
@@ -293,10 +316,23 @@ class MissedTasksScreen extends StatelessWidget {
                                 ),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(12),
-                                  child: Image.asset(
-                                    'assets/images/people_icon.png',
-                                    fit: BoxFit.cover,
-                                  ),
+                                  child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
+                                    ? CachedNetworkImage(
+                                        imageUrl: task['elderly_profilePic'],
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) => Image.asset(
+                                          'assets/images/people_icon.png',
+                                          fit: BoxFit.cover,
+                                        ),
+                                        errorWidget: (context, url, error) => Image.asset(
+                                          'assets/images/people_icon.png',
+                                          fit: BoxFit.cover,
+                                        ),
+                                      )
+                                    : Image.asset(
+                                        'assets/images/people_icon.png',
+                                        fit: BoxFit.cover,
+                                      ),
                                 ),
                               ),
                               const SizedBox(width: 12),
