@@ -13,6 +13,7 @@ import 'shift.dart';
 import 'notifications.dart';
 import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
+import 'services/house_service.dart';
 
 void main() {
   runApp(
@@ -31,6 +32,14 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+  // Get assigned house for caregiver
+  Future<Map<String, dynamic>?> getAssignedHouse() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final caregiverId = authProvider.currentUser?.uid;
+    if (caregiverId == null) return null;
+    final houseService = HouseService();
+    return await houseService.getAssignedHouseForCaregiver(caregiverId);
+  }
   String _formatTime(DateTime? dateTime) {
     if (dateTime == null) return '';
     final hour = dateTime.hour;
@@ -53,21 +62,42 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     });
   }
 
-  // Helper to get upcoming tasks from AddTaskScreen logic
-  // Remove placeholder and use Firestore stream from AddTaskScreen
+  // Helper to get upcoming tasks from AddTaskScreen logic with elderly profile pictures
   Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
-  final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
-  final caregiverId = user?.uid;
+    final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+    final caregiverId = user?.uid;
     return FirebaseFirestore.instance
         .collection('care_tasks')
         .where('task_status', arrayContains: 'Upcoming')
         .where('caregiver_id', isEqualTo: caregiverId)
         .snapshots()
-        .map((snapshot) {
+        .asyncMap((snapshot) async {
           final now = DateTime.now();
-          List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+          List<Map<String, dynamic>> tasks = [];
+          
+          for (var doc in snapshot.docs) {
             final data = doc.data();
-            return {
+            final elderlyId = data['elderly_id'];
+            
+            // Fetch elderly profile picture
+            String profilePicUrl = '';
+            if (elderlyId != null) {
+              try {
+                final elderlyDoc = await FirebaseFirestore.instance
+                    .collection('elderly')
+                    .doc(elderlyId)
+                    .get();
+                if (elderlyDoc.exists) {
+                  final elderlyData = elderlyDoc.data();
+                  profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
+                  print('DEBUG: Found profile pic for ${data['elderly_fname']}: $profilePicUrl');
+                }
+              } catch (e) {
+                print('DEBUG: Error fetching elderly profile pic: $e');
+              }
+            }
+            
+            tasks.add({
               'elderly_fname': data['elderly_fname'] ?? '',
               'task_description': data['task_description'] ?? '',
               'task_start': (data['task_start'] is Timestamp)
@@ -76,8 +106,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
               'task_date': (data['task_date'] is Timestamp)
                   ? (data['task_date'] as Timestamp).toDate()
                   : data['task_date'],
-            };
-          }).toList();
+              'profile_pic': profilePicUrl,
+            });
+          }
+          
           // Sort by task_start closest to now
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime? ?? now;
@@ -376,6 +408,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                                               .toString())
                                                   : '',
                                               Color(0xFFB7DDF5),
+                                              task['profile_pic'] ?? '',
                                             ),
                                           )
                                           .toList(),
@@ -406,57 +439,115 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           ),
 
                           const SizedBox(height: 10),
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => HousesScreen(),
-                                ),
+                          FutureBuilder<Map<String, dynamic>?>(
+                            future: getAssignedHouse(),
+                            builder: (context, snapshot) {
+                              return GestureDetector(
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => HousesScreen(),
+                                    ),
+                                  );
+                                },
+                                child: snapshot.connectionState == ConnectionState.waiting
+                                    ? const Card(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.all(Radius.circular(16)),
+                                        ),
+                                        color: Color(0xFFE6F3FA),
+                                        child: Padding(
+                                          padding: EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                          child: Center(child: CircularProgressIndicator()),
+                                        ),
+                                      )
+                                    : (snapshot.data == null
+                                        ? Card(
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            color: const Color(0xFFE6F3FA),
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                              child: Row(
+                                                children: const [
+                                                  Icon(
+                                                    Icons.home,
+                                                    size: 50,
+                                                    color: Color(0xFF00588E),
+                                                  ),
+                                                  SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: Text(
+                                                      'No house assigned',
+                                                      style: TextStyle(
+                                                        fontSize: 16,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: Color(0xFF00588e),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          )
+                                        : Card(
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            color: const Color(0xFFE6F3FA),
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                              child: Row(
+                                                children: [
+                                                  SizedBox(
+                                                    width: 50,
+                                                    height: 50,
+                                                    child: Image.asset(
+                                                      'assets/houses_img/${snapshot.data!['house_name'] ?? 'Unknown'}.png',
+                                                      fit: BoxFit.contain,
+                                                      errorBuilder: (context, error, stackTrace) => const Icon(
+                                                        Icons.home,
+                                                        size: 50,
+                                                        color: Color(0xFF00588E),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          'House of ${snapshot.data!['house_name'] ?? 'Unknown'}',
+                                                          style: const TextStyle(
+                                                            fontSize: 16,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Color(0xFF00588e),
+                                                          ),
+                                                        ),
+                                                        if (snapshot.data!['house_desc'] != null)
+                                                          Padding(
+                                                            padding: const EdgeInsets.only(top: 4),
+                                                            child: Text(
+                                                              snapshot.data!['house_desc'],
+                                                              style: const TextStyle(
+                                                                fontSize: 14,
+                                                                color: Color(0xFF00588e),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          )
+                                      ),
                               );
                             },
-                            child: Card(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              color: const Color(0xFFE6F3FA),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                                child: Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.home,
-                                      size: 50,
-                                      color: Color(0xFF00588E),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: const [
-                                          Text(
-                                            'House of St. Sebastian',
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                              color: Color(0xFF00588e),
-                                            ),
-                                          ),
-                                          SizedBox(height: 4),
-                                          Text(
-                                            'Females with Psychological Needs',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Color(0xFF00588e),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
                           ),
                         ],
                       ),
@@ -493,7 +584,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     );
   }
 
-  Widget _taskCard(String name, String task, String time, Color bgColor) {
+  Widget _taskCard(String name, String task, String time, Color bgColor, String profilePicUrl) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.all(12),
@@ -511,9 +602,60 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       ),
       child: Row(
         children: [
-          const CircleAvatar(
+          CircleAvatar(
             radius: 25,
-            backgroundImage: AssetImage('assets/images/people_icon.png'),
+            backgroundColor: Colors.grey[200],
+            child: ClipOval(
+              child: profilePicUrl.isNotEmpty
+                  ? CachedNetworkImage(
+                      imageUrl: profilePicUrl,
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Container(
+                        width: 50,
+                        height: 50,
+                        color: Colors.grey[300],
+                        child: const Icon(
+                          Icons.person,
+                          color: Colors.grey,
+                          size: 25,
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Container(
+                        width: 50,
+                        height: 50,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                        ),
+                        child: ClipOval(
+                          child: Image.asset(
+                            'assets/images/people_icon.png',
+                            width: 50,
+                            height: 50,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Container(
+                      width: 50,
+                      height: 50,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,  
+                        color: Colors.white,
+                      ),
+                      child: ClipOval(
+                        child: Image.asset(
+                          'assets/images/people_icon.png',
+                          width: 50,
+                          height: 50,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+            ),
           ),
           const SizedBox(width: 15),
           Expanded(

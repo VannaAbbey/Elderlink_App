@@ -95,7 +95,8 @@ flutter:
     - assets/images/shiftIcon.png
     - assets/images/background1.png
     - assets/images/people_icon.png
-  
+    - assets/houses_img/
+
   fonts:
     - family: Poppins
       fonts:
