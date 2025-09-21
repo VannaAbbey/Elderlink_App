@@ -1088,7 +1088,7 @@ class TaskDetailsDialog extends StatelessWidget {
                           }
                           return 'Only once';
                         } else if (freq == 'Every Assigned Day') {
-                          return 'Every day assigned to this elderly';
+                          return 'Every Assigned Day';
                         } else if (freq == 'Custom') {
                           final customDays = task['custom_days'] as List<dynamic>? ?? [];
                           if (customDays.isNotEmpty) {
@@ -1412,9 +1412,11 @@ class UpcomingTasksScreen extends StatelessWidget {
     }
   }
   
-  final DateTime? selectedFilterDate;
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // To restore: uncomment the lines below and implement UI elements for date selection
+  // final DateTime? selectedFilterDate;
   
-  const UpcomingTasksScreen({super.key, this.selectedFilterDate});
+  const UpcomingTasksScreen({super.key /*, this.selectedFilterDate*/});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     final user = FirebaseAuth.instance.currentUser;
@@ -1514,8 +1516,19 @@ class UpcomingTasksScreen extends StatelessWidget {
           });
         }
         
-        // Note: Removing date filtering to allow tasks to be grouped by their actual occurrence dates
-        // If date filtering is needed, it should be handled differently to not conflict with grouping
+        // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+        // 
+        // REASON FOR REMOVAL: Date filtering was conflicting with the task grouping system.
+        // The current system groups tasks by their actual occurrence dates, and date filtering
+        // was interfering with this logic.
+        //
+        // TO RESTORE DATE FILTERING:
+        // 1. Uncomment the selectedFilterDate field and constructor parameter above
+        // 2. Add UI elements (like "All Dates" button) to allow users to select filter dates
+        // 3. Uncomment and modify the filtering logic below
+        // 4. Ensure filtering works properly with the task grouping system
+        //
+        // ORIGINAL FILTERING LOGIC:
         // DateTime? filterDate;
         // if (selectedFilterDate != null) {
         //   filterDate = DateTime(selectedFilterDate!.year, selectedFilterDate!.month, selectedFilterDate!.day);
@@ -1821,9 +1834,9 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                               } else if (freq == 'Custom') {
                                                                 final customDays = task['custom_days'] as List<dynamic>? ?? [];
                                                                 if (customDays.isNotEmpty) {
-                                                                  return 'Custom days (${customDays.join(', ')})';
+                                                                  return 'Custom (${customDays.join(', ')})';
                                                                 }
-                                                                return 'Custom days';
+                                                                return 'Custom';
                                                               }
                                                               return freq;
                                                             })(),
@@ -2098,12 +2111,11 @@ class UpcomingTasksScreen extends StatelessWidget {
                                         Container(
                                           width: 56,
                                           height: 56,
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF00588e),
-                                            borderRadius: BorderRadius.circular(12),
+                                          decoration: const BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: Color(0xFF00588e),
                                           ),
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(12),
+                                          child: ClipOval(
                                             child: (task['profile_pic'] != null && task['profile_pic'].isNotEmpty)
                                                 ? CachedNetworkImage(
                                                     imageUrl: task['profile_pic'],
@@ -2120,34 +2132,18 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                         size: 28,
                                                       ),
                                                     ),
-                                                    errorWidget: (context, url, error) => Container(
+                                                    errorWidget: (context, url, error) => Image.asset(
+                                                      'assets/images/people_icon.png',
                                                       width: 56,
                                                       height: 56,
-                                                      decoration: const BoxDecoration(
-                                                        color: Colors.white,
-                                                      ),
-                                                      child: ClipRRect(
-                                                        borderRadius: BorderRadius.circular(12),
-                                                        child: Image.asset(
-                                                          'assets/images/people_icon.png',
-                                                          fit: BoxFit.cover,
-                                                        ),
-                                                      ),
+                                                      fit: BoxFit.cover,
                                                     ),
                                                   )
-                                                : Container(
+                                                : Image.asset(
+                                                    'assets/images/people_icon.png',
                                                     width: 56,
                                                     height: 56,
-                                                    decoration: const BoxDecoration(
-                                                      color: Colors.white,
-                                                    ),
-                                                    child: ClipRRect(
-                                                      borderRadius: BorderRadius.circular(12),
-                                                      child: Image.asset(
-                                                        'assets/images/people_icon.png',
-                                                        fit: BoxFit.cover,
-                                                      ),
-                                                    ),
+                                                    fit: BoxFit.cover,
                                                   ),
                                           ),
                                         ),
@@ -3086,8 +3082,8 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                       
                                                       return elderlyAssignedDays.contains(weekday);
                                                     },
-                                                    helpText: 'Select a date when you\'re assigned to this elderly',
-                                                    errorInvalidText: 'Select a day when you\'re assigned to this elderly',
+                                                    helpText: 'Select date for the task to occur:',
+                                                    errorInvalidText: 'Select date for the task to occur:',
                                                     builder: (context, child) {
                                                       return Theme(
                                                         data: Theme.of(context).copyWith(
@@ -3200,12 +3196,30 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                     extraFields['recurring_start_date'] = selectedRecurringStartDate;
                                                   }
                                                   if (valid) {
+                                                    // TIME VALIDATION: Check if task time has passed for today's date
+                                                    bool hasTimePassed = _hasTaskTimePassedToday(saveDate!, startTime!);
+                                                    
+                                                    if (hasTimePassed) {
+                                                      // Handle time validation based on frequency type
+                                                      if (selectedFrequency == 'Only once') {
+                                                        // For "Only once" - show blocking dialog and don't save
+                                                        await _showOnlyOnceTimeValidationDialog(context);
+                                                        return; // Exit without saving
+                                                      } else if (selectedFrequency == 'Every Assigned Day' || selectedFrequency == 'Custom') {
+                                                        // For recurring tasks - show confirmation dialog
+                                                        bool shouldContinue = await _showRecurringTimeValidationDialog(context);
+                                                        if (!shouldContinue) {
+                                                          return; // User cancelled, exit without saving
+                                                        }
+                                                        // User chose to continue, proceed with normal saving
+                                                      }
+                                                    }
+                                                    
                                                     final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
                                                     final elderlyFname = elderlyData['elderly_fname'] ?? '';
-                                                    final now = DateTime.now();
                                                     
                                                     // For recurring tasks, use the selected date for task times
-                                                    final selectedDateForTimes = saveDate ?? now;
+                                                    final selectedDateForTimes = saveDate;
                                                     final taskStart = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, startTime!.hour, startTime!.minute);
                                                     final taskEnd = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, endTime!.hour, endTime!.minute);
                                                     await _saveCareTask(
@@ -3216,7 +3230,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                       taskEnd: taskEnd,
                                                       taskFrequency: saveFrequency,
                                                       taskDescription: activityController.text,
-                                                      taskDate: saveDate!,
+                                                      taskDate: saveDate,
                                                       extraFields: extraFields,
                                                       caregiverAssignedDays: caregiverAssignedDays,
                                                       customDays: selectedDaysBox,
@@ -4004,5 +4018,133 @@ class UpcomingTasksScreen extends StatelessWidget {
     final ampm = hour >= 12 ? 'PM' : 'AM';
     final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
     return '$hour12:$minute $ampm';
+  }
+
+  /// Helper function to check if the selected task time has already passed for today
+  /// Only validates when the start date is set to today
+  bool _hasTaskTimePassedToday(DateTime startDate, TimeOfDay startTime) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final selectedDate = DateTime(startDate.year, startDate.month, startDate.day);
+    
+    // Only validate if the selected date is today
+    if (!selectedDate.isAtSameMomentAs(today)) {
+      return false;
+    }
+    
+    // Check if the selected start time has already passed today
+    final taskTimeToday = DateTime(now.year, now.month, now.day, startTime.hour, startTime.minute);
+    return now.isAfter(taskTimeToday);
+  }
+
+  /// Shows blocking validation dialog for "Only Once" frequency
+  Future<void> _showOnlyOnceTimeValidationDialog(BuildContext context) async {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFD32F2F),
+                size: 28,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Invalid Time',
+                style: TextStyle(
+                  color: Color(0xFFD32F2F),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'The time that has been set for the task has already passed today. Please choose another start and end time for the task.',
+            style: TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF22688E),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Shows confirmation dialog for "Every Assigned Day" and "Custom" frequencies
+  Future<bool> _showRecurringTimeValidationDialog(BuildContext context) async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                color: Color(0xFFFF9800),
+                size: 28,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Time Already Passed',
+                style: TextStyle(
+                  color: Color(0xFFFF9800),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'The time that has been set for the task has already passed today. It will be marked as "Missed" and will recur again on the next applicable date. Continue?',
+            style: TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(false); // User cancelled
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey[600],
+              ),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(true); // User wants to continue
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF22688E),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Continue'),
+            ),
+          ],
+        );
+      },
+    ) ?? false; // Return false if dialog is dismissed
   }
 }

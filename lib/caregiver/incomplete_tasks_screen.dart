@@ -36,6 +36,43 @@ class IncompleteTasksScreen extends StatelessWidget {
     return '$hour12:$minute $ampm';
   }
 
+  String _formatFrequency(Map<String, dynamic> task) {
+    final frequency = task['task_frequency'];
+    
+    if (frequency is List && frequency.isNotEmpty) {
+      final firstFreq = frequency[0].toString();
+      if (firstFreq == 'Custom') {
+        final customDays = task['custom_days'] as List<dynamic>? ?? [];
+        if (customDays.isNotEmpty) {
+          return 'Custom (${customDays.join(', ')})';
+        }
+        return 'Custom';
+      }
+      return frequency.join(', ');
+    }
+    
+    return frequency?.toString() ?? '';
+  }
+
+  String _getNextRecurringDate(Map<String, dynamic> task) {
+    final nextTaskDate = task['next_taskdate'];
+    
+    if (nextTaskDate != null) {
+      DateTime dateTime;
+      if (nextTaskDate is Timestamp) {
+        dateTime = nextTaskDate.toDate();
+      } else if (nextTaskDate is DateTime) {
+        dateTime = nextTaskDate;
+      } else {
+        return '';
+      }
+      
+      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+    }
+    
+    return '';
+  }
+
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
   static String formatHeaderDate(String key) {
     try {
@@ -62,8 +99,9 @@ class IncompleteTasksScreen extends StatelessWidget {
     }
   }
 
-  final DateTime? selectedFilterDate;
-  const IncompleteTasksScreen({super.key, this.selectedFilterDate});
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // final DateTime? selectedFilterDate;
+  const IncompleteTasksScreen({super.key /*, this.selectedFilterDate*/});
 
   /// Returns a stream of incomplete tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -116,47 +154,50 @@ class IncompleteTasksScreen extends StatelessWidget {
                   ? (data['task_date'] as Timestamp).toDate()
                   : data['task_date'],
               'task_frequency': data['task_frequency'] ?? ['Only once'],
+              'custom_days': data['custom_days'] ?? [],
+              'next_taskdate': data['next_taskdate'],
               'inc_reason': data['inc_reason'] ?? '',
               'elderly_profilePic': profilePicUrl,
             });
           }
+          // DATE FILTER FUNCTIONALITY - COMMENTED OUT
           // Filter by selected date if set
-          if (selectedFilterDate != null) {
-            final filterDate = DateTime(
-              selectedFilterDate!.year,
-              selectedFilterDate!.month,
-              selectedFilterDate!.day,
-            );
-            tasks = tasks.where((task) {
-              final taskDate = task['task_date'] as DateTime?;
-              final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-              final freq = freqList.isNotEmpty
-                  ? freqList[0] as String
-                  : 'Only once';
-              if (taskDate == null) return false;
-              final startDate = DateTime(
-                taskDate.year,
-                taskDate.month,
-                taskDate.day,
-              );
-              switch (freq) {
-                case 'Only once':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Every Assigned Day':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Custom':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                default:
-                  return false;
-              }
-            }).toList();
-          }
+          // if (selectedFilterDate != null) {
+          //   final filterDate = DateTime(
+          //     selectedFilterDate!.year,
+          //     selectedFilterDate!.month,
+          //     selectedFilterDate!.day,
+          //   );
+          //   tasks = tasks.where((task) {
+          //     final taskDate = task['task_date'] as DateTime?;
+          //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+          //     final freq = freqList.isNotEmpty
+          //         ? freqList[0] as String
+          //         : 'Only once';
+          //     if (taskDate == null) return false;
+          //     final startDate = DateTime(
+          //       taskDate.year,
+          //       taskDate.month,
+          //       taskDate.day,
+          //     );
+          //     switch (freq) {
+          //       case 'Only once':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       case 'Every Assigned Day':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       case 'Custom':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       default:
+          //         return false;
+          //     }
+          //   }).toList();
+          // }
           // Sort by task_start ascending
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime? ?? now;
@@ -400,16 +441,7 @@ class IncompleteTasksScreen extends StatelessWidget {
                                               const SizedBox(width: 8),
                                               Expanded(
                                                 child: Text(
-                                                  (task['task_frequency']
-                                                              is List &&
-                                                          task['task_frequency']
-                                                              .isNotEmpty)
-                                                      ? (task['task_frequency']
-                                                                as List)
-                                                            .join(', ')
-                                                      : (task['task_frequency']
-                                                                ?.toString() ??
-                                                            ''),
+                                                  _formatFrequency(task),
                                                   style: const TextStyle(
                                                     fontSize: 16,
                                                   ),
@@ -480,6 +512,35 @@ class IncompleteTasksScreen extends StatelessWidget {
                                               ),
                                             ],
                                           ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              const Icon(
+                                                Icons.schedule,
+                                                color: Color(0xFF22688E),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text(
+                                                'Next Recurring:',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: Color(0xFF22688E),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  _getNextRecurringDate(task),
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                  ),
+                                                  softWrap: true,
+                                                  overflow: TextOverflow.visible,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -506,27 +567,38 @@ class IncompleteTasksScreen extends StatelessWidget {
                                   Container(
                                     width: 56,
                                     height: 56,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1B7F5A),
-                                      borderRadius: BorderRadius.circular(12),
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF1B7F5A),
                                     ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
+                                    child: ClipOval(
                                       child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
                                         ? CachedNetworkImage(
                                             imageUrl: task['elderly_profilePic'],
+                                            width: 56,
+                                            height: 56,
                                             fit: BoxFit.cover,
-                                            placeholder: (context, url) => Image.asset(
-                                              'assets/images/people_icon.png',
-                                              fit: BoxFit.cover,
+                                            placeholder: (context, url) => Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: Colors.grey,
+                                                size: 28,
+                                              ),
                                             ),
                                             errorWidget: (context, url, error) => Image.asset(
                                               'assets/images/people_icon.png',
+                                              width: 56,
+                                              height: 56,
                                               fit: BoxFit.cover,
                                             ),
                                           )
                                         : Image.asset(
                                             'assets/images/people_icon.png',
+                                            width: 56,
+                                            height: 56,
                                             fit: BoxFit.cover,
                                           ),
                                     ),

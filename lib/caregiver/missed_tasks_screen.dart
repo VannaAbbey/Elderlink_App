@@ -37,8 +37,9 @@ class MissedTasksScreen extends StatelessWidget {
       return key;
     }
   }
-  final DateTime? selectedFilterDate;
-  const MissedTasksScreen({super.key, this.selectedFilterDate});
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // final DateTime? selectedFilterDate;
+  const MissedTasksScreen({super.key /*, this.selectedFilterDate*/});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
     final user = FirebaseAuth.instance.currentUser;
@@ -89,27 +90,28 @@ class MissedTasksScreen extends StatelessWidget {
             'profile_pic': profilePicUrl,
           });
         }
+        // DATE FILTER FUNCTIONALITY - COMMENTED OUT
         // Filter by selected date if set
-        if (selectedFilterDate != null) {
-          final filterDate = DateTime(selectedFilterDate!.year, selectedFilterDate!.month, selectedFilterDate!.day);
-          tasks = tasks.where((task) {
-            final taskDate = task['task_date'] as DateTime?;
-            final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-            final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
-            if (taskDate == null) return false;
-            final startDate = DateTime(taskDate.year, taskDate.month, taskDate.day);
-            switch (freq) {
-              case 'Only once':
-                return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-              case 'Every Assigned Day':
-                return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-              case 'Custom':
-                return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-              default:
-                return false;
-            }
-          }).toList();
-        }
+        // if (selectedFilterDate != null) {
+        //   final filterDate = DateTime(selectedFilterDate!.year, selectedFilterDate!.month, selectedFilterDate!.day);
+        //   tasks = tasks.where((task) {
+        //     final taskDate = task['task_date'] as DateTime?;
+        //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+        //     final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+        //     if (taskDate == null) return false;
+        //     final startDate = DateTime(taskDate.year, taskDate.month, taskDate.day);
+        //     switch (freq) {
+        //       case 'Only once':
+        //         return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
+        //       case 'Every Assigned Day':
+        //         return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
+        //       case 'Custom':
+        //         return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
+        //       default:
+        //         return false;
+        //     }
+        //   }).toList();
+        // }
         // Sort by task_start ascending
         tasks.sort((a, b) {
           final aStart = a['task_start'] as DateTime? ?? now;
@@ -283,9 +285,7 @@ class MissedTasksScreen extends StatelessWidget {
                                           const SizedBox(width: 8),
                                           Expanded(
                                             child: Text(
-                                              (task['task_frequency'] is List && task['task_frequency'].isNotEmpty)
-                                                ? (task['task_frequency'] as List).join(', ')
-                                                : (task['task_frequency']?.toString() ?? ''),
+                                              _formatFrequency(task),
                                               style: const TextStyle(fontSize: 16),
                                               softWrap: true,
                                               overflow: TextOverflow.visible,
@@ -342,27 +342,38 @@ class MissedTasksScreen extends StatelessWidget {
                               Container(
                                 width: 56,
                                 height: 56,
-                                decoration: BoxDecoration(
-                                  color: const Color.fromARGB(255, 255, 176, 176),
-                                  borderRadius: BorderRadius.circular(12),
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Color.fromARGB(255, 255, 176, 176),
                                 ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
+                                child: ClipOval(
                                   child: task['profile_pic'] != null && task['profile_pic'].toString().isNotEmpty
                                     ? CachedNetworkImage(
                                         imageUrl: task['profile_pic'],
+                                        width: 56,
+                                        height: 56,
                                         fit: BoxFit.cover,
-                                        placeholder: (context, url) => Image.asset(
-                                          'assets/images/people_icon.png',
-                                          fit: BoxFit.cover,
+                                        placeholder: (context, url) => Container(
+                                          width: 56,
+                                          height: 56,
+                                          color: Colors.grey[300],
+                                          child: const Icon(
+                                            Icons.person,
+                                            color: Colors.grey,
+                                            size: 28,
+                                          ),
                                         ),
                                         errorWidget: (context, url, error) => Image.asset(
                                           'assets/images/people_icon.png',
+                                          width: 56,
+                                          height: 56,
                                           fit: BoxFit.cover,
                                         ),
                                       )
                                     : Image.asset(
                                         'assets/images/people_icon.png',
+                                        width: 56,
+                                        height: 56,
                                         fit: BoxFit.cover,
                                       ),
                                 ),
@@ -450,4 +461,24 @@ class MissedTasksScreen extends StatelessWidget {
     final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
     return '$hour12:$minute $ampm';
   }
+
+  String _formatFrequency(Map<String, dynamic> task) {
+    final frequency = task['task_frequency'];
+    
+    if (frequency is List && frequency.isNotEmpty) {
+      final firstFreq = frequency[0].toString();
+      if (firstFreq == 'Custom') {
+        final customDays = task['custom_days'] as List<dynamic>? ?? [];
+        if (customDays.isNotEmpty) {
+          return 'Custom (${customDays.join(', ')})';
+        }
+        return 'Custom';
+      }
+      return frequency.join(', ');
+    }
+    
+    return frequency?.toString() ?? '';
+  }
+
+
   }

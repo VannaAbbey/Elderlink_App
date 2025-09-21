@@ -16,7 +16,26 @@ class AddTaskScreen extends StatefulWidget {
 }
 
 class _AddTaskScreenState extends State<AddTaskScreen> {
-  DateTime? _selectedFilterDate;
+  // ========================================================================
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // ========================================================================
+  // 
+  // REASON FOR REMOVAL: Date filtering was conflicting with the task grouping
+  // system and the "All Dates" UI element was no longer functional.
+  //
+  // TO RESTORE DATE FILTERING FUNCTIONALITY:
+  // 1. Uncomment the _selectedFilterDate variable below
+  // 2. Uncomment the date filter UI (Padding widget with "All Dates" text and calendar icon)
+  // 3. Uncomment the filtering logic in the _getTasks method
+  // 4. Uncomment selectedFilterDate parameters in all task screen constructors:
+  //    - UpcomingTasksScreen
+  //    - CompleteTasksScreen  
+  //    - IncompleteTasksScreen
+  //    - MissedTasksScreen
+  // 5. Uncomment the filtering logic in each task screen's getTasks method
+  // 6. Test that filtering works properly with the task grouping system
+  //
+  // DateTime? _selectedFilterDate;
   
   // Unified task creation logic - matches upcoming_tasks_screen.dart implementation
   Future<void> saveCareTask({
@@ -252,55 +271,56 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
             'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
           };
         }).toList();
+        // DATE FILTER FUNCTIONALITY - COMMENTED OUT
         // Filter by selected date if set (frequency logic not yet working as intended)
-        if (_selectedFilterDate != null) {
-          final filterDate = DateTime(_selectedFilterDate!.year, _selectedFilterDate!.month, _selectedFilterDate!.day);
-          List<Map<String, dynamic>> filteredTasks = [];
-          for (final task in tasks) {
-            final taskDate = task['task_date'] as DateTime?;
-            final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-            final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
-            if (taskDate == null) continue;
-            final startDate = DateTime(taskDate.year, taskDate.month, taskDate.day);
-            bool shouldShow = false;
-            switch (freq) {
-              case 'Only once':
-                shouldShow = filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-                break;
-              case 'Every Assigned Day':
-                // For recurring tasks, check if this date matches the next occurrence
-                final nextTaskDate = task['next_taskdate'] as DateTime?;
-                if (nextTaskDate != null) {
-                  final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
-                  shouldShow = filterDate.year == nextTaskDateOnly.year && 
-                             filterDate.month == nextTaskDateOnly.month && 
-                             filterDate.day == nextTaskDateOnly.day;
-                } else {
-                  shouldShow = false;
-                }
-                break;
-              case 'Custom': {
-                // For custom tasks, check if this date matches the next occurrence
-                final nextTaskDate = task['next_taskdate'] as DateTime?;
-                if (nextTaskDate != null) {
-                  final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
-                  shouldShow = filterDate.year == nextTaskDateOnly.year && 
-                             filterDate.month == nextTaskDateOnly.month && 
-                             filterDate.day == nextTaskDateOnly.day;
-                } else {
-                  shouldShow = false;
-                }
-                break;
-              }
-              default:
-                shouldShow = false;
-            }
-            if (shouldShow) {
-              filteredTasks.add(task);
-            }
-          }
-          tasks = filteredTasks;
-        }
+        // if (_selectedFilterDate != null) {
+        //   final filterDate = DateTime(_selectedFilterDate!.year, _selectedFilterDate!.month, _selectedFilterDate!.day);
+        //   List<Map<String, dynamic>> filteredTasks = [];
+        //   for (final task in tasks) {
+        //     final taskDate = task['task_date'] as DateTime?;
+        //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+        //     final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+        //     if (taskDate == null) continue;
+        //     final startDate = DateTime(taskDate.year, taskDate.month, taskDate.day);
+        //     bool shouldShow = false;
+        //     switch (freq) {
+        //       case 'Only once':
+        //         shouldShow = filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
+        //         break;
+        //       case 'Every Assigned Day':
+        //         // For recurring tasks, check if this date matches the next occurrence
+        //         final nextTaskDate = task['next_taskdate'] as DateTime?;
+        //         if (nextTaskDate != null) {
+        //           final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+        //           shouldShow = filterDate.year == nextTaskDateOnly.year && 
+        //                      filterDate.month == nextTaskDateOnly.month && 
+        //                      filterDate.day == nextTaskDateOnly.day;
+        //         } else {
+        //           shouldShow = false;
+        //         }
+        //         break;
+        //       case 'Custom': {
+        //         // For custom tasks, check if this date matches the next occurrence
+        //         final nextTaskDate = task['next_taskdate'] as DateTime?;
+        //         if (nextTaskDate != null) {
+        //           final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+        //           shouldShow = filterDate.year == nextTaskDateOnly.year && 
+        //                      filterDate.month == nextTaskDateOnly.month && 
+        //                      filterDate.day == nextTaskDateOnly.day;
+        //         } else {
+        //           shouldShow = false;
+        //         }
+        //         break;
+        //       }
+        //       default:
+        //         shouldShow = false;
+        //     }
+        //     if (shouldShow) {
+        //       filteredTasks.add(task);
+        //     }
+        //   }
+        //   tasks = filteredTasks;
+        // }
         // Sort by task_start ascending, closest to now first
         tasks.sort((a, b) {
           final aStart = a['task_start'] as DateTime? ?? now;
@@ -418,78 +438,79 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                           ),
                         ),
                       ),
-                    // Date filter row (moved below tabs, above cards)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8, right: 16, left: 16, bottom: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Text(
-                            _selectedFilterDate != null
-                              ? "${_selectedFilterDate!.year}-${_selectedFilterDate!.month.toString().padLeft(2, '0')}-${_selectedFilterDate!.day.toString().padLeft(2, '0')}"
-                              : 'All Dates',
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF22688E)),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.event, color: Color(0xFF22688E)),
-                            onPressed: () async {
-                              // Fetch caregiver assigned days from cg_house_assign
-                              List<String> caregiverAssignedDays = [];
-                              final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
-                              final caregiverId = user?.uid;
-                              if (caregiverId != null) {
-                                final assignSnap = await FirebaseFirestore.instance
-                                  .collection('cg_house_assign')
-                                  .where('caregiver_id', isEqualTo: caregiverId)
-                                  .get();
-                                if (assignSnap.docs.isNotEmpty) {
-                                  caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
-                                }
-                              }
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: _selectedFilterDate ?? DateTime.now(),
-                                firstDate: DateTime(2020),
-                                lastDate: DateTime(2100),
-                                selectableDayPredicate: (date) {
-                                  String weekday = [
-                                    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-                                  ][date.weekday - 1];
-                                  // Only allow days where caregiver is assigned
-                                  return caregiverAssignedDays.contains(weekday);
-                                },
-                              );
-                              setState(() {
-                                _selectedFilterDate = picked;
-                              });
-                            },
-                          ),
-                          if (_selectedFilterDate != null)
-                            IconButton(
-                              icon: const Icon(Icons.clear, color: Color(0xFFD32F2F)),
-                              tooltip: 'Clear date filter',
-                              onPressed: () {
-                                setState(() {
-                                  _selectedFilterDate = null;
-                                });
-                              },
-                            ),
-                        ],
-                      ),
-                    ),
+                    // DATE FILTER UI - COMMENTED OUT
+                    // To restore: uncomment the Padding widget below and the _selectedFilterDate variable above
+                    // Padding(
+                    //   padding: const EdgeInsets.only(top: 8, right: 16, left: 16, bottom: 4),
+                    //   child: Row(
+                    //     mainAxisAlignment: MainAxisAlignment.end,
+                    //     children: [
+                    //       Text(
+                    //         _selectedFilterDate != null
+                    //           ? "${_selectedFilterDate!.year}-${_selectedFilterDate!.month.toString().padLeft(2, '0')}-${_selectedFilterDate!.day.toString().padLeft(2, '0')}"
+                    //           : 'All Dates',
+                    //         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF22688E)),
+                    //       ),
+                    //       IconButton(
+                    //         icon: const Icon(Icons.event, color: Color(0xFF22688E)),
+                    //         onPressed: () async {
+                    //           // Fetch caregiver assigned days from cg_house_assign
+                    //           List<String> caregiverAssignedDays = [];
+                    //           final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+                    //           final caregiverId = user?.uid;
+                    //           if (caregiverId != null) {
+                    //             final assignSnap = await FirebaseFirestore.instance
+                    //               .collection('cg_house_assign')
+                    //               .where('caregiver_id', isEqualTo: caregiverId)
+                    //               .get();
+                    //             if (assignSnap.docs.isNotEmpty) {
+                    //               caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
+                    //             }
+                    //           }
+                    //           final picked = await showDatePicker(
+                    //             context: context,
+                    //             initialDate: _selectedFilterDate ?? DateTime.now(),
+                    //             firstDate: DateTime(2020),
+                    //             lastDate: DateTime(2100),
+                    //             selectableDayPredicate: (date) {
+                    //               String weekday = [
+                    //                 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+                    //               ][date.weekday - 1];
+                    //               // Only allow days where caregiver is assigned
+                    //               return caregiverAssignedDays.contains(weekday);
+                    //             },
+                    //           );
+                    //           setState(() {
+                    //             _selectedFilterDate = picked;
+                    //           });
+                    //         },
+                    //       ),
+                    //       if (_selectedFilterDate != null)
+                    //         IconButton(
+                    //           icon: const Icon(Icons.clear, color: Color(0xFFD32F2F)),
+                    //           tooltip: 'Clear date filter',
+                    //           onPressed: () {
+                    //             setState(() {
+                    //               _selectedFilterDate = null;
+                    //             });
+                    //           },
+                    //         ),
+                    //     ],
+                    //   ),
+                    // ),
                     Expanded(
                       child: Stack(
                         children: [
                           (() {
                             switch (_selectedTab) {
                               case 0:
-                                return UpcomingTasksScreen(selectedFilterDate: _selectedFilterDate);
+                                return const UpcomingTasksScreen(/* selectedFilterDate: _selectedFilterDate */);
                               case 1:
-                                return CompleteTasksScreen(selectedFilterDate: _selectedFilterDate);
+                                return const CompleteTasksScreen(/* selectedFilterDate: _selectedFilterDate */);
                               case 2:
-                                return IncompleteTasksScreen(selectedFilterDate: _selectedFilterDate);
+                                return const IncompleteTasksScreen(/* selectedFilterDate: _selectedFilterDate */);
                               case 3:
-                                return MissedTasksScreen(selectedFilterDate: _selectedFilterDate);
+                                return const MissedTasksScreen(/* selectedFilterDate: _selectedFilterDate */);
                               default:
                                 return const Center(child: Text('Invalid tab selection.'));
                             }

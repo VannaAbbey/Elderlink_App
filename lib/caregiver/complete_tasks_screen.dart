@@ -94,9 +94,7 @@ class TaskDetailsDialog extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      (task['task_frequency'] is List && task['task_frequency'].isNotEmpty)
-                        ? (task['task_frequency'] as List).join(', ')
-                        : (task['task_frequency']?.toString() ?? ''),
+                      _formatFrequency(task['task_frequency']),
                       style: const TextStyle(fontSize: 16),
                       softWrap: true,
                       overflow: TextOverflow.visible,
@@ -132,6 +130,24 @@ class TaskDetailsDialog extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.event_repeat, color: Color(0xFF22688E)),
+                  const SizedBox(width: 8),
+                  const Text('Next Recurring:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _getNextRecurringDate(),
+                      style: const TextStyle(fontSize: 16),
+                      softWrap: true,
+                      overflow: TextOverflow.visible,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -158,6 +174,71 @@ class TaskDetailsDialog extends StatelessWidget {
     final ampm = hour >= 12 ? 'PM' : 'AM';
     final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
     return '$hour12:$minute $ampm';
+  }
+
+  String _formatFrequency(dynamic frequency) {
+    // Use the same logic as upcoming_tasks_screen.dart
+    final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+    final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+    
+    if (freq == 'Only once') {
+      final onceDate = task['freq_once_date'];
+      if (onceDate != null) {
+        if (onceDate is DateTime) {
+          return 'Only once (${_formatDateToDisplay(onceDate)})';
+        } else if (onceDate is String) {
+          return 'Only once ($onceDate)';
+        }
+      }
+      return 'Only once';
+    } else if (freq == 'Every Assigned Day') {
+      return 'Every Assigned Day';
+    } else if (freq == 'Custom') {
+      final customDays = task['custom_days'] as List<dynamic>? ?? [];
+      if (customDays.isNotEmpty) {
+        return 'Custom (${customDays.join(', ')})';
+      }
+      return 'Custom';
+    }
+    
+    return freq;
+  }
+  
+  String _formatDateToDisplay(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+  
+
+
+  String _getNextRecurringDate() {
+    final frequency = task['task_frequency'];
+    final nextTaskDate = task['next_taskdate'];
+    
+    // Check if it's a one-time task
+    if (frequency is List && frequency.isNotEmpty) {
+      final frequencyType = frequency.first.toString();
+      if (frequencyType == 'Only once') {
+        return 'N/A (One-time task)';
+      }
+    } else if (frequency is String && frequency == 'Only once') {
+      return 'N/A (One-time task)';
+    }
+    
+    // Use the next_taskdate field if available
+    if (nextTaskDate != null) {
+      DateTime? nextDate;
+      if (nextTaskDate is Timestamp) {
+        nextDate = nextTaskDate.toDate();
+      } else if (nextTaskDate is DateTime) {
+        nextDate = nextTaskDate;
+      }
+      
+      if (nextDate != null) {
+        return '${nextDate.year}-${nextDate.month.toString().padLeft(2, '0')}-${nextDate.day.toString().padLeft(2, '0')}';
+      }
+    }
+    
+    return 'N/A';
   }
 
 
@@ -235,8 +316,9 @@ class CompleteTasksScreen extends StatelessWidget {
     }
   }
 
-  final DateTime? selectedFilterDate;
-  const CompleteTasksScreen({super.key, this.selectedFilterDate});
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // final DateTime? selectedFilterDate;
+  const CompleteTasksScreen({super.key /*, this.selectedFilterDate*/});
 
   /// Returns a stream of completed tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -275,6 +357,9 @@ class CompleteTasksScreen extends StatelessWidget {
               print('Error fetching elderly profile picture: $e');
             }
             
+            // Keep minimal debug logging for the frequency field
+            print('🔍 Frequency data: ${data['task_frequency']} (${data['task_frequency'].runtimeType})');
+            
             tasks.add({
               'task_id': data['task_id'] ?? doc.id,
               'elderly_fname': data['elderly_fname'] ?? '',
@@ -288,47 +373,54 @@ class CompleteTasksScreen extends StatelessWidget {
               'task_date': (data['task_date'] is Timestamp)
                   ? (data['task_date'] as Timestamp).toDate()
                   : data['task_date'],
+              'next_taskdate': data['next_taskdate'],
               'task_frequency': data['task_frequency'] ?? ['Only once'],
+              // Include potential custom days fields
+              'custom_days': data['custom_days'],
+              'task_days': data['task_days'],
+              'recurring_days': data['recurring_days'],
+              'selected_days': data['selected_days'],
               'elderly_profilePic': profilePicUrl,
             });
           }
+          // DATE FILTER FUNCTIONALITY - COMMENTED OUT
           // Filter by selected date if set
-          if (selectedFilterDate != null) {
-            final filterDate = DateTime(
-              selectedFilterDate!.year,
-              selectedFilterDate!.month,
-              selectedFilterDate!.day,
-            );
-            tasks = tasks.where((task) {
-              final taskDate = task['task_date'] as DateTime?;
-              final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-              final freq = freqList.isNotEmpty
-                  ? freqList[0] as String
-                  : 'Only once';
-              if (taskDate == null) return false;
-              final startDate = DateTime(
-                taskDate.year,
-                taskDate.month,
-                taskDate.day,
-              );
-              switch (freq) {
-                case 'Only once':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Every Assigned Day':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Custom':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                default:
-                  return false;
-              }
-            }).toList();
-          }
+          // if (selectedFilterDate != null) {
+          //   final filterDate = DateTime(
+          //     selectedFilterDate!.year,
+          //     selectedFilterDate!.month,
+          //     selectedFilterDate!.day,
+          //   );
+          //   tasks = tasks.where((task) {
+          //     final taskDate = task['task_date'] as DateTime?;
+          //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+          //     final freq = freqList.isNotEmpty
+          //         ? freqList[0] as String
+          //         : 'Only once';
+          //     if (taskDate == null) return false;
+          //     final startDate = DateTime(
+          //       taskDate.year,
+          //       taskDate.month,
+          //       taskDate.day,
+          //     );
+          //     switch (freq) {
+          //       case 'Only once':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       case 'Every Assigned Day':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       case 'Custom':
+          //         return filterDate.year == startDate.year &&
+          //             filterDate.month == startDate.month &&
+          //             filterDate.day == startDate.day;
+          //       default:
+          //         return false;
+          //     }
+          //   }).toList();
+          // }
           // Sort by task_start ascending
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime? ?? now;
@@ -458,27 +550,38 @@ class CompleteTasksScreen extends StatelessWidget {
                                   Container(
                                     width: 56,
                                     height: 56,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF00588e),
-                                      borderRadius: BorderRadius.circular(12),
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF00588e),
                                     ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
+                                    child: ClipOval(
                                       child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
                                         ? CachedNetworkImage(
                                             imageUrl: task['elderly_profilePic'],
+                                            width: 56,
+                                            height: 56,
                                             fit: BoxFit.cover,
-                                            placeholder: (context, url) => Image.asset(
-                                              'assets/images/people_icon.png',
-                                              fit: BoxFit.cover,
+                                            placeholder: (context, url) => Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: Colors.grey,
+                                                size: 28,
+                                              ),
                                             ),
                                             errorWidget: (context, url, error) => Image.asset(
                                               'assets/images/people_icon.png',
+                                              width: 56,
+                                              height: 56,
                                               fit: BoxFit.cover,
                                             ),
                                           )
                                         : Image.asset(
                                             'assets/images/people_icon.png',
+                                            width: 56,
+                                            height: 56,
                                             fit: BoxFit.cover,
                                           ),
                                     ),
