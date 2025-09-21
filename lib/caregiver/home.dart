@@ -53,6 +53,228 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     return '$hour12:$minute $ampm';
   }
 
+  // Helper formatting functions for task dialog
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  String _formatTimeDialog(DateTime dateTime) {
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  // Convert 24-hour format to 12-hour format for shift schedule
+  String _convertTo12HourFormat(String time24) {
+    if (time24.isEmpty) return '';
+    
+    try {
+      final parts = time24.split(':');
+      if (parts.length < 2) return time24;
+      
+      final hour = int.parse(parts[0]);
+      final minute = parts[1];
+      
+      if (hour == 0) {
+        return '12:$minute AM';
+      } else if (hour < 12) {
+        return '$hour:$minute AM';
+      } else if (hour == 12) {
+        return '12:$minute PM';
+      } else {
+        return '${hour - 12}:$minute PM';
+      }
+    } catch (e) {
+      return time24; // Return original if parsing fails
+    }
+  }
+
+  // Get caregiver's status information from cg_house_assign
+  Future<Map<String, dynamic>?> getCaregiverStatus() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final caregiverId = authProvider.currentUser?.uid;
+    if (caregiverId == null) return null;
+
+    try {
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .get();
+
+      if (querySnapshot.docs.isNotEmpty) {
+        return querySnapshot.docs.first.data();
+      }
+    } catch (e) {
+      print('Error fetching caregiver status: $e');
+    }
+    return null;
+  }
+
+  // Show task details dialog similar to upcoming tasks screen
+  void _showTaskDetailsDialog(BuildContext context, Map<String, dynamic> task) {
+    showDialog(
+      context: context,
+      builder: (BuildContext ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: Container(
+            width: 350,
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 8.0),
+                          child: Text(
+                            'Task Details',
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF22688E),
+                            ),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.person, color: Color(0xFF22688E)),
+                      const SizedBox(width: 8),
+                      const Text('Name:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          task['elderly_fname'] ?? '',
+                          style: const TextStyle(fontSize: 16),
+                          softWrap: true,
+                          overflow: TextOverflow.visible,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.assignment, color: Color(0xFF22688E)),
+                      const SizedBox(width: 8),
+                      const Text('Activity:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          task['task_description'] ?? '',
+                          style: const TextStyle(fontSize: 16),
+                          softWrap: true,
+                          overflow: TextOverflow.visible,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.access_time, color: Color(0xFF22688E)),
+                      const SizedBox(width: 8),
+                      const Text('Time:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E)),),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${task['task_start'] != null ? _formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? _formatTime(task['task_end']) : ''}',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.repeat, color: Color(0xFF22688E)),
+                      const SizedBox(width: 8),
+                      const Text('Frequency:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          (() {
+                            final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+                            final freq = freqList.isNotEmpty 
+                                ? (freqList[0] is String ? freqList[0] as String : freqList[0].toString())
+                                : 'Only once';
+                            if (freq == 'Only once') {
+                              final onceDate = task['freq_once_date'];
+                              if (onceDate != null) {
+                                if (onceDate is DateTime) {
+                                  return 'Only once (${_formatDate(onceDate)})';
+                                } else if (onceDate is String) {
+                                  return 'Only once ($onceDate)';
+                                }
+                              }
+                              return 'Only once';
+                            } else if (freq == 'Every Assigned Day') {
+                              return 'Every day assigned to this elderly';
+                            } else if (freq == 'Custom') {
+                              final customDays = task['custom_days'] as List<dynamic>? ?? [];
+                              if (customDays.isNotEmpty) {
+                                return 'Custom days (${customDays.join(', ')})';
+                              }
+                              return 'Custom days';
+                            }
+                            return freq;
+                          })(),
+                          style: const TextStyle(fontSize: 16),
+                          softWrap: true,
+                          overflow: TextOverflow.visible,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.calendar_today, color: Color(0xFF22688E)),
+                      const SizedBox(width: 8),
+                      const Text('Created:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                      const SizedBox(width: 8),
+                      Text(
+                        (() {
+                          final created = task['created_at'];
+                          if (created == null) return '';
+                          if (created is DateTime) {
+                            return '${_formatDate(created)} at ${_formatTimeDialog(created)}';
+                          }
+                          return created.toString();
+                        })(),
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -73,6 +295,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         .snapshots()
         .asyncMap((snapshot) async {
           final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
           List<Map<String, dynamic>> tasks = [];
           
           for (var doc in snapshot.docs) {
@@ -97,24 +320,69 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
               }
             }
             
-            tasks.add({
-              'elderly_fname': data['elderly_fname'] ?? '',
-              'task_description': data['task_description'] ?? '',
-              'task_start': (data['task_start'] is Timestamp)
-                  ? (data['task_start'] as Timestamp).toDate()
-                  : data['task_start'],
-              'task_date': (data['task_date'] is Timestamp)
-                  ? (data['task_date'] as Timestamp).toDate()
-                  : data['task_date'],
-              'profile_pic': profilePicUrl,
-            });
+            final taskStart = (data['task_start'] is Timestamp)
+                ? (data['task_start'] as Timestamp).toDate()
+                : data['task_start'] as DateTime?;
+            final taskDate = (data['task_date'] is Timestamp)
+                ? (data['task_date'] as Timestamp).toDate()
+                : data['task_date'] as DateTime?;
+            
+            // For recurring tasks, the actual execution date might be in task_date
+            // For one-time tasks, it might be in task_start or freq_once_date
+            final freqOnceDate = (data['freq_once_date'] is Timestamp)
+                ? (data['freq_once_date'] as Timestamp).toDate()
+                : data['freq_once_date'] as DateTime?;
+            
+            // Determine the actual scheduled execution date
+            final effectiveDateTime = taskDate ?? taskStart ?? freqOnceDate;
+            
+            // Only include tasks from today onwards
+            if (effectiveDateTime != null && 
+                effectiveDateTime.isAfter(today.subtract(Duration(days: 1)))) {
+              
+              tasks.add({
+                // Basic task info for display
+                'elderly_fname': data['elderly_fname'] ?? '',
+                'task_description': data['task_description'] ?? '',
+                'task_start': taskStart,
+                'task_date': taskDate,
+                'profile_pic': profilePicUrl,
+                // Complete task data for dialog
+                'task_id': doc.id,
+                'task_end': (data['task_end'] is Timestamp)
+                    ? (data['task_end'] as Timestamp).toDate()
+                    : data['task_end'],
+                'task_frequency': data['task_frequency'] ?? ['Only once'],
+                'freq_once_date': (data['freq_once_date'] is Timestamp)
+                    ? (data['freq_once_date'] as Timestamp).toDate()
+                    : data['freq_once_date'],
+                'custom_days': data['custom_days'] ?? [],
+                'created_at': (data['created_at'] is Timestamp)
+                    ? (data['created_at'] as Timestamp).toDate()
+                    : data['created_at'],
+                'task_status': data['task_status'] ?? [],
+                'caregiver_id': data['caregiver_id'] ?? '',
+                'elderly_id': data['elderly_id'] ?? '',
+              });
+            }
           }
           
-          // Sort by task_start closest to now
+          // Sort by closest to current date and time (chronological order)
+          // This prioritizes date first, then time within the same date
           tasks.sort((a, b) {
-            final aStart = a['task_start'] as DateTime? ?? now;
-            final bStart = b['task_start'] as DateTime? ?? now;
-            return aStart.compareTo(bStart);
+            final aStart = a['task_start'] as DateTime?;
+            final bStart = b['task_start'] as DateTime?;
+            final aDate = a['task_date'] as DateTime?;
+            final bDate = b['task_date'] as DateTime?;
+            final aFreqOnce = a['freq_once_date'] as DateTime?;
+            final bFreqOnce = b['freq_once_date'] as DateTime?;
+            
+            // Use the same priority as in filtering: task_date -> task_start -> freq_once_date
+            final aDateTime = aDate ?? aStart ?? aFreqOnce ?? now;
+            final bDateTime = bDate ?? bStart ?? bFreqOnce ?? now;
+            
+            // Compare full DateTime objects - automatically prioritizes date then time
+            return aDateTime.compareTo(bDateTime);
           });
           return tasks;
         });
@@ -326,7 +594,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           ),
                           const SizedBox(height: 20),
 
-                          // ✅ MODIFIED: Light blue background for "Today's Tasks"
+                          // ✅ MODIFIED: Light blue background for "Upcoming Tasks"
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
@@ -349,7 +617,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                         ),
                                         SizedBox(width: 6),
                                         Text(
-                                          "Today's Tasks",
+                                          "Upcoming Tasks",
                                           style: TextStyle(
                                             fontSize: 24,
                                             fontWeight: FontWeight.w700,
@@ -409,6 +677,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                                   : '',
                                               Color(0xFFB7DDF5),
                                               task['profile_pic'] ?? '',
+                                              task, // Pass complete task data for dialog
                                             ),
                                           )
                                           .toList(),
@@ -420,134 +689,328 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           ),
 
                           const SizedBox(height: 30),
-                          Row(
-                            children: const [
-                              Icon(
-                                Icons.home,
-                                color: Color(0xFF00588E),
-                                size: 45,
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                "Elderly Houses",
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 10),
-                          FutureBuilder<Map<String, dynamic>?>(
-                            future: getAssignedHouse(),
-                            builder: (context, snapshot) {
-                              return GestureDetector(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => HousesScreen(),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Color(0x3EB7DDF5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.home,
+                                      color: Color(0xFF00588E),
+                                      size: 45,
                                     ),
-                                  );
-                                },
-                                child: snapshot.connectionState == ConnectionState.waiting
-                                    ? const Card(
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.all(Radius.circular(16)),
-                                        ),
-                                        color: Color(0xFFE6F3FA),
-                                        child: Padding(
-                                          padding: EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                                          child: Center(child: CircularProgressIndicator()),
-                                        ),
-                                      )
-                                    : (snapshot.data == null
-                                        ? Card(
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(16),
-                                            ),
-                                            color: const Color(0xFFE6F3FA),
-                                            child: Padding(
-                                              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                                              child: Row(
-                                                children: const [
-                                                  Icon(
-                                                    Icons.home,
-                                                    size: 50,
-                                                    color: Color(0xFF00588E),
-                                                  ),
-                                                  SizedBox(width: 12),
-                                                  Expanded(
-                                                    child: Text(
-                                                      'No house assigned',
-                                                      style: TextStyle(
-                                                        fontSize: 16,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: Color(0xFF00588e),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
+                                    SizedBox(width: 8),
+                                    Text(
+                                      "Elderly Houses",
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                FutureBuilder<Map<String, dynamic>?>(
+                                  future: getAssignedHouse(),
+                                  builder: (context, snapshot) {
+                                    return GestureDetector(
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => HousesScreen(),
+                                          ),
+                                        );
+                                      },
+                                      child: snapshot.connectionState == ConnectionState.waiting
+                                          ? const Card(
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.all(Radius.circular(16)),
                                               ),
-                                            ),
-                                          )
-                                        : Card(
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(16),
-                                            ),
-                                            color: const Color(0xFFE6F3FA),
-                                            child: Padding(
-                                              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                                              child: Row(
-                                                children: [
-                                                  SizedBox(
-                                                    width: 50,
-                                                    height: 50,
-                                                    child: Image.asset(
-                                                      'assets/houses_img/${snapshot.data!['house_name'] ?? 'Unknown'}.png',
-                                                      fit: BoxFit.contain,
-                                                      errorBuilder: (context, error, stackTrace) => const Icon(
-                                                        Icons.home,
-                                                        size: 50,
-                                                        color: Color(0xFF00588E),
-                                                      ),
-                                                    ),
+                                              color: Color(0xFFB7DDF5),
+                                              child: Padding(
+                                                padding: EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                                child: Center(child: CircularProgressIndicator()),
+                                              ),
+                                            )
+                                          : (snapshot.data == null
+                                              ? Card(
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius: BorderRadius.circular(16),
                                                   ),
-                                                  const SizedBox(width: 12),
-                                                  Expanded(
-                                                    child: Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                                      children: [
-                                                        Text(
-                                                          'House of ${snapshot.data!['house_name'] ?? 'Unknown'}',
-                                                          style: const TextStyle(
-                                                            fontSize: 16,
-                                                            fontWeight: FontWeight.bold,
-                                                            color: Color(0xFF00588e),
-                                                          ),
+                                                  color: const Color(0xFFB7DDF5),
+                                                  child: Padding(
+                                                    padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                                    child: Row(
+                                                      children: const [
+                                                        Icon(
+                                                          Icons.home,
+                                                          size: 50,
+                                                          color: Color(0xFF00588E),
                                                         ),
-                                                        if (snapshot.data!['house_desc'] != null)
-                                                          Padding(
-                                                            padding: const EdgeInsets.only(top: 4),
-                                                            child: Text(
-                                                              snapshot.data!['house_desc'],
-                                                              style: const TextStyle(
-                                                                fontSize: 14,
-                                                                color: Color(0xFF00588e),
-                                                              ),
+                                                        SizedBox(width: 12),
+                                                        Expanded(
+                                                          child: Text(
+                                                            'No house assigned',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Color(0xFF00588e),
                                                             ),
                                                           ),
+                                                        ),
                                                       ],
                                                     ),
                                                   ),
+                                                )
+                                              : Card(
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius: BorderRadius.circular(16),
+                                                  ),
+                                                  color: const Color(0xFFB7DDF5),
+                                                  child: Padding(
+                                                    padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                                    child: Row(
+                                                      children: [
+                                                        SizedBox(
+                                                          width: 50,
+                                                          height: 50,
+                                                          child: Image.asset(
+                                                            'assets/houses_img/${snapshot.data!['house_name'] ?? 'Unknown'}.png',
+                                                            fit: BoxFit.contain,
+                                                            errorBuilder: (context, error, stackTrace) => const Icon(
+                                                              Icons.home,
+                                                              size: 50,
+                                                              color: Color(0xFF00588E),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(width: 12),
+                                                        Expanded(
+                                                          child: Column(
+                                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                                            children: [
+                                                              Text(
+                                                                'House of ${snapshot.data!['house_name'] ?? 'Unknown'}',
+                                                                style: const TextStyle(
+                                                                  fontSize: 16,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: Color(0xFF00588e),
+                                                                ),
+                                                              ),
+                                                              if (snapshot.data!['house_desc'] != null)
+                                                                Padding(
+                                                                  padding: const EdgeInsets.only(top: 4),
+                                                                  child: Text(
+                                                                    snapshot.data!['house_desc'],
+                                                                    style: const TextStyle(
+                                                                      fontSize: 14,                                                                      
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                )
+                                            ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          const SizedBox(height: 30),
+                          
+                          // Your Status Section
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Color(0x3EB7DDF5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.accessibility,
+                                      color: Color(0xFF00588E),
+                                      size: 45,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      "Your Status",
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 15),
+                                
+                                FutureBuilder<Map<String, dynamic>?>(
+                                  future: getCaregiverStatus(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState == ConnectionState.waiting) {
+                                      return const Center(child: CircularProgressIndicator());
+                                    }
+                                    
+                                    final statusData = snapshot.data;
+                                    final daysAssigned = statusData?['days_assigned'] as List<dynamic>? ?? [];
+                                    
+                                    // Handle shift field - could be String or Map
+                                    final shiftData = statusData?['shift'];
+                                    final shift = shiftData is String 
+                                        ? shiftData 
+                                        : shiftData is Map<String, dynamic>
+                                            ? (shiftData['name'] ?? shiftData['shift_name'] ?? 'Not assigned')
+                                            : 'Not assigned';
+                                    
+                                    // Handle time_range field - could be Map or String
+                                    final timeRangeData = statusData?['time_range'];
+                                    final timeRange = timeRangeData is Map<String, dynamic>
+                                        ? () {
+                                            final startTime = timeRangeData['start'] ?? '';
+                                            final endTime = timeRangeData['end'] ?? '';
+                                            if (startTime.isNotEmpty && endTime.isNotEmpty) {
+                                              final formattedStart = _convertTo12HourFormat(startTime);
+                                              final formattedEnd = _convertTo12HourFormat(endTime);
+                                              return '$formattedStart - $formattedEnd';
+                                            }
+                                            return 'Not specified';
+                                          }()
+                                        : timeRangeData is String
+                                            ? timeRangeData
+                                            : 'Not specified';
+                                    
+                                    return Column(
+                                      children: [
+                                        // Current Work Schedule
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Color(0xFFB7DDF5),
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              const Text(
+                                                'Current Work Schedule',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color(0xFF00588E),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 15),
+                                              Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                                children: [
+                                                  for (int i = 0; i < 7; i++)
+                                                    Column(
+                                                      children: [
+                                                        Container(
+                                                          width: 32,
+                                                          height: 32,
+                                                          decoration: BoxDecoration(
+                                                            shape: BoxShape.circle,
+                                                            color: daysAssigned.contains(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i])
+                                                                ? Color(0xFF00588E)
+                                                                : Colors.grey.shade300,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i],
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            fontWeight: FontWeight.w500,
+                                                            color: Color(0xFF00588E),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
                                                 ],
                                               ),
-                                            ),
-                                          )
-                                      ),
-                              );
-                            },
+                                            ],
+                                          ),
+                                        ),
+                                        
+                                        const SizedBox(height: 15),
+                                        
+                                        // Current Shift Schedule
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Color(0xFFB7DDF5),
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              const Icon(
+                                                Icons.access_time,
+                                                color: Color(0xFF00588E),
+                                                size: 70,
+                                              ),
+                                              const SizedBox(width: 20),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                                  children: [
+                                                    const Text(
+                                                      'Current Shift Schedule',
+                                                      style: TextStyle(
+                                                        fontSize: 16,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: Color(0xFF00588E),
+                                                      ),
+                                                      textAlign: TextAlign.center,
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      '${shift.toUpperCase()} SHIFT',
+                                                      style: TextStyle(
+                                                        fontSize: 24,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: Color(0xFF00588E),
+                                                      ),
+                                                      textAlign: TextAlign.center,
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Text(
+                                                      timeRange,
+                                                      style: TextStyle(
+                                                        fontSize: 18,
+                                                        fontWeight: FontWeight.w600,
+                                                        color: Color(0xFF00588E),
+                                                      ),
+                                                      textAlign: TextAlign.center,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -584,22 +1047,24 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     );
   }
 
-  Widget _taskCard(String name, String task, String time, Color bgColor, String profilePicUrl) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            spreadRadius: 1,
-            blurRadius: 6,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
+  Widget _taskCard(String name, String task, String time, Color bgColor, String profilePicUrl, Map<String, dynamic> taskData) {
+    return GestureDetector(
+      onTap: () => _showTaskDetailsDialog(context, taskData),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 20),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              spreadRadius: 1,
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
       child: Row(
         children: [
           CircleAvatar(
@@ -622,38 +1087,18 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                           size: 25,
                         ),
                       ),
-                      errorWidget: (context, url, error) => Container(
+                      errorWidget: (context, url, error) => Image.asset(
+                        'assets/images/people_icon.png',
                         width: 50,
                         height: 50,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                        ),
-                        child: ClipOval(
-                          child: Image.asset(
-                            'assets/images/people_icon.png',
-                            width: 50,
-                            height: 50,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
+                        fit: BoxFit.cover,
                       ),
                     )
-                  : Container(
+                  : Image.asset(
+                      'assets/images/people_icon.png',
                       width: 50,
                       height: 50,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,  
-                        color: Colors.white,
-                      ),
-                      child: ClipOval(
-                        child: Image.asset(
-                          'assets/images/people_icon.png',
-                          width: 50,
-                          height: 50,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
+                      fit: BoxFit.cover,
                     ),
             ),
           ),
@@ -663,12 +1108,19 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(task),
+                Text(
+                  task,
+                  softWrap: true,
+                  overflow: TextOverflow.visible,
+                  maxLines: 2,
+                ),
               ],
             ),
           ),
+          const SizedBox(width: 10), // Add spacing between text and time
           Text(time, style: const TextStyle(fontWeight: FontWeight.bold)),
         ],
+      ),
       ),
     );
   }

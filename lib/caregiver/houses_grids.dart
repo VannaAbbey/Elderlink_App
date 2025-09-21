@@ -15,7 +15,7 @@ class AliveProfilesGrid extends StatelessWidget {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
-        childAspectRatio: 0.85,
+        childAspectRatio: 1.0,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
@@ -65,57 +65,44 @@ class AliveProfilesGrid extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: profilePic != null && profilePic.isNotEmpty
-                        ? CachedNetworkImage(
-                            imageUrl: profilePic,
-                            width: 80,
-                            height: 80,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                    ),
+                    child: ClipOval(
+                      child: profilePic != null && profilePic.isNotEmpty
+                          ? CachedNetworkImage(
+                              imageUrl: profilePic,
                               width: 80,
                               height: 80,
-                              color: Colors.grey[300],
-                              child: const Icon(
-                                Icons.person,
-                                color: Colors.grey,
-                                size: 40,
-                              ),
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              width: 80,
-                              height: 80,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
-                              child: ClipOval(
-                                child: Image.asset(
-                                  'assets/images/people_icon.png',
-                                  width: 80,
-                                  height: 80,
-                                  fit: BoxFit.cover,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Container(
+                                width: 80,
+                                height: 80,
+                                color: Colors.grey[300],
+                                child: const Icon(
+                                  Icons.person,
+                                  color: Colors.grey,
+                                  size: 40,
                                 ),
                               ),
-                            ),
-                          )
-                        : Container(
-                            width: 80,
-                            height: 80,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white,
-                            ),
-                            child: ClipOval(
-                              child: Image.asset(
+                              errorWidget: (context, url, error) => Image.asset(
                                 'assets/images/people_icon.png',
                                 width: 80,
                                 height: 80,
                                 fit: BoxFit.cover,
                               ),
+                            )
+                          : Image.asset(
+                              'assets/images/people_icon.png',
+                              width: 80,
+                              height: 80,
+                              fit: BoxFit.cover,
                             ),
-                          ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Text(
@@ -192,7 +179,7 @@ class DeceasedProfilesGrid extends StatelessWidget {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
-        childAspectRatio: 0.85,
+        childAspectRatio: 1.0,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
@@ -242,62 +229,49 @@ class DeceasedProfilesGrid extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: ColorFiltered(
-                      colorFilter: ColorFilter.mode(
-                        Colors.grey,
-                        BlendMode.saturation,
-                      ),
-                      child: profilePic != null && profilePic.isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: profilePic,
-                              width: 80,
-                              height: 80,
-                              fit: BoxFit.cover,
-                              placeholder: (context, url) => Container(
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                    ),
+                    child: ClipOval(
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          Colors.grey,
+                          BlendMode.saturation,
+                        ),
+                        child: profilePic != null && profilePic.isNotEmpty
+                            ? CachedNetworkImage(
+                                imageUrl: profilePic,
                                 width: 80,
                                 height: 80,
-                                color: Colors.grey[300],
-                                child: const Icon(
-                                  Icons.person,
-                                  color: Colors.grey,
-                                  size: 40,
-                                ),
-                              ),
-                              errorWidget: (context, url, error) => Container(
-                                width: 80,
-                                height: 80,
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white,
-                                ),
-                                child: ClipOval(
-                                  child: Image.asset(
-                                    'assets/images/people_icon.png',
-                                    width: 80,
-                                    height: 80,
-                                    fit: BoxFit.cover,
+                                fit: BoxFit.cover,
+                                placeholder: (context, url) => Container(
+                                  width: 80,
+                                  height: 80,
+                                  color: Colors.grey[300],
+                                  child: const Icon(
+                                    Icons.person,
+                                    color: Colors.grey,
+                                    size: 40,
                                   ),
                                 ),
-                              ),
-                            )
-                          : Container(
-                              width: 80,
-                              height: 80,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
-                              child: ClipOval(
-                                child: Image.asset(
+                                errorWidget: (context, url, error) => Image.asset(
                                   'assets/images/people_icon.png',
                                   width: 80,
                                   height: 80,
                                   fit: BoxFit.cover,
                                 ),
+                              )
+                            : Image.asset(
+                                'assets/images/people_icon.png',
+                                width: 80,
+                                height: 80,
+                                fit: BoxFit.cover,
                               ),
-                            ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),

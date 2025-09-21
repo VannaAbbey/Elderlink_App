@@ -258,7 +258,7 @@ class _HousesScreenState extends State<HousesScreen> {
                               'elderly_id': e['elderly_id'],
                               'name': (e['elderly_sex'] == 'Female' ? 'Lola ' : 'Lolo ') + (e['elderly_fname'] ?? ''),
                               'full_name': '${e['elderly_fname'] ?? ''} ${e['elderly_lname'] ?? ''}',
-                              'profile_pic': e['elderly_profile_pic'] ?? '',
+                              'profile_pic': e['elderly_profilePic'] ?? e['profile_pic'] ?? '',
                               'birthdate': e['elderly_birthdate'],
                               'sex': e['elderly_sex'] ?? '',
                               'days_assigned': e['days_assigned'] ?? [],
@@ -281,7 +281,7 @@ class _HousesScreenState extends State<HousesScreen> {
                               'elderly_id': e['elderly_id'],
                               'name': (e['elderly_sex'] == 'Female' ? 'Lola ' : 'Lolo ') + (e['elderly_fname'] ?? ''),
                               'full_name': '${e['elderly_fname'] ?? ''} ${e['elderly_lname'] ?? ''}',
-                              'profile_pic': e['elderly_profile_pic'] ?? '',
+                              'profile_pic': e['elderly_profilePic'] ?? e['profile_pic'] ?? '',
                               'birthdate': e['elderly_birthdate'],
                               'sex': e['elderly_sex'] ?? '',
                               'days_assigned': [], // Not relevant for deceased
@@ -350,6 +350,26 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
   int selectedTab = 0; // 0 = Alive, 1 = Deceased
   bool isSortedAscending = true; // true = A-Z, false = Z-A
   bool isSorted = true; // Track if data is currently sorted - initialize to true for alphabetical order
+  
+  // Search functionality
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text.toLowerCase();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   void _toggleSort() {
     setState(() {
@@ -368,13 +388,36 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
     });
   }
 
-  List<Map<String, dynamic>> _getSortedProfiles(List<Map<String, dynamic>> profiles) {
-    if (!isSorted) {
-      return profiles; // Return original order
+  List<Map<String, dynamic>> _getFilteredAndSortedProfiles(List<Map<String, dynamic>> profiles) {
+    // First apply search filter
+    List<Map<String, dynamic>> filteredProfiles = profiles;
+    
+    if (_searchQuery.isNotEmpty) {
+      filteredProfiles = profiles.where((profile) {
+        final fullName = (profile['full_name'] as String? ?? '').toLowerCase();
+        final firstName = (profile['elderly_fname'] as String? ?? '').toLowerCase();
+        final lastName = (profile['elderly_lname'] as String? ?? '').toLowerCase();
+        final displayName = (profile['name'] as String? ?? '').toLowerCase();
+        final condition = (profile['elderly_condition'] as String? ?? '').toLowerCase();
+        final mobilityStatus = (profile['elderly_mobilityStatus'] as String? ?? '').toLowerCase();
+        
+        // Search in multiple fields including name, condition, and mobility status
+        return fullName.contains(_searchQuery) ||
+               firstName.contains(_searchQuery) ||
+               lastName.contains(_searchQuery) ||
+               displayName.contains(_searchQuery) ||
+               condition.contains(_searchQuery) ||
+               mobilityStatus.contains(_searchQuery);
+      }).toList();
     }
     
-    // Create a copy and sort by elderly_fname (which is in the 'name' field after processing)
-    final sortedList = List<Map<String, dynamic>>.from(profiles);
+    // Then apply sorting if enabled
+    if (!isSorted) {
+      return filteredProfiles; // Return filtered list in original order
+    }
+    
+    // Create a copy and sort by full_name
+    final sortedList = List<Map<String, dynamic>>.from(filteredProfiles);
     sortedList.sort((a, b) {
       final nameA = (a['full_name'] as String? ?? '').toLowerCase();
       final nameB = (b['full_name'] as String? ?? '').toLowerCase();
@@ -383,6 +426,69 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
     });
     
     return sortedList;
+  }
+
+  Widget _buildProfileGrid() {
+    final profiles = selectedTab == 0 
+        ? _getFilteredAndSortedProfiles(widget.aliveProfiles)
+        : _getFilteredAndSortedProfiles(widget.deceasedProfiles);
+    
+    // Show "No results found" message when search returns empty results
+    if (profiles.isEmpty && _searchQuery.isNotEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.search_off,
+              size: 80,
+              color: Colors.grey.withOpacity(0.5),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No elderly found for "$_searchQuery"',
+              style: const TextStyle(
+                fontSize: 18,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Try searching with a different name, condition, or mobility status',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.withOpacity(0.7),
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+    
+    // Show appropriate grid based on selected tab
+    return selectedTab == 0
+        ? AliveProfilesGrid(profiles: profiles)
+        : DeceasedProfilesGrid(profiles: profiles);
+  }
+
+  String _buildResultsCountText() {
+    final profiles = selectedTab == 0 
+        ? _getFilteredAndSortedProfiles(widget.aliveProfiles)
+        : _getFilteredAndSortedProfiles(widget.deceasedProfiles);
+    
+    final count = profiles.length;
+    final tabName = selectedTab == 0 ? 'alive' : 'deceased';
+    
+    if (count == 0) {
+      return 'No $tabName elderly found for "$_searchQuery"';
+    } else if (count == 1) {
+      return 'Found 1 $tabName elderly for "$_searchQuery"';
+    } else {
+      return 'Found $count $tabName elderly for "$_searchQuery"';
+    }
   }
 
   @override
@@ -462,7 +568,11 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
                         Expanded(
                           child: GestureDetector(
                             onTap: () {
-                              setState(() => selectedTab = 0);
+                              setState(() {
+                                selectedTab = 0;
+                                // Clear search when switching tabs for better UX
+                                _searchController.clear();
+                              });
                             },
                             child: Container(
                               height: 28, // reduced from 38
@@ -494,7 +604,11 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
                         Expanded(
                           child: GestureDetector(
                             onTap: () {
-                              setState(() => selectedTab = 1);
+                              setState(() {
+                                selectedTab = 1;
+                                // Clear search when switching tabs for better UX
+                                _searchController.clear();
+                              });
                             },
                             child: Container(
                               height: 28, // increased from 25 for consistency
@@ -527,9 +641,10 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
                   ),
                   const SizedBox(height: 18),
                   TextField(
+                    controller: _searchController,
                     decoration: InputDecoration(
                       prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                      hintText: 'Search an Elderly...',
+                      hintText: 'Search by name, condition, or mobility...',
                       hintStyle: const TextStyle(
                         color: Colors.grey,
                           fontSize: 13, // reduced from 15
@@ -554,10 +669,33 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
                           width: 2,
                         ),
                       ),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, color: Colors.grey),
+                              onPressed: () {
+                                _searchController.clear();
+                              },
+                            )
+                          : null,
                     ),
                       style: const TextStyle(fontSize: 15, color: Colors.black),
                   ),
                   const SizedBox(height: 8),
+                  // Results counter
+                  if (_searchQuery.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        _buildResultsCountText(),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -641,9 +779,7 @@ class _HousesTabScaffoldState extends State<_HousesTabScaffold> {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: selectedTab == 0
-                    ? AliveProfilesGrid(profiles: _getSortedProfiles(widget.aliveProfiles))
-                    : DeceasedProfilesGrid(profiles: _getSortedProfiles(widget.deceasedProfiles)),
+                child: _buildProfileGrid(),
               ),
             ),
           ],
