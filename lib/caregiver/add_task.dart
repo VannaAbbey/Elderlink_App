@@ -438,6 +438,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: 10),
                     // DATE FILTER UI - COMMENTED OUT
                     // To restore: uncomment the Padding widget below and the _selectedFilterDate variable above
                     // Padding(
