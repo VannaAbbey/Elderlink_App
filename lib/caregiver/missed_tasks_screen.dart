@@ -2,8 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'upcoming_tasks_screen.dart';
 
 class MissedTasksScreen extends StatelessWidget {
+  void _checkProgressiveTaskSystem(BuildContext context) async {
+    try {
+      print('🔄 MissedTasksScreen: Progressive system triggered at ${DateTime.now()}');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        // Call the Progressive Task System from UpcomingTasksScreen
+        final progressedTasks = await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
+        if (progressedTasks > 0) {
+          print('✅ MissedTasksScreen: Progressed $progressedTasks recurring tasks');
+        } else {
+          print('ℹ️ MissedTasksScreen: No tasks needed progression');
+        }
+      }
+    } catch (e) {
+      print('❌ MissedTasksScreen: Error in progressive system: $e');
+    }
+  }
+
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
   static String formatHeaderDate(String key) {
     try {
@@ -22,9 +41,13 @@ class MissedTasksScreen extends StatelessWidget {
   const MissedTasksScreen({super.key, this.selectedFilterDate});
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    final caregiverId = user?.uid;
+    
     return FirebaseFirestore.instance
       .collection('care_tasks')
       .where('task_status', arrayContains: 'Missed')
+      .where('caregiver_id', isEqualTo: caregiverId)
       .snapshots()
       .asyncMap((snapshot) async {
         final now = DateTime.now();
@@ -32,22 +55,23 @@ class MissedTasksScreen extends StatelessWidget {
         
         for (var doc in snapshot.docs) {
           final data = doc.data();
+          final elderlyId = data['elderly_id'];
           
           // Fetch elderly profile picture
-          String? profilePicUrl;
-          try {
-            final elderlyQuery = await FirebaseFirestore.instance
-                .collection('elderly')
-                .where('elderly_fname', isEqualTo: data['elderly_fname'] ?? '')
-                .limit(1)
-                .get();
-            
-            if (elderlyQuery.docs.isNotEmpty) {
-              final elderlyData = elderlyQuery.docs.first.data();
-              profilePicUrl = elderlyData['elderly_profilePic'] as String?;
+          String profilePicUrl = '';
+          if (elderlyId != null) {
+            try {
+              final elderlyDoc = await FirebaseFirestore.instance
+                  .collection('elderly')
+                  .doc(elderlyId)
+                  .get();
+              if (elderlyDoc.exists) {
+                final elderlyData = elderlyDoc.data();
+                profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
+              }
+            } catch (e) {
+              print('Error fetching elderly profile picture: $e');
             }
-          } catch (e) {
-            print('Error fetching elderly profile picture: $e');
           }
           
           tasks.add({
@@ -57,8 +81,12 @@ class MissedTasksScreen extends StatelessWidget {
             'task_start': (data['task_start'] is Timestamp) ? (data['task_start'] as Timestamp).toDate() : data['task_start'],
             'task_end': (data['task_end'] is Timestamp) ? (data['task_end'] as Timestamp).toDate() : data['task_end'],
             'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
-            'task_frequency': data['task_frequency'] ?? ['Only once'],
-            'elderly_profilePic': profilePicUrl,
+            'created_at': (data['created_at'] is Timestamp) ? (data['created_at'] as Timestamp).toDate() : data['created_at'],
+            'task_frequency': data['task_frequency'] ?? [],
+            'custom_days': data['custom_days'] ?? [],
+            'freq_once_date': (data['freq_once_date'] is Timestamp) ? (data['freq_once_date'] as Timestamp).toDate() : data['freq_once_date'],
+            'next_taskdate': (data['next_taskdate'] is Timestamp) ? (data['next_taskdate'] as Timestamp).toDate() : data['next_taskdate'],
+            'profile_pic': profilePicUrl,
           });
         }
         // Filter by selected date if set
@@ -73,16 +101,10 @@ class MissedTasksScreen extends StatelessWidget {
             switch (freq) {
               case 'Only once':
                 return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-              case 'Every Workday':
-                return !filterDate.isBefore(startDate);
-              case 'Every other day': {
-                final diff = filterDate.difference(startDate).inDays;
-                return diff >= 0 && diff % 2 == 0;
-              }
-              case 'Once a week': {
-                final diff = filterDate.difference(startDate).inDays;
-                return diff >= 0 && filterDate.weekday == startDate.weekday;
-              }
+              case 'Every Assigned Day':
+                return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
+              case 'Custom':
+                return filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
               default:
                 return false;
             }
@@ -98,50 +120,60 @@ class MissedTasksScreen extends StatelessWidget {
       });
   }
 
+  Future<void> _onRefresh(BuildContext context) async {
+    // Trigger progressive task system when user pulls to refresh
+    _checkProgressiveTaskSystem(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Placeholder data for demonstration
-    final List<Map<String, dynamic>> tasks = [
-      {
-        'elderly_fname': 'Lola Maria',
-        'task_description': 'Missed morning medicine',
-        'task_start': DateTime(2025, 9, 13, 8, 0),
-        'task_end': DateTime(2025, 9, 13, 8, 30),
-        'task_date': DateTime(2025, 9, 13),
-      },
-      {
-        'elderly_fname': 'Lolo Juan',
-        'task_description': 'Missed physical therapy',
-        'task_start': DateTime(2025, 9, 13, 10, 0),
-        'task_end': DateTime(2025, 9, 13, 11, 0),
-        'task_date': DateTime(2025, 9, 13),
-      },
-      {
-        'elderly_fname': 'Lola Maria',
-        'task_description': 'Missed evening walk',
-        'task_start': DateTime(2025, 9, 14, 18, 0),
-        'task_end': DateTime(2025, 9, 14, 18, 30),
-        'task_date': DateTime(2025, 9, 14),
-      },
-    ];
+    _checkProgressiveTaskSystem(context);
+    return RefreshIndicator(
+      onRefresh: () => _onRefresh(context),
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+      stream: getTasksStream(),
+      builder: (context, snapshot) {
+        List<Map<String, dynamic>> tasks = snapshot.data ?? [];
+        
+        // Group tasks by their display date
+        Map<String, List<Map<String, dynamic>>> grouped = {};
+        for (var task in tasks) {
+          DateTime? displayDate;
+          final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+          final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+          
+          // For missed tasks, use the date when they were supposed to occur
+          if (freq == 'Only once') {
+            displayDate = task['freq_once_date'] as DateTime? ?? task['task_date'] as DateTime?;
+          } else {
+            // For recurring tasks, use next_taskdate or task_date
+            displayDate = task['next_taskdate'] as DateTime? ?? task['task_date'] as DateTime?;
+          }
+          
+          if (displayDate == null) continue;
+          final key = "${displayDate.year}-${displayDate.month.toString().padLeft(2, '0')}-${displayDate.day.toString().padLeft(2, '0')}";
+          grouped.putIfAbsent(key, () => []).add(task);
+        }
+        
+        // Sort dates closest to today first
+        final now = DateTime.now();
+        final sortedKeys = grouped.keys.toList()
+          ..sort((a, b) {
+            final ad = DateTime.parse(a.replaceAll('-', ''));
+            final bd = DateTime.parse(b.replaceAll('-', ''));
+            return (ad.difference(now).inDays).abs().compareTo((bd.difference(now).inDays).abs());
+          });
 
-    // Group tasks by date
-    Map<String, List<Map<String, dynamic>>> grouped = {};
-    for (var task in tasks) {
-      final date = task['task_date'] as DateTime?;
-      if (date == null) continue;
-      final key = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
-      grouped.putIfAbsent(key, () => []).add(task);
-    }
-    // Sort dates closest to today first
-    final now = DateTime.now();
-    final sortedKeys = grouped.keys.toList()
-      ..sort((a, b) {
-        final ad = DateTime.parse(a.replaceAll('-', ''));
-        final bd = DateTime.parse(b.replaceAll('-', ''));
-        return (ad.difference(now).inDays).abs().compareTo((bd.difference(now).inDays).abs());
-      });
-    return SizedBox.expand(
+        if (tasks.isEmpty) {
+          return const Center(
+            child: Text(
+              'No Missed Tasks',
+              style: TextStyle(fontSize: 18, color: Color(0xFF22688E), fontWeight: FontWeight.bold),
+            ),
+          );
+        }
+
+        return SizedBox.expand(
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         children: [
@@ -316,9 +348,9 @@ class MissedTasksScreen extends StatelessWidget {
                                 ),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(12),
-                                  child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
+                                  child: task['profile_pic'] != null && task['profile_pic'].toString().isNotEmpty
                                     ? CachedNetworkImage(
-                                        imageUrl: task['elderly_profilePic'],
+                                        imageUrl: task['profile_pic'],
                                         fit: BoxFit.cover,
                                         placeholder: (context, url) => Image.asset(
                                           'assets/images/people_icon.png',
@@ -404,7 +436,9 @@ class MissedTasksScreen extends StatelessWidget {
         ],
       ),
     );
-
+      },
+    ),
+    );
   }
 
 

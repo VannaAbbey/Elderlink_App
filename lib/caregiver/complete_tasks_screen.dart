@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'upcoming_tasks_screen.dart';
 
 class TaskDetailsDialog extends StatelessWidget {
   final Map<String, dynamic> task;
@@ -315,18 +316,14 @@ class CompleteTasksScreen extends StatelessWidget {
                   return filterDate.year == startDate.year &&
                       filterDate.month == startDate.month &&
                       filterDate.day == startDate.day;
-                case 'Every Workday':
-                  return !filterDate.isBefore(startDate);
-                case 'Every other day':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && diff % 2 == 0;
-                  }
-                case 'Once a week':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && filterDate.weekday == startDate.weekday;
-                  }
+                case 'Every Assigned Day':
+                  return filterDate.year == startDate.year &&
+                      filterDate.month == startDate.month &&
+                      filterDate.day == startDate.day;
+                case 'Custom':
+                  return filterDate.year == startDate.year &&
+                      filterDate.month == startDate.month &&
+                      filterDate.day == startDate.day;
                 default:
                   return false;
               }
@@ -342,10 +339,44 @@ class CompleteTasksScreen extends StatelessWidget {
         });
   }
 
+  // Progressive task system check - called when screen loads
+  void _checkProgressiveTaskSystem(BuildContext context) async {
+    try {
+      print('🔄 CompleteTasksScreen: Progressive system triggered at ${DateTime.now()}');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        // Call the Progressive Task System from UpcomingTasksScreen
+        final progressedTasks = await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
+        if (progressedTasks > 0) {
+          print('✅ CompleteTasksScreen: $progressedTasks recurring tasks updated');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$progressedTasks recurring tasks updated to next occurrence dates'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ CompleteTasksScreen Progressive system error: $e');
+    }
+  }
+
+  Future<void> _onRefresh(BuildContext context) async {
+    // Trigger progressive task system when user pulls to refresh
+    _checkProgressiveTaskSystem(context);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Trigger progressive task system check when screen loads
+    _checkProgressiveTaskSystem(context);
+    
     // Removed unused placeholder variables
-    return StreamBuilder<List<Map<String, dynamic>>>(
+    return RefreshIndicator(
+      onRefresh: () => _onRefresh(context),
+      child: StreamBuilder<List<Map<String, dynamic>>>(
       stream: getTasksStream(),
       builder: (context, snapshot) {
         final tasks = snapshot.data ?? [];
@@ -542,6 +573,7 @@ class CompleteTasksScreen extends StatelessWidget {
           ),
         );
       },
+    ),
     );
     // Removed duplicate/leftover widget tree after main build method
   }

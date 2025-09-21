@@ -17,19 +17,72 @@ class AddTaskScreen extends StatefulWidget {
 
 class _AddTaskScreenState extends State<AddTaskScreen> {
   DateTime? _selectedFilterDate;
+  
+  // Unified task creation logic - matches upcoming_tasks_screen.dart implementation
   Future<void> saveCareTask({
-  required String elderlyId,
-  required String caregiverId,
-  required String elderlyFname,
-  required DateTime taskStart,
-  required DateTime taskEnd,
-  required List<String> taskFrequency,
-  required String taskDescription,
-  required DateTime taskDate,
+    required String elderlyId,
+    required String caregiverId,
+    required String elderlyFname,
+    required DateTime taskStart,
+    required DateTime taskEnd,
+    required List<String> taskFrequency,
+    required String taskDescription,
+    required DateTime taskDate,
+    Map<String, dynamic>? extraFields,
+    List<String>? customDays,
   }) async {
     final tasksRef = FirebaseFirestore.instance.collection('care_tasks');
     final docRef = tasksRef.doc();
-    await docRef.set({
+    DateTime now = DateTime.now();
+    DateTime? nextTaskDate;
+    DateTime actualTaskDate = taskDate;
+    
+    // Calculate next task date for recurring tasks
+    String frequency = taskFrequency.isNotEmpty ? taskFrequency[0] : 'Only once';
+    
+    // Smart date calculation: If task time has already passed for today, find next applicable date
+    DateTime taskTimeToday = DateTime(now.year, now.month, now.day, taskStart.hour, taskStart.minute);
+    bool taskTimeHasPassed = now.isAfter(taskTimeToday);
+    
+    if (frequency == 'Only once') {
+      // For "Only once" tasks, check if the selected date is today and time has passed
+      if (taskDate.year == now.year && taskDate.month == now.month && taskDate.day == now.day && taskTimeHasPassed) {
+        // Time has passed for today, but for "Only once" tasks, we can't move to next day
+        // Keep the original date - user specifically selected this date
+      }
+      // nextTaskDate remains null for "Only once" tasks
+    } else if (frequency == 'Every Assigned Day') {
+      // For recurring tasks, if time has passed today, start from tomorrow
+      DateTime searchFromDate = taskTimeHasPassed ? now.add(Duration(days: 1)) : now;
+      nextTaskDate = await _getNextAssignedDate(elderlyId, caregiverId, taskStart, searchFromDate);
+      
+      // If time hasn't passed today AND caregiver is assigned today, use today
+      if (!taskTimeHasPassed && await _isAssignedOnDate(elderlyId, caregiverId, now)) {
+        actualTaskDate = DateTime(now.year, now.month, now.day);
+        nextTaskDate = await _getNextAssignedDate(elderlyId, caregiverId, taskStart, now.add(Duration(days: 1)));
+      } else if (nextTaskDate != null) {
+        // Use the calculated next occurrence as the actual task date
+        actualTaskDate = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+        nextTaskDate = await _getNextAssignedDate(elderlyId, caregiverId, taskStart, nextTaskDate.add(Duration(days: 1)));
+      }
+    } else if (frequency == 'Custom' && customDays != null) {
+      // For custom tasks, if time has passed today, start from tomorrow
+      DateTime searchFromDate = taskTimeHasPassed ? now.add(Duration(days: 1)) : now;
+      nextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, searchFromDate, customDays);
+      
+      // Check if today matches custom days and time hasn't passed
+      String todayWeekday = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][now.weekday - 1];
+      if (!taskTimeHasPassed && customDays.contains(todayWeekday) && await _isAssignedOnDate(elderlyId, caregiverId, now)) {
+        actualTaskDate = DateTime(now.year, now.month, now.day);
+        nextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, now.add(Duration(days: 1)), customDays);
+      } else if (nextTaskDate != null) {
+        // Use the calculated next occurrence as the actual task date
+        actualTaskDate = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+        nextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, nextTaskDate.add(Duration(days: 1)), customDays);
+      }
+    }
+    
+    final data = {
       'task_id': docRef.id,
       'elderly_id': elderlyId,
       'caregiver_id': caregiverId,
@@ -38,16 +91,99 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
       'task_end': taskEnd,
       'task_frequency': taskFrequency,
       'task_description': taskDescription,
-      'task_date': taskDate,
+      'task_date': actualTaskDate,
+      'next_taskdate': nextTaskDate,
       'nextuser_id': '',
       'inc_reason': '',
       'created_at': FieldValue.serverTimestamp(),
       'task_status': ['Upcoming'],
-    });
+      'custom_days': customDays ?? [],
+    };
+    if (extraFields != null) {
+      data.addAll(extraFields.map((key, value) => MapEntry(key, value as Object)));
+    }
+    await docRef.set(data);
+  }
+
+  // Helper function to get next assigned date for recurring tasks
+  Future<DateTime?> _getNextAssignedDate(String elderlyId, String caregiverId, DateTime taskStart, DateTime fromDate) async {
+    try {
+      for (int i = 0; i < 14; i++) {
+        DateTime candidate = fromDate.add(Duration(days: i));
+        bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+        
+        if (isAssigned) {
+          DateTime candidateStart = DateTime(candidate.year, candidate.month, candidate.day, taskStart.hour, taskStart.minute);
+          
+          if (i == 0 && DateTime.now().isBefore(candidateStart)) {
+            return candidateStart;
+          } else if (i > 0) {
+            return candidateStart;
+          }
+        }
+      }
+    } catch (e) {
+      print('Error calculating next assigned date: $e');
+    }
+    return null;
+  }
+
+  // Helper function to get next custom date
+  Future<DateTime?> _getNextCustomDate(String elderlyId, String caregiverId, DateTime taskStart, DateTime fromDate, List<String> customDays) async {
+    try {
+      for (int i = 0; i < 14; i++) {
+        DateTime candidate = fromDate.add(Duration(days: i));
+        String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][candidate.weekday - 1];
+        
+        if (customDays.contains(weekdayStr)) {
+          bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+          
+          if (isAssigned) {
+            DateTime candidateStart = DateTime(candidate.year, candidate.month, candidate.day, taskStart.hour, taskStart.minute);
+            
+            if (i == 0 && DateTime.now().isBefore(candidateStart)) {
+              return candidateStart;
+            } else if (i > 0) {
+              return candidateStart;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('Error calculating next custom date: $e');
+    }
+    return null;
+  }
+
+  // Helper function to check if caregiver is assigned to elderly on a specific date
+  Future<bool> _isAssignedOnDate(String elderlyId, String caregiverId, DateTime date) async {
+    try {
+      String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][date.weekday - 1];
+      
+      final assignSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .where('elderly_id', isEqualTo: elderlyId)
+          .get();
+      
+      if (assignSnapshot.docs.isEmpty) return false;
+      
+      for (var doc in assignSnapshot.docs) {
+        final data = doc.data();
+        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
+        if (daysAssigned.contains(weekdayStr)) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      print('Error checking assignment on date: $e');
+      return false;
+    }
   }
   Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiver(String caregiverId) async {
     final assignSnapshot = await FirebaseFirestore.instance
-        .collection('elderly_caregiver_assign')
+        .collection('cg_house_assign')
         .where('caregiver_id', isEqualTo: caregiverId)
         .get();
 
@@ -131,17 +267,29 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
               case 'Only once':
                 shouldShow = filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
                 break;
-              case 'Every Workday':
-                shouldShow = !filterDate.isBefore(startDate);
+              case 'Every Assigned Day':
+                // For recurring tasks, check if this date matches the next occurrence
+                final nextTaskDate = task['next_taskdate'] as DateTime?;
+                if (nextTaskDate != null) {
+                  final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+                  shouldShow = filterDate.year == nextTaskDateOnly.year && 
+                             filterDate.month == nextTaskDateOnly.month && 
+                             filterDate.day == nextTaskDateOnly.day;
+                } else {
+                  shouldShow = false;
+                }
                 break;
-              case 'Every other day': {
-                final diff = filterDate.difference(startDate).inDays;
-                shouldShow = diff >= 0 && diff % 2 == 0;
-                break;
-              }
-              case 'Once a week': {
-                final diff = filterDate.difference(startDate).inDays;
-                shouldShow = diff >= 0 && filterDate.weekday == startDate.weekday;
+              case 'Custom': {
+                // For custom tasks, check if this date matches the next occurrence
+                final nextTaskDate = task['next_taskdate'] as DateTime?;
+                if (nextTaskDate != null) {
+                  final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
+                  shouldShow = filterDate.year == nextTaskDateOnly.year && 
+                             filterDate.month == nextTaskDateOnly.month && 
+                             filterDate.day == nextTaskDateOnly.day;
+                } else {
+                  shouldShow = false;
+                }
                 break;
               }
               default:

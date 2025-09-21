@@ -107,7 +107,7 @@ class HouseService {
           }
 
           final profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
-          print('DEBUG HouseService: Profile pic for ${constructedName}: elderly_profilePic=${elderlyData?['elderly_profilePic']}, profile_pic=${elderlyData?['profile_pic']}, final=${profilePicUrl}');
+          print('DEBUG HouseService: Profile pic for $constructedName: elderly_profilePic=${elderlyData?['elderly_profilePic']}, profile_pic=${elderlyData?['profile_pic']}, final=$profilePicUrl');
 
           final elderlyRecord = <String, dynamic>{
             'elderly_id': elderlyId,
@@ -347,7 +347,7 @@ class HouseService {
         }
         
         final profilePicUrl = elderlyData['elderly_profilePic'] ?? elderlyData['profile_pic'] ?? '';
-        print('DEBUG HouseService: Profile pic for ${constructedName}: elderly_profilePic=${elderlyData['elderly_profilePic']}, profile_pic=${elderlyData['profile_pic']}, final=${profilePicUrl}');
+        print('DEBUG HouseService: Profile pic for $constructedName: elderly_profilePic=${elderlyData['elderly_profilePic']}, profile_pic=${elderlyData['profile_pic']}, final=$profilePicUrl');
 
         final elderlyRecord = <String, dynamic>{
           'elderly_id': elderlyDoc.id,
