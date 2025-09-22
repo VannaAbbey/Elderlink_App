@@ -11,6 +11,7 @@ import 'auth/forgot_pass.dart';
 import 'auth/register_success.dart';
 import 'caregiver/home.dart';
 import 'nurse/home.dart';
+import 'services/task_reminder_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,21 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     print('Firebase initialized successfully');
+    
+    // Initialize task reminder service
+    try {
+      print('🔧 Starting TaskReminderService initialization...');
+      await TaskReminderService().initialize();
+      print('✅ TaskReminderService initialization completed');
+      
+      // Schedule reminders for existing upcoming tasks
+      print('🔧 Scheduling reminders for existing tasks...');
+      await TaskReminderService().scheduleAllUpcomingTaskReminders();
+      print('✅ Existing task reminders scheduled');
+    } catch (e) {
+      print('❌ TaskReminderService initialization failed: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
+    }
     
     // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
     // WARNING: This will delete ALL user data!

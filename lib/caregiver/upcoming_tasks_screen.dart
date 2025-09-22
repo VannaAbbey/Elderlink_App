@@ -4,6 +4,7 @@ import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../services/task_reminder_service.dart';
 
 /*
  * TASK FREQUENCY SYSTEM - Updated Implementation
@@ -559,6 +560,14 @@ class TaskService {
       'task_status': ['Complete'],
       if (caregiverId != null) 'created_by': caregiverId,
     });
+
+    // Cancel any scheduled reminders for this task
+    try {
+      await TaskReminderService().cancelTaskReminders(docId);
+      print('✅ Task reminders cancelled for completed task: $docId');
+    } catch (e) {
+      print('❌ Error cancelling task reminders: $e');
+    }
     
     // For recurring tasks, store the next_taskdate but don't create new task yet
     // The Progressive Task System will handle creating the next occurrence when shift ends
@@ -583,6 +592,14 @@ class TaskService {
       'task_status': ['Incomplete'],
       if (caregiverId != null) 'created_by': caregiverId,
     });
+
+    // Cancel any scheduled reminders for this task
+    try {
+      await TaskReminderService().cancelTaskReminders(docId);
+      print('✅ Task reminders cancelled for incomplete task: $docId');
+    } catch (e) {
+      print('❌ Error cancelling task reminders: $e');
+    }
   }
 
   /// Marks a task as incomplete and handles next occurrence for recurring tasks.
@@ -603,6 +620,14 @@ class TaskService {
       'task_status': ['Incomplete'],
       if (caregiverId != null) 'created_by': caregiverId,
     });
+
+    // Cancel any scheduled reminders for this task
+    try {
+      await TaskReminderService().cancelTaskReminders(docId);
+      print('✅ Task reminders cancelled for incomplete task: $docId');
+    } catch (e) {
+      print('❌ Error cancelling task reminders: $e');
+    }
     
     // For recurring tasks, store the next_taskdate but don't create new task yet
     // The Progressive Task System will handle creating the next occurrence when shift ends
@@ -1146,6 +1171,12 @@ class UpcomingTasksScreen extends StatelessWidget {
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser != null) {
         print('👤 Current user found: ${currentUser.uid}');
+        
+        // Sync task reminders in the background
+        TaskReminderService().scheduleAllUpcomingTaskReminders().catchError((error) {
+          print('❌ Error syncing task reminders: $error');
+        });
+        
         // Call the progressive task system in background (non-blocking)
         TaskService.checkAndProgressRecurringTasks(currentUser.uid).then((progressedTasks) {
           print('📊 Progressive system returned: $progressedTasks tasks progressed');
@@ -2222,7 +2253,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     SizedBox(
-                      width: 140,
+                      width: 120,
                       child: ElevatedButton(
                         onPressed: () async {
                           final caregiverId = await _getCurrentCaregiverId(context);
@@ -3779,6 +3810,34 @@ class UpcomingTasksScreen extends StatelessWidget {
       data.addAll(extraFields.map((key, value) => MapEntry(key, value as Object)));
     }
     await docRef.set(data);
+
+    // Schedule task reminders
+    try {
+      final taskStartDateTime = DateTime(
+        actualTaskDate.year, 
+        actualTaskDate.month, 
+        actualTaskDate.day, 
+        taskStart.hour, 
+        taskStart.minute
+      );
+
+      // Add default 30-minute task duration if end time not available
+      final taskEndDateTime = taskStartDateTime.add(const Duration(minutes: 30));
+      
+      await TaskReminderService().scheduleTaskReminders(
+        taskId: docRef.id,
+        taskStartTime: taskStartDateTime,
+        taskEndTime: taskEndDateTime,
+        taskTitle: taskDescription,
+        elderlyName: elderlyFname,
+        taskDescription: 'Task for $elderlyFname',
+      );
+
+      print('✅ Task reminders scheduled for: $taskDescription at $taskStartDateTime');
+    } catch (e) {
+      print('❌ Error scheduling task reminders: $e');
+      // Don't fail task creation if reminder scheduling fails
+    }
   }
 
   // Helper function to get next assigned date for recurring tasks
@@ -4000,6 +4059,21 @@ class UpcomingTasksScreen extends StatelessWidget {
         'next_taskdate': FieldValue.delete(), // Clear any existing next_taskdate to show original task_date
         if (caregiverId != null) 'created_by': caregiverId,
       });
+      
+      // Send missed task notification
+      try {
+        final taskStartTime = (data['task_start'] as Timestamp?)?.toDate() ?? DateTime.now();
+        await TaskReminderService().showMissedTaskNotification(
+          taskId: docId,
+          elderlyName: data['elderly_fname'] ?? 'Elderly',
+          taskStartTime: taskStartTime,
+          taskTitle: data['task_description'] ?? 'Task',
+          taskDescription: data['task_description'],
+        );
+        print('✅ Missed task notification sent');
+      } catch (notificationError) {
+        print('❌ Error sending missed task notification: $notificationError');
+      }
       
       // For recurring tasks, the Progressive Task System will handle calculating and creating 
       // the next occurrence when the shift ends (same behavior as Complete and Incomplete tasks)
