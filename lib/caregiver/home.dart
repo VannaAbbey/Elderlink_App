@@ -4,8 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../providers/auth_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile.dart';
-import 'settings.dart' as app_settings;
-import 'help_support.dart';
+import 'leave_form.dart' as app_leave_form;
+
 import 'add_task.dart';
 import 'emergency_modal.dart';
 import 'incident.dart';
@@ -549,47 +549,33 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             ],
                           ),
                           const SizedBox(height: 20),
-                          Align(
-                            alignment: Alignment.center,
-                            child: SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.85,
-                              child: TextField(
-                                decoration: InputDecoration(
-                                  prefixIcon: const Icon(
-                                    Icons.search,
-                                    color: Colors.grey,
-                                  ),
-                                  hintText: "Search",
-                                  hintStyle: const TextStyle(
-                                    color: Colors.grey,
-                                    fontSize: 15,
-                                  ),
-                                  filled: true,
-                                  fillColor: Color(0xFFD8F4FF),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    vertical: 9,
-                                    horizontal: 14,
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    borderSide: const BorderSide(
-                                      color: Color(0xFF00588E),
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    borderSide: const BorderSide(
-                                      color: Color(0xFF00588E),
-                                      width: 2,
-                                    ),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Color(0x3EB7DDF5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: const [
+                                Text(
+                                  'Welcome to ElderLink!',
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF00588E),
                                   ),
                                 ),
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.black,
+                                SizedBox(height: 10),
+                                Text(
+                                  'Manage your tasks, view your schedule, and stay connected with your elderly residents.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.black87,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 20),
@@ -1219,31 +1205,19 @@ class CaregiverSidebar extends StatelessWidget {
                     },
                   ),
                   ListTile(
-                    leading: Icon(Icons.settings, color: Color(0xFF00588e)),
-                    title: Text('Settings'),
+                    leading: Icon(Icons.calendar_today, color: Color(0xFF00588e)),
+                    title: Text('Request Leave'),
                     onTap: () {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
                         MaterialPageRoute(
-                          builder: (context) => const app_settings.Settings(),
+                          builder: (context) => const app_leave_form.LeaveForm(),
                         ),
                       );
                     },
                   ),
-                  ListTile(
-                    leading: Icon(Icons.help, color: Color(0xFF00588e)),
-                    title: Text('Help & Support'),
-                    onTap: () {
-                      toggleSidebar();
-                      Navigator.push(
-                        parentContext,
-                        MaterialPageRoute(
-                          builder: (context) => const HelpSupport(),
-                        ),
-                      );
-                    },
-                  ),
+                  // Help & Support removed
                   const Divider(),
                   const SizedBox(height: 20),
                   Center(
