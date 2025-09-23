@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
-import '../providers/auth_provider.dart';
+import '../providers/auth_provider.dart' as app_auth;
 import 'notifications.dart';
-import 'past_added_logs.dart';
+import 'shift_logs.dart';
+import '../services/task_log_service.dart';
+import '../services/additional_log_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ShiftScreen extends StatefulWidget {
   const ShiftScreen({super.key});
@@ -12,28 +16,38 @@ class ShiftScreen extends StatefulWidget {
 }
 
 class _ShiftScreenState extends State<ShiftScreen> {
-  void _showAdditionalLogModal(BuildContext context) {
+  DateTime selectedDate = DateTime.now();
+
+  void _showAdditionalLogModal(BuildContext context) async {
+    // Load existing content for today's log
+    final existingContent = await AdditionalLogService.getCurrentDayAdditionalLog();
+    
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext ctx) {
-        TextEditingController controller = TextEditingController();
+        TextEditingController controller = TextEditingController(text: existingContent);
         bool acknowledged = false;
+        bool isLoading = false;
         return StatefulBuilder(
           builder: (context, setState) {
             return Dialog(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 50),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
               child: Container(
                 width: 340,
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.8,
+                ),
                 padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 15),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -62,7 +76,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                       margin: const EdgeInsets.all(5),
                       child: TextField(
                         controller: controller,
-                        maxLines: 15,
+                        maxLines: 10,
                         style: const TextStyle(fontSize: 16),
                         decoration: const InputDecoration(
                           border: InputBorder.none,
@@ -102,13 +116,45 @@ class _ShiftScreenState extends State<ShiftScreen> {
                       width: double.infinity,
                       height: 40,
                       child: ElevatedButton(
-                        onPressed: (controller.text.trim().isNotEmpty && acknowledged)
-                            ? () {
-                                // TODO: Submit logic
+                        onPressed: (controller.text.trim().isNotEmpty && acknowledged && !isLoading)
+                            ? () async {
+                                setState(() {
+                                  isLoading = true;
+                                });
+                                
+                                try {
+                                  await AdditionalLogService.saveAdditionalLog(controller.text.trim());
+                                  if (ctx.mounted) {
+                                    Navigator.of(ctx).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Additional log saved successfully!'),
+                                        backgroundColor: Color(0xFF22688E),
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (ctx.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Error saving log: $e'),
+                                        backgroundColor: Colors.red,
+                                        duration: const Duration(seconds: 3),
+                                      ),
+                                    );
+                                  }
+                                } finally {
+                                  if (ctx.mounted) {
+                                    setState(() {
+                                      isLoading = false;
+                                    });
+                                  }
+                                }
                               }
                             : null,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: (controller.text.trim().isNotEmpty && acknowledged)
+                          backgroundColor: (controller.text.trim().isNotEmpty && acknowledged && !isLoading)
                               ? Color(0xFF22688E)
                               : Colors.grey,
                           shape: RoundedRectangleBorder(
@@ -116,18 +162,28 @@ class _ShiftScreenState extends State<ShiftScreen> {
                           ),
                           elevation: 4,
                         ),
-                        child: const Text(
-                          'Submit',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
+                        child: isLoading 
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text(
+                                'Submit',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
                       ),
                     ),
   // End of dialog
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
@@ -136,13 +192,65 @@ class _ShiftScreenState extends State<ShiftScreen> {
       },
     );
   }
+
+  Future<void> _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 30)),
+      lastDate: DateTime.now().add(const Duration(days: 7)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFF00588e),
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null && picked != selectedDate) {
+      setState(() {
+        selectedDate = picked;
+      });
+    }
+  }
+
   bool isSidebarOpen = false;
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
+
+  /// Gets task logs for the current authenticated caregiver only
+  Stream<List<Map<String, dynamic>>> _getCurrentCaregiverTaskLogs(DateTime date) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      // Return empty stream if no user is authenticated
+      return Stream.value([]);
+    }
+    
+    print('🔍 Getting task logs for current caregiver: ${user.uid} on date: $date');
+    return TaskLogService.getTaskLogsForCaregiverAndDate(user.uid, date);
+  }
+
+  /// Gets additional logs for the current authenticated caregiver only
+  Stream<String> _getCurrentCaregiverAdditionalLog(DateTime date) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      // Return empty stream if no user is authenticated
+      return Stream.value('');
+    }
+    
+    print('🔍 Getting additional logs for current caregiver: ${user.uid} on date: $date');
+    return AdditionalLogService.getAdditionalLogForDate(date);
+  }
 
   @override
   Widget build(BuildContext context) {
     Future<void> handleLogout() async {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final authProvider = Provider.of<app_auth.AuthProvider>(context, listen: false);
       await authProvider.signOut();
       if (mounted) {
         Navigator.pushNamedAndRemoveUntil(
@@ -218,20 +326,30 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                         children: [
                                           Expanded(
                                             child: Center(
-                                              child: Text(
-                                                _formattedDate(),
-                                                style: const TextStyle(
-                                                  fontSize: 20,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Color(0xFF00588e),
-                                                ),
+                                              child: Column(
+                                                children: [
+                                                  Text(
+                                                    _formattedDate(selectedDate),
+                                                    style: const TextStyle(
+                                                      fontSize: 20,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Color(0xFF00588e),
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    'Task Logs for Selected Date',
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Color(0xFF00588e),
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
                                             ),
                                           ),
                                           InkWell(
-                                            onTap: () {
-                                              // TODO: Implement calendar picker
-                                            },
+                                            onTap: () => _selectDate(context),
                                             child: const Icon(Icons.calendar_today, color: Color(0xFF00588e), size: 28),
                                           ),
                                         ],
@@ -239,35 +357,79 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                       const SizedBox(height: 8),
                                       const Divider(thickness: 1, color: Color(0xFF00588e)),
                                       const SizedBox(height: 9),
-                                      // Task summary row
+                                      // Task summary row - Real-time data from Firebase (filtered by current caregiver)
                                       Expanded(
                                         child: SingleChildScrollView(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              // Placeholder data below for task summary
-                                              _taskSummaryRow(
-                                                time: '10:00AM',
-                                                text: 'Caregiver Matthew completed "Take a Bath" for Lola Celia.',
-                                              ),
-                                              const SizedBox(height: 10),
-                                              _taskSummaryRow(
-                                                time: '11:00 AM',
-                                                text: 'Caregiver Matthew didn\'t complete "Yoga Exercise" for Lola Andrea.',
-                                                reason: 'Reason: Lola Andrea was sleepy.',
-                                              ),
-                                              const SizedBox(height: 10),
-                                              _taskSummaryRow(
-                                                time: '12:00 PM',
-                                                text: 'Caregiver Matthew missed "Eat Lunch" for Lola Andrea.',
-                                              ),
-                                               const SizedBox(height: 10),
-                                              _taskSummaryRow(
-                                                time: '1:00 PM',
-                                                text: 'Caregiver Matthew didn\'t complete "Walking Exercise" for Lolo Adam.',
-                                                reason: 'Reason: Lolo Adam was dizzy.',
-                                              ),
-                                            ],
+                                          child: StreamBuilder<List<Map<String, dynamic>>>(
+                                            stream: _getCurrentCaregiverTaskLogs(selectedDate),
+                                            builder: (context, snapshot) {
+                                              if (snapshot.connectionState == ConnectionState.waiting) {
+                                                return const Center(
+                                                  child: CircularProgressIndicator(
+                                                    color: Color(0xFF00588e),
+                                                  ),
+                                                );
+                                              }
+                                              
+                                              if (snapshot.hasError) {
+                                                return Center(
+                                                  child: Text(
+                                                    'Error loading task logs: ${snapshot.error}',
+                                                    style: const TextStyle(color: Colors.red),
+                                                  ),
+                                                );
+                                              }
+                                              
+                                              final taskLogs = snapshot.data ?? [];
+                                              
+                                              if (taskLogs.isEmpty) {
+                                                return const Center(
+                                                  child: Text(
+                                                    'No tasks to be recorded.',
+                                                    style: TextStyle(
+                                                      fontSize: 16,
+                                                      fontStyle: FontStyle.italic,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                                );
+                                              }
+                                              
+                                              return Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: taskLogs.asMap().entries.map((entry) {
+                                                  final index = entry.key;
+                                                  final log = entry.value;
+                                                  
+                                                  final completionTime = TaskLogService.formatCompletionTime(
+                                                    log['completion_time'] as Timestamp?,
+                                                  );
+                                                  
+                                                  final logMessage = TaskLogService.formatLogMessage(
+                                                    caregiverFname: log['caregiver_fname'] ?? '',
+                                                    elderlyFname: log['elderly_fname'] ?? '',
+                                                    taskDescription: log['task_description'] ?? '',
+                                                    status: log['status'] ?? '',
+                                                  );
+                                                  
+                                                  final reason = log['reason']?.toString().isNotEmpty == true 
+                                                      ? 'Reason: ${log['reason']}'
+                                                      : null;
+                                                  
+                                                  return Column(
+                                                    children: [
+                                                      _taskSummaryRow(
+                                                        time: completionTime,
+                                                        text: logMessage,
+                                                        reason: reason,
+                                                      ),
+                                                      if (index < taskLogs.length - 1) 
+                                                        const SizedBox(height: 10),
+                                                    ],
+                                                  );
+                                                }).toList(),
+                                              );
+                                            },
                                           ),
                                         ),
                                       ),
@@ -289,21 +451,65 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 16),
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: const [
-                                      Text(
+                                    children: [
+                                      const Text(
                                         'Additional Logs:',
                                         style: TextStyle(
                                           fontSize: 16,
-                                          fontWeight: FontWeight.w500,
-                                          fontStyle: FontStyle.italic,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFF00588e),
                                         ),
                                       ),
-                                      SizedBox(height: 12),
-                                      Text(
-                                        'I would like to add that Lola Andrea wanted to try more dancing exercises in the afternoon.',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontStyle: FontStyle.italic,
+                                      const SizedBox(height: 8),
+                                      const Divider(thickness: 1, color: Color(0xFF00588e)),
+                                      const SizedBox(height: 8),
+                                      Expanded(
+                                        child: StreamBuilder<String>(
+                                          stream: _getCurrentCaregiverAdditionalLog(selectedDate),
+                                          builder: (context, snapshot) {
+                                            if (snapshot.connectionState == ConnectionState.waiting) {
+                                              return const Center(
+                                                child: CircularProgressIndicator(
+                                                  color: Color(0xFF00588e),
+                                                  strokeWidth: 2,
+                                                ),
+                                              );
+                                            }
+                                            
+                                            if (snapshot.hasError) {
+                                              return Text(
+                                                'Error loading additional log: ${snapshot.error}',
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.red,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
+                                              );
+                                            }
+                                            
+                                            final additionalLogContent = snapshot.data ?? '';
+                                            
+                                            if (additionalLogContent.isEmpty) {
+                                              return const Text(
+                                                'No additional notes for this date.',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  color: Colors.grey,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
+                                              );
+                                            }
+                                            
+                                            return SingleChildScrollView(
+                                              child: Text(
+                                                additionalLogContent,
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
+                                              ),
+                                            );
+                                          },
                                         ),
                                       ),
                                     ],
@@ -346,7 +552,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                           ),
                           const SizedBox(height: 15),
 
-                          // View Past Logs Button
+                          // View Shift Logs Button
                           SizedBox(
                             width: 200,
                             height: 48,
@@ -354,7 +560,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                               onPressed: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (context) => const PastAddedLogsScreen(),
+                                    builder: (context) => const ShiftLogsScreen(),
                                   ),
                                 );
                               },
@@ -366,7 +572,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                 elevation: 4,
                               ),
                               child: const Text(
-                                'Past Added Logs',
+                                'Shift Logs',
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
@@ -394,9 +600,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
     );
   }
 
-    String _formattedDate() {
-      final now = DateTime.now();
-      return '${_monthName(now.month)} ${now.day}, ${now.year}';
+    String _formattedDate(DateTime date) {
+      return '${_monthName(date.month)} ${date.day}, ${date.year}';
     }
 
     String _monthName(int month) {
