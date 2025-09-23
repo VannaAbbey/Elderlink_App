@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/task_reminder_service.dart';
+import '../services/task_log_service.dart';
 
 /*
  * TASK FREQUENCY SYSTEM - Updated Implementation
@@ -561,6 +562,24 @@ class TaskService {
       if (caregiverId != null) 'created_by': caregiverId,
     });
 
+    // Create task log entry
+    if (caregiverId != null) {
+      try {
+        final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
+        await TaskLogService.createTaskLog(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyId: originalData['elderly_id'] ?? '',
+          elderlyFname: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          status: 'Complete',
+          taskDate: taskDate,
+        );
+      } catch (e) {
+        print('❌ Error creating task log for completed task: $e');
+      }
+    }
+
     // Cancel any scheduled reminders for this task
     try {
       await TaskReminderService().cancelTaskReminders(docId);
@@ -587,11 +606,35 @@ class TaskService {
   static Future<void> markTaskIncomplete(String docId, String reasonText) async {
     final currentUser = FirebaseAuth.instance.currentUser;
     final caregiverId = currentUser?.uid;
+    
+    // Get original task data for logging
+    final docSnap = await _tasksRef.doc(docId).get();
+    final originalData = docSnap.data();
+    
     await _tasksRef.doc(docId).update({
       'inc_reason': reasonText,
       'task_status': ['Incomplete'],
       if (caregiverId != null) 'created_by': caregiverId,
     });
+
+    // Create task log entry
+    if (caregiverId != null && originalData != null) {
+      try {
+        final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
+        await TaskLogService.createTaskLog(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyId: originalData['elderly_id'] ?? '',
+          elderlyFname: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          status: 'Incomplete',
+          taskDate: taskDate,
+          reason: reasonText,
+        );
+      } catch (e) {
+        print('❌ Error creating task log for incomplete task: $e');
+      }
+    }
 
     // Cancel any scheduled reminders for this task
     try {
@@ -620,6 +663,25 @@ class TaskService {
       'task_status': ['Incomplete'],
       if (caregiverId != null) 'created_by': caregiverId,
     });
+
+    // Create task log entry
+    if (caregiverId != null) {
+      try {
+        final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
+        await TaskLogService.createTaskLog(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyId: originalData['elderly_id'] ?? '',
+          elderlyFname: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          status: 'Incomplete',
+          taskDate: taskDate,
+          reason: reasonText,
+        );
+      } catch (e) {
+        print('❌ Error creating task log for incomplete task: $e');
+      }
+    }
 
     // Cancel any scheduled reminders for this task
     try {
@@ -4059,6 +4121,24 @@ class UpcomingTasksScreen extends StatelessWidget {
         'next_taskdate': FieldValue.delete(), // Clear any existing next_taskdate to show original task_date
         if (caregiverId != null) 'created_by': caregiverId,
       });
+
+      // Create task log entry
+      if (caregiverId != null) {
+        try {
+          final taskDate = (data['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
+          await TaskLogService.createTaskLog(
+            taskId: docId,
+            caregiverId: caregiverId,
+            elderlyId: data['elderly_id'] ?? '',
+            elderlyFname: data['elderly_fname'] ?? 'Unknown',
+            taskDescription: data['task_description'] ?? 'Unknown Task',
+            status: 'Missed',
+            taskDate: taskDate,
+          );
+        } catch (e) {
+          print('❌ Error creating task log for missed task: $e');
+        }
+      }
       
       // Send missed task notification
       try {
@@ -4074,6 +4154,8 @@ class UpcomingTasksScreen extends StatelessWidget {
       } catch (notificationError) {
         print('❌ Error sending missed task notification: $notificationError');
       }
+
+
       
       // For recurring tasks, the Progressive Task System will handle calculating and creating 
       // the next occurrence when the shift ends (same behavior as Complete and Incomplete tasks)
