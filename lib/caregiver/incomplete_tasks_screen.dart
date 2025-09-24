@@ -1,10 +1,65 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'upcoming_tasks_screen.dart';
 
-class IncompleteTasksScreen extends StatelessWidget {
+class IncompleteTasksScreen extends StatefulWidget {
+  const IncompleteTasksScreen({super.key});
+
+  @override
+  State<IncompleteTasksScreen> createState() => _IncompleteTasksScreenState();
+}
+
+class _IncompleteTasksScreenState extends State<IncompleteTasksScreen> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  int _refreshKey = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Trigger initial progressive task system check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProgressiveTaskSystem(context);
+    });
+    // Set up periodic refresh every 30 seconds
+    _startPeriodicRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // App came back into focus, refresh the data
+      _checkProgressiveTaskSystem(context);
+      _triggerRefresh();
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _triggerRefresh();
+      }
+    });
+  }
+
+  void _triggerRefresh() {
+    if (mounted) {
+      setState(() {
+        _refreshKey++;
+      });
+    }
+  }
   void _checkProgressiveTaskSystem(BuildContext context) async {
     try {
       print('🔄 IncompleteTasksScreen: Progressive system triggered at ${DateTime.now()}');
@@ -74,7 +129,7 @@ class IncompleteTasksScreen extends StatelessWidget {
   }
 
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
-  static String formatHeaderDate(String key) {
+  String formatHeaderDate(String key) {
     try {
       final date = DateTime.parse(key);
       const months = [
@@ -101,7 +156,7 @@ class IncompleteTasksScreen extends StatelessWidget {
 
   // DATE FILTER FUNCTIONALITY - COMMENTED OUT
   // final DateTime? selectedFilterDate;
-  const IncompleteTasksScreen({super.key /*, this.selectedFilterDate*/});
+
 
   /// Returns a stream of incomplete tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -220,8 +275,41 @@ class IncompleteTasksScreen extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () => _onRefresh(context),
       child: StreamBuilder<List<Map<String, dynamic>>>(
+      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
       stream: getTasksStream(),
       builder: (context, snapshot) {
+        // Show loading spinner while data is loading
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+            ),
+          );
+        }
+        
+        // Handle errors
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 60),
+                const SizedBox(height: 16),
+                Text(
+                  'Error loading incomplete tasks',
+                  style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+        
         final tasks = snapshot.data ?? [];
         // Group tasks by date
         Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -267,7 +355,7 @@ class IncompleteTasksScreen extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(12.0),
                         child: Text(
-                          IncompleteTasksScreen.formatHeaderDate(key),
+                          formatHeaderDate(key),
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,

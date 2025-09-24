@@ -1058,6 +1058,15 @@ class TaskDetailsDialog extends StatelessWidget {
     required this.reasonController,
   });
 
+  static String _formatTime(DateTime? dateTime) {
+    if (dateTime == null) return '';
+    final hour = dateTime.hour;
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final ampm = hour >= 12 ? 'PM' : 'AM';
+    final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
+    return '$hour12:$minute $ampm';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -1146,7 +1155,7 @@ class TaskDetailsDialog extends StatelessWidget {
                   const Text('Time:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E)),),
                   const SizedBox(width: 8),
                   Text(
-                    '${task['task_start'] != null ? UpcomingTasksScreen._formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? UpcomingTasksScreen._formatTime(task['task_end']) : ''}',
+                    '${task['task_start'] != null ? _formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? _formatTime(task['task_end']) : ''}',
                     style: const TextStyle(fontSize: 16),
                   ),
                 ],
@@ -1225,7 +1234,185 @@ class TaskDetailsDialog extends StatelessWidget {
   }
 }
 // ...imports already at top, remove these duplicates
-class UpcomingTasksScreen extends StatelessWidget {
+class UpcomingTasksScreen extends StatefulWidget {
+  const UpcomingTasksScreen({super.key});
+
+  @override
+  State<UpcomingTasksScreen> createState() => _UpcomingTasksScreenState();
+}
+
+class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  int _refreshKey = 0; // Simple key to force rebuilds
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Trigger initial progressive task system check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProgressiveTaskSystem(context);
+    });
+    
+    // Set up periodic refresh every 30 seconds
+    _startPeriodicRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // App came back into focus, refresh the data
+      print('🔄 App resumed, refreshing tasks...');
+      _checkProgressiveTaskSystem(context);
+      _triggerRefresh();
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        print('🔄 Periodic refresh triggered...');
+        _triggerRefresh();
+      }
+    });
+  }
+
+  void _triggerRefresh() {
+    if (mounted) {
+      setState(() {
+        _refreshKey++; // Force rebuild by changing key
+      });
+    }
+  }
+
+  Stream<List<Map<String, dynamic>>> getTasksStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    final caregiverId = user?.uid;
+    
+    return FirebaseFirestore.instance
+      .collection('care_tasks')
+      .where('task_status', arrayContains: 'Upcoming')
+      .where('caregiver_id', isEqualTo: caregiverId)
+      .snapshots()
+      .asyncMap((snapshot) => _processTasksFromSnapshot(snapshot));
+  }
+
+  Future<List<Map<String, dynamic>>> _processTasksFromSnapshot(QuerySnapshot<Map<String, dynamic>> snapshot) async {
+    List<Map<String, dynamic>> tasks = [];
+    final now = DateTime.now();
+    
+    print('🔍 Upcoming Tasks Query: Found ${snapshot.docs.length} tasks with Upcoming status');
+    for (var doc in snapshot.docs) {
+      final data = doc.data();
+      print('📋 Task: ${data['task_description']}, Date: ${data['task_date']}, Status: ${data['task_status']}');
+    }
+    
+    for (var doc in snapshot.docs) {
+      final data = doc.data();
+      final elderlyId = data['elderly_id'];
+      
+      // Check if task should be marked as missed
+      final taskEnd = (data['task_end'] is Timestamp) 
+          ? (data['task_end'] as Timestamp).toDate() 
+          : data['task_end'] as DateTime?;
+      final taskDate = (data['task_date'] is Timestamp) 
+          ? (data['task_date'] as Timestamp).toDate() 
+          : data['task_date'] as DateTime?;
+      
+      // Determine the actual task execution date
+      DateTime? actualTaskDate;
+      final freqList = data['task_frequency'] as List<dynamic>? ?? [];
+      final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+      
+      if (freq == 'Only once') {
+        actualTaskDate = data['freq_once_date'] != null 
+            ? ((data['freq_once_date'] is Timestamp) 
+                ? (data['freq_once_date'] as Timestamp).toDate() 
+                : data['freq_once_date'] as DateTime)
+            : taskDate;
+      } else {
+        // For recurring tasks, use task_date (the current occurrence)
+        actualTaskDate = taskDate;
+      }
+      
+      // Check if task is overdue and should be marked as missed
+      if (taskEnd != null && actualTaskDate != null) {
+        final taskEndDateTime = DateTime(
+          actualTaskDate.year,
+          actualTaskDate.month,
+          actualTaskDate.day,
+          taskEnd.hour,
+          taskEnd.minute,
+        );
+        
+        if (now.isAfter(taskEndDateTime)) {
+          // Mark task as missed and handle recurring task logic
+          print('⏰ MISSED TASK DETECTED: ${data['task_description']} - end time $taskEndDateTime has passed');
+          await _markTaskAsMissed(doc.id, data);
+          continue; // Skip adding to upcoming tasks
+        }
+      }
+      
+      // Fetch elderly profile picture
+      String profilePicUrl = '';
+      if (elderlyId != null) {
+        try {
+          final elderlyDoc = await FirebaseFirestore.instance
+              .collection('elderly')
+              .doc(elderlyId)
+              .get();
+          if (elderlyDoc.exists) {
+            final elderlyData = elderlyDoc.data();
+            profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
+          }
+        } catch (e) {
+          print('DEBUG: Error fetching elderly profile pic in upcoming_tasks: $e');
+        }
+      }
+      
+      tasks.add({
+        'task_id': data['task_id'] ?? doc.id,
+        'elderly_fname': data['elderly_fname'] ?? '',
+        'task_description': data['task_description'] ?? '',
+        'task_start': (data['task_start'] is Timestamp) ? (data['task_start'] as Timestamp).toDate() : data['task_start'],
+        'task_end': (data['task_end'] is Timestamp) ? (data['task_end'] as Timestamp).toDate() : data['task_end'],
+        'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
+        'freq_once_date': (data['freq_once_date'] is Timestamp) ? (data['freq_once_date'] as Timestamp).toDate() : data['freq_once_date'],
+        'task_frequency': data['task_frequency'] ?? ['Only once'],
+        'task_status': data['task_status'] ?? ['Upcoming'],
+        'custom_days': data['custom_days'],
+        'recurring_start_date': data['recurring_start_date'],
+        'next_taskdate': data['next_taskdate'],
+        'elderly_id': data['elderly_id'],
+        'caregiver_id': data['caregiver_id'],
+        'created_by': data['created_by'],
+        'created_at': data['created_at'],
+        'updated_at': data['updated_at'],
+        'elderly_profilePic': profilePicUrl,
+      });
+    }
+    
+    return tasks;
+  }
+
+  String _formatTime(DateTime? dateTime) {
+    if (dateTime == null) return '';
+    final hour = dateTime.hour;
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final ampm = hour >= 12 ? 'PM' : 'AM';
+    final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
+    return '$hour12:$minute $ampm';
+  }
+
   // Progressive task system check - called when screen loads
   void _checkProgressiveTaskSystem(BuildContext context) async {
     try {
@@ -1491,7 +1678,7 @@ class UpcomingTasksScreen extends StatelessWidget {
     return '$year-$month-$day';
   }
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
-  static String formatHeaderDate(String key) {
+  String formatHeaderDate(String key) {
     try {
       final date = DateTime.parse(key);
       const months = [
@@ -1508,129 +1695,8 @@ class UpcomingTasksScreen extends StatelessWidget {
   // DATE FILTER FUNCTIONALITY - COMMENTED OUT
   // To restore: uncomment the lines below and implement UI elements for date selection
   // final DateTime? selectedFilterDate;
-  
-  const UpcomingTasksScreen({super.key /*, this.selectedFilterDate*/});
 
-  Stream<List<Map<String, dynamic>>> getTasksStream() {
-    final user = FirebaseAuth.instance.currentUser;
-    final caregiverId = user?.uid;
-    return FirebaseFirestore.instance
-      .collection('care_tasks')
-      .where('task_status', arrayContains: 'Upcoming')
-      .where('caregiver_id', isEqualTo: caregiverId)
-      .snapshots()
-      .asyncMap((snapshot) async {
-        List<Map<String, dynamic>> tasks = [];
-        final now = DateTime.now();
-        
-        print('🔍 Upcoming Tasks Query: Found ${snapshot.docs.length} tasks with Upcoming status');
-        for (var doc in snapshot.docs) {
-          final data = doc.data();
-          print('📋 Task: ${data['task_description']}, Date: ${data['task_date']}, Status: ${data['task_status']}');
-        }
-        
-        for (var doc in snapshot.docs) {
-          final data = doc.data();
-          final elderlyId = data['elderly_id'];
-          
-          // Check if task should be marked as missed
-          final taskEnd = (data['task_end'] is Timestamp) 
-              ? (data['task_end'] as Timestamp).toDate() 
-              : data['task_end'] as DateTime?;
-          final taskDate = (data['task_date'] is Timestamp) 
-              ? (data['task_date'] as Timestamp).toDate() 
-              : data['task_date'] as DateTime?;
-          
-          // Determine the actual task execution date
-          DateTime? actualTaskDate;
-          final freqList = data['task_frequency'] as List<dynamic>? ?? [];
-          final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
-          
-          if (freq == 'Only once') {
-            actualTaskDate = data['freq_once_date'] != null 
-                ? ((data['freq_once_date'] is Timestamp) 
-                    ? (data['freq_once_date'] as Timestamp).toDate() 
-                    : data['freq_once_date'] as DateTime)
-                : taskDate;
-          } else {
-            // For recurring tasks, use task_date (the current occurrence)
-            actualTaskDate = taskDate;
-          }
-          
-          // Check if task is overdue and should be marked as missed
-          if (taskEnd != null && actualTaskDate != null) {
-            final taskEndDateTime = DateTime(
-              actualTaskDate.year,
-              actualTaskDate.month,
-              actualTaskDate.day,
-              taskEnd.hour,
-              taskEnd.minute,
-            );
-            
-            if (now.isAfter(taskEndDateTime)) {
-              // Mark task as missed and handle recurring task logic
-              print('⏰ MISSED TASK DETECTED: ${data['task_description']} - end time $taskEndDateTime has passed');
-              await _markTaskAsMissed(doc.id, data);
-              continue; // Skip adding to upcoming tasks
-            }
-          }
-          
-          // Fetch elderly profile picture
-          String profilePicUrl = '';
-          if (elderlyId != null) {
-            try {
-              final elderlyDoc = await FirebaseFirestore.instance
-                  .collection('elderly')
-                  .doc(elderlyId)
-                  .get();
-              if (elderlyDoc.exists) {
-                final elderlyData = elderlyDoc.data();
-                profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
-              }
-            } catch (e) {
-              print('DEBUG: Error fetching elderly profile pic in upcoming_tasks: $e');
-            }
-          }
-          
-          tasks.add({
-            'task_id': data['task_id'] ?? doc.id,
-            'elderly_fname': data['elderly_fname'] ?? '',
-            'task_description': data['task_description'] ?? '',
-            'task_start': (data['task_start'] is Timestamp) ? (data['task_start'] as Timestamp).toDate() : data['task_start'],
-            'task_end': (data['task_end'] is Timestamp) ? (data['task_end'] as Timestamp).toDate() : data['task_end'],
-            'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
-            'created_at': (data['created_at'] is Timestamp) ? (data['created_at'] as Timestamp).toDate() : data['created_at'],
-            'task_frequency': data['task_frequency'] ?? [],
-            'custom_days': data['custom_days'] ?? [],
-            'everyday_days': data['everyday_days'] ?? [],
-            'freq_once_date': (data['freq_once_date'] is Timestamp) ? (data['freq_once_date'] as Timestamp).toDate() : data['freq_once_date'],
-            'next_taskdate': (data['next_taskdate'] is Timestamp) ? (data['next_taskdate'] as Timestamp).toDate() : data['next_taskdate'],
-            'profile_pic': profilePicUrl,
-          });
-        }
-        
-        // DATE FILTER FUNCTIONALITY - COMMENTED OUT
-        // 
-        // REASON FOR REMOVAL: Date filtering was conflicting with the task grouping system.
-        // The current system groups tasks by their actual occurrence dates, and date filtering
-        // was interfering with this logic.
-        //
-        // TO RESTORE DATE FILTERING:
-        // 1. Uncomment the selectedFilterDate field and constructor parameter above
-        // 2. Add UI elements (like "All Dates" button) to allow users to select filter dates
-        // 3. Uncomment and modify the filtering logic below
-        // 4. Ensure filtering works properly with the task grouping system
-        //
-        // ORIGINAL FILTERING LOGIC:
-        // DateTime? filterDate;
-        // if (selectedFilterDate != null) {
-        //   filterDate = DateTime(selectedFilterDate!.year, selectedFilterDate!.month, selectedFilterDate!.day);
-        //   tasks = await _filterTasksByAssignment(tasks, filterDate);
-        // }
-        
-        return tasks;
-      });
-  }
+
 
   Future<void> _onRefresh() async {
     // Trigger progressive task system when user pulls to refresh
@@ -1638,6 +1704,10 @@ class UpcomingTasksScreen extends StatelessWidget {
     if (currentUser != null) {
       await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
     }
+    // Force refresh the data
+    _triggerRefresh();
+    // Add a small delay to ensure UI updates
+    await Future.delayed(const Duration(milliseconds: 500));
   }
 
   @override
@@ -1648,8 +1718,41 @@ class UpcomingTasksScreen extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: _onRefresh,
       child: StreamBuilder<List<Map<String, dynamic>>>(
+      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
       stream: getTasksStream(),
       builder: (context, snapshot) {
+        // Show loading spinner while data is loading
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+            ),
+          );
+        }
+        
+        // Handle errors
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 60),
+                const SizedBox(height: 16),
+                Text(
+                  'Error loading tasks',
+                  style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+        
         List<Map<String, dynamic>> tasks = snapshot.data ?? [];
         
         // Group tasks by their display date - when they should actually appear
@@ -1757,7 +1860,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                 Padding(
                                   padding: const EdgeInsets.all(12.0),
                                   child: Text(
-                                    UpcomingTasksScreen.formatHeaderDate(key),
+                                    formatHeaderDate(key),
                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF22688E)),
                                   ),
                                 ),
@@ -1894,7 +1997,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                         const Text('Time:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E)),),
                                                         const SizedBox(width: 8),
                                                         Text(
-                                                          '${task['task_start'] != null ? UpcomingTasksScreen._formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? UpcomingTasksScreen._formatTime(task['task_end']) : ''}',
+                                                          '${task['task_start'] != null ? _formatTime(task['task_start']) : ''} - ${task['task_end'] != null ? _formatTime(task['task_end']) : ''}',
                                                           style: const TextStyle(fontSize: 16),
                                                         ),
                                                       ],
@@ -1952,10 +2055,10 @@ class UpcomingTasksScreen extends StatelessWidget {
                                                             final created = task['created_at'];
                                                             if (created == null) return '';
                                                             if (created is DateTime) {
-                                                              return '${_formatDate(created)} at ${UpcomingTasksScreen._formatTime(created)}';
+                                                              return '${_formatDate(created)} at ${_formatTime(created)}';
                                                             } else if (created is Timestamp) {
                                                               final dt = created.toDate();
-                                                              return '${_formatDate(dt)} at ${UpcomingTasksScreen._formatTime(dt)}';
+                                                              return '${_formatDate(dt)} at ${_formatTime(dt)}';
                                                             }
                                                             return created.toString();
                                                           })(),
@@ -2264,7 +2367,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                             Row(
                                               children: [
                                                 Text(
-                                                  task['task_start'] != null ? UpcomingTasksScreen._formatTime(task['task_start']) : '',
+                                                  task['task_start'] != null ? _formatTime(task['task_start']) : '',
                                                   style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
                                                 ),
                                                 const SizedBox(width: 6),
@@ -2282,7 +2385,7 @@ class UpcomingTasksScreen extends StatelessWidget {
                                             Row(
                                               children: [
                                                 Text(
-                                                  task['task_end'] != null ? UpcomingTasksScreen._formatTime(task['task_end']) : '',
+                                                  task['task_end'] != null ? _formatTime(task['task_end']) : '',
                                                   style: const TextStyle(fontSize: 14, color: Color(0xFF00588e), fontWeight: FontWeight.bold),
                                                 ),
                                                 const SizedBox(width: 6),
@@ -4167,14 +4270,7 @@ class UpcomingTasksScreen extends StatelessWidget {
     }
   }
 
-  static String _formatTime(DateTime? dateTime) {
-    if (dateTime == null) return '';
-    final hour = dateTime.hour;
-    final minute = dateTime.minute.toString().padLeft(2, '0');
-    final ampm = hour >= 12 ? 'PM' : 'AM';
-    final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
-    return '$hour12:$minute $ampm';
-  }
+
 
   /// Helper function to check if the selected task time has already passed for today
   /// Only validates when the start date is set to today

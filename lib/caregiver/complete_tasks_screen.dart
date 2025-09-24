@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -279,7 +280,68 @@ class _LabeledField extends StatelessWidget {
   }
 }
 
-class CompleteTasksScreen extends StatelessWidget {
+class CompleteTasksScreen extends StatefulWidget {
+  const CompleteTasksScreen({super.key});
+
+  @override
+  State<CompleteTasksScreen> createState() => _CompleteTasksScreenState();
+}
+
+class _CompleteTasksScreenState extends State<CompleteTasksScreen> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  int _refreshKey = 0; // Simple key to force rebuilds
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Trigger initial progressive task system check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProgressiveTaskSystem(context);
+    });
+    
+    // Set up periodic refresh every 30 seconds
+    _startPeriodicRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // App came back into focus, refresh the data
+      print('🔄 Complete tasks - App resumed, refreshing...');
+      _checkProgressiveTaskSystem(context);
+      _triggerRefresh();
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        print('🔄 Complete tasks - Periodic refresh triggered...');
+        _triggerRefresh();
+      }
+    });
+  }
+
+  void _triggerRefresh() {
+    if (mounted) {
+      setState(() {
+        _refreshKey++; // Force rebuild by changing key
+      });
+    }
+  }
+
+
+
   // Helper to format time as HH:mm
   String _formatTime(DateTime? dateTime) {
     if (dateTime == null) return '';
@@ -291,7 +353,7 @@ class CompleteTasksScreen extends StatelessWidget {
   }
 
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
-  static String formatHeaderDate(String key) {
+  String formatHeaderDate(String key) {
     try {
       final date = DateTime.parse(key);
       const months = [
@@ -318,7 +380,7 @@ class CompleteTasksScreen extends StatelessWidget {
 
   // DATE FILTER FUNCTIONALITY - COMMENTED OUT
   // final DateTime? selectedFilterDate;
-  const CompleteTasksScreen({super.key /*, this.selectedFilterDate*/});
+
 
   /// Returns a stream of completed tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -455,22 +517,57 @@ class CompleteTasksScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _onRefresh(BuildContext context) async {
+  Future<void> _onRefresh() async {
     // Trigger progressive task system when user pulls to refresh
     _checkProgressiveTaskSystem(context);
+    // Force refresh the data
+    _triggerRefresh();
+    // Add a small delay to ensure UI updates
+    await Future.delayed(const Duration(milliseconds: 500));
   }
 
   @override
   Widget build(BuildContext context) {
-    // Trigger progressive task system check when screen loads
-    _checkProgressiveTaskSystem(context);
     
     // Removed unused placeholder variables
     return RefreshIndicator(
-      onRefresh: () => _onRefresh(context),
+      onRefresh: _onRefresh,
       child: StreamBuilder<List<Map<String, dynamic>>>(
+      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
       stream: getTasksStream(),
       builder: (context, snapshot) {
+        // Show loading spinner while data is loading
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+            ),
+          );
+        }
+        
+        // Handle errors
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 60),
+                const SizedBox(height: 16),
+                Text(
+                  'Error loading completed tasks',
+                  style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+        
         final tasks = snapshot.data ?? [];
         // Group tasks by date
         Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -516,7 +613,7 @@ class CompleteTasksScreen extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(12.0),
                         child: Text(
-                          CompleteTasksScreen.formatHeaderDate(key),
+                          formatHeaderDate(key),
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
