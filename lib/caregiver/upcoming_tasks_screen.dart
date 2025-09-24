@@ -6,6 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/task_reminder_service.dart';
 import '../services/task_log_service.dart';
+import '../services/notification_service.dart';
+import '../models/notification_model.dart';
 
 /*
  * TASK FREQUENCY SYSTEM - Updated Implementation
@@ -32,13 +34,38 @@ import '../services/task_log_service.dart';
 
 // Helper function to create a new task and set 'created_by' to the current caregiver's UID
 Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
+  print('🚨 createTaskWithCreator CALLED for: ${taskData['task_description']}');
+  print('🚨 Call #${DateTime.now().millisecondsSinceEpoch}');
+  
   final currentUser = FirebaseAuth.instance.currentUser;
   final caregiverId = currentUser?.uid;
   final dataWithCreator = Map<String, dynamic>.from(taskData);
   if (caregiverId != null) {
     dataWithCreator['created_by'] = caregiverId;
   }
-  await FirebaseFirestore.instance.collection('care_tasks').add(dataWithCreator);
+  
+  // Create the task in Firestore
+  final docRef = await FirebaseFirestore.instance.collection('care_tasks').add(dataWithCreator);
+  print('📝 Task created in Firestore with ID: ${docRef.id}');
+  
+  // Create task assignment notification (with duplicate prevention)
+  if (caregiverId != null) {
+    try {
+      print('� About to create notification for task: ${docRef.id}');
+      
+      await NotificationService().createTaskNotification(
+        taskId: docRef.id,
+        caregiverId: caregiverId,
+        elderlyName: taskData['elderly_fname'] ?? 'Unknown',
+        taskDescription: taskData['task_description'] ?? 'Unknown Task',
+        type: NotificationType.taskAssigned,
+      );
+      
+      print('✅ Notification creation completed for task: ${docRef.id}');
+    } catch (e) {
+      print('❌ Error creating task assignment notification: $e');
+    }
+  }
 }
 
 // Firestore helper/service class for task updates
@@ -62,13 +89,74 @@ class TaskService {
   /// Soft deletes a task by updating its 'task_status' to ['Deleted'].
   /// This keeps the task in the database but marks it as deleted for filtering.
   static Future<void> deleteTask(String docId) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final caregiverId = currentUser?.uid;
+    
+    // Get original task data before deletion
+    final docSnap = await _tasksRef.doc(docId).get();
+    final originalData = docSnap.data();
+    
     await _tasksRef.doc(docId).update({'task_status': ['Deleted']});
+    
+    // Create deletion notification
+    if (caregiverId != null && originalData != null) {
+      try {
+        await NotificationService().createTaskNotification(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyName: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          type: NotificationType.taskDeleted,
+        );
+      } catch (e) {
+        print('❌ Error creating deletion notification: $e');
+      }
+    }
   }
 
   /// Updates a task document with the provided data map.
   /// Used for editing task details or other field updates.
   static Future<void> updateTask(String docId, Map<String, dynamic> updateData) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final caregiverId = currentUser?.uid;
+    
+    // Get original task data before update
+    final docSnap = await _tasksRef.doc(docId).get();
+    final originalData = docSnap.data();
+    
     await _tasksRef.doc(docId).update(updateData);
+    
+    // Create update notification only for significant changes (not status changes)
+    if (caregiverId != null && originalData != null) {
+      final isSignificantUpdate = updateData.containsKey('task_description') || 
+                                  updateData.containsKey('task_date') || 
+                                  updateData.containsKey('task_time') ||
+                                  updateData.containsKey('task_frequency');
+      
+      if (isSignificantUpdate) {
+        try {
+          String? additionalInfo;
+          if (updateData.containsKey('task_description')) {
+            additionalInfo = 'Description updated';
+          } else if (updateData.containsKey('task_date') || updateData.containsKey('task_time')) {
+            additionalInfo = 'Schedule updated';
+          } else if (updateData.containsKey('task_frequency')) {
+            additionalInfo = 'Frequency updated';
+          }
+          
+          await NotificationService().createTaskNotification(
+            taskId: docId,
+            caregiverId: caregiverId,
+            elderlyName: originalData['elderly_fname'] ?? 'Unknown',
+            taskDescription: originalData['task_description'] ?? 'Unknown Task',
+            type: NotificationType.taskUpdated,
+            additionalInfo: additionalInfo,
+          );
+        } catch (e) {
+          print('❌ Error creating update notification: $e');
+        }
+      }
+    }
   }
 
   /// Progressive Task System: Updates recurring tasks to next occurrence when shift ends
@@ -580,6 +668,21 @@ class TaskService {
       }
     }
 
+    // Create completion notification
+    if (caregiverId != null) {
+      try {
+        await NotificationService().createTaskNotification(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyName: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          type: NotificationType.taskCompleted,
+        );
+      } catch (e) {
+        print('❌ Error creating completion notification: $e');
+      }
+    }
+
     // Cancel any scheduled reminders for this task
     try {
       await TaskReminderService().cancelTaskReminders(docId);
@@ -633,6 +736,22 @@ class TaskService {
         );
       } catch (e) {
         print('❌ Error creating task log for incomplete task: $e');
+      }
+    }
+
+    // Create incomplete notification (task missed)
+    if (caregiverId != null && originalData != null) {
+      try {
+        await NotificationService().createTaskNotification(
+          taskId: docId,
+          caregiverId: caregiverId,
+          elderlyName: originalData['elderly_fname'] ?? 'Unknown',
+          taskDescription: originalData['task_description'] ?? 'Unknown Task',
+          type: NotificationType.taskMissed,
+          additionalInfo: 'Reason: $reasonText',
+        );
+      } catch (e) {
+        print('❌ Error creating incomplete notification: $e');
       }
     }
 

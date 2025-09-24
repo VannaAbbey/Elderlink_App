@@ -52,7 +52,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
   }
 
   Future<void> _loadElderlyAssignments() async {
-    setState(() => isLoading = true);
+    if (mounted) setState(() => isLoading = true);
 
     final now = DateTime.now();
     final dayName = DateFormat('EEEE').format(now);
@@ -94,20 +94,24 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final endDate = (houseData['end_date'] as Timestamp).toDate();
 
       if (now.isBefore(startDate) || now.isAfter(endDate)) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
       if (!daysAssigned.contains(dayName)) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
@@ -154,11 +158,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
               now.isAfter(calculatedShiftEnd));
 
       if (!isWithinShift) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
@@ -200,23 +206,27 @@ class _IncidentScreenState extends State<IncidentScreen> {
         );
       }
 
-      setState(() {
-        elderlyList = elderlyDetails;
-        isOnDuty = true;
-        isLoading = false;
-        selectedElderlyId = null;
-        selectedElderlyName = null;
-        shiftStart = calculatedShiftStart;
-        shiftEnd = calculatedShiftEnd;
-      });
+      if (mounted) {
+        setState(() {
+          elderlyList = elderlyDetails;
+          isOnDuty = true;
+          isLoading = false;
+          selectedElderlyId = null;
+          selectedElderlyName = null;
+          shiftStart = calculatedShiftStart;
+          shiftEnd = calculatedShiftEnd;
+        });
+      }
     } catch (e) {
-      setState(() {
-        elderlyList = [];
-        isOnDuty = false;
-        isLoading = false;
-        selectedElderlyId = null;
-        selectedElderlyName = null;
-      });
+      if (mounted) {
+        setState(() {
+          elderlyList = [];
+          isOnDuty = false;
+          isLoading = false;
+          selectedElderlyId = null;
+          selectedElderlyName = null;
+        });
+      }
     }
   }
 
@@ -1181,12 +1191,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           // 5️⃣ Clear fields + show success
                                                                           reportController
                                                                               .clear();
-                                                                          setState(() {
-                                                                            selectedElderlyId =
-                                                                                null;
-                                                                            selectedElderlyName =
-                                                                                null;
-                                                                          });
+                                                                          if (mounted) {
+                                                                            setState(() {
+                                                                              selectedElderlyId =
+                                                                                  null;
+                                                                              selectedElderlyName =
+                                                                                  null;
+                                                                            });
+                                                                          }
 
                                                                           // ✅ Success notification at top
                                                                           if (mounted) {

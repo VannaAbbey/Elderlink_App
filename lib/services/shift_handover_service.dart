@@ -16,14 +16,11 @@ class ShiftHandoverService {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        print('ShiftHandoverService: No authenticated user found');
         throw Exception('No authenticated user');
       }
 
       final dateString = DateFormat('yyyy-MM-dd').format(shiftDate);
       final shiftId = '${shiftType}_${dateString}_${user.uid}';
-
-      print('ShiftHandoverService: Creating shift: $shiftId');
 
       await FirebaseFirestore.instance
           .collection(shiftsCollection)
@@ -42,10 +39,8 @@ class ShiftHandoverService {
         'updated_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      print('ShiftHandoverService: Shift created successfully');
       return shiftId;
     } catch (e) {
-      print('ShiftHandoverService: Error creating shift: $e');
       rethrow;
     }
   }
@@ -53,8 +48,6 @@ class ShiftHandoverService {
   /// Marks a shift as completed
   static Future<void> completeShift(String shiftId) async {
     try {
-      print('ShiftHandoverService: Completing shift: $shiftId');
-
       await FirebaseFirestore.instance
           .collection(shiftsCollection)
           .doc(shiftId)
@@ -63,10 +56,7 @@ class ShiftHandoverService {
         'end_time': FieldValue.serverTimestamp(),
         'updated_at': FieldValue.serverTimestamp(),
       });
-
-      print('ShiftHandoverService: Shift completed successfully');
     } catch (e) {
-      print('ShiftHandoverService: Error completing shift: $e');
       rethrow;
     }
   }
@@ -76,16 +66,8 @@ class ShiftHandoverService {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        print('ShiftHandoverService: No authenticated user found');
         return null;
       }
-
-      print('🚀 === DEBUGGING getPreviousShiftData() ===');
-      print('🚀 Current user ID: ${user.uid}');
-      print('🚀 Current time: ${DateTime.now()}');
-      
-      // First, let's see ALL cg_house_assign documents to understand the data structure
-      await _debugDatabaseState();
 
       // Get current caregiver's house and shift information from cg_house_assign
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
@@ -95,7 +77,6 @@ class ShiftHandoverService {
           .get();
 
       if (currentCaregiverAssignQuery.docs.isEmpty) {
-        print('ShiftHandoverService: No assignment found for current caregiver');
         return null;
       }
 
@@ -103,14 +84,6 @@ class ShiftHandoverService {
       final currentHouseId = currentAssignment['house_id'] as String;
       final currentTimeRange = currentAssignment['time_range'] as Map<String, dynamic>?;
       final currentShift = currentAssignment['shift'];
-
-      print('🏠 === CURRENT USER INFO ===');
-      print('🏠 User ID: ${user.uid}');
-      print('🏠 House ID: $currentHouseId');
-      print('🏠 Current shift: $currentShift');
-      print('🏠 Time range: $currentTimeRange');
-      print('🏠 Days assigned: ${currentAssignment['days_assigned']}');
-      print('🏠 Full assignment: $currentAssignment');
 
       // Determine previous shift timing based on current shift
       String previousShiftType = '';
@@ -926,50 +899,5 @@ class ShiftHandoverService {
     }
   }
 
-  /// Debug method to understand database structure
-  static Future<void> _debugDatabaseState() async {
-    try {
-      print('🔍 === DATABASE DEBUG START ===');
-      
-      // Get ALL cg_house_assign documents
-      final allAssignments = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .get();
-      
-      print('🔍 Total cg_house_assign documents: ${allAssignments.docs.length}');
-      
-      // Group by house for better analysis
-      Map<String, List<Map<String, dynamic>>> houseGroups = {};
-      
-      for (var doc in allAssignments.docs) {
-        final data = doc.data();
-        final houseId = data['house_id']?.toString() ?? 'unknown';
-        
-        if (!houseGroups.containsKey(houseId)) {
-          houseGroups[houseId] = [];
-        }
-        houseGroups[houseId]!.add(data);
-      }
-      
-      // Print organized data by house
-      for (var entry in houseGroups.entries) {
-        final houseId = entry.key;
-        final assignments = entry.value;
-        
-        print('🏠 === HOUSE: $houseId (${assignments.length} caregivers) ===');
-        
-        for (var assignment in assignments) {
-          print('  👤 Caregiver: ${assignment['caregiver_id']}');
-          print('     - Shift: ${assignment['shift']}');
-          print('     - Days Assigned: ${assignment['days_assigned']}');
-          print('     - Time Range: ${assignment['time_range']}');
-          print('     ---');
-        }
-      }
-      
-      print('🔍 === DATABASE DEBUG END ===');
-    } catch (e) {
-      print('❌ Error in database debug: $e');
-    }
-  }
+
 }

@@ -6,8 +6,11 @@ import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 // Removed flutter_ringtone_player - using notification sound instead
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'notification_service.dart';
+import '../models/notification_model.dart';
 
 class TaskReminderService {
   static final TaskReminderService _instance = TaskReminderService._internal();
@@ -56,9 +59,9 @@ class TaskReminderService {
       await _requestPermissions();
       
       _isInitialized = true;
-      print('✅ TaskReminderService initialized successfully');
+      // Service initialized successfully
     } catch (e) {
-      print('❌ Error initializing TaskReminderService: $e');
+      // Error initializing service - will not show notifications
     }
   }
 
@@ -814,6 +817,24 @@ class TaskReminderService {
       final title = '⏰ Upcoming Task Reminder';
       final body = 'You have an Upcoming Task for $elderlyName at $timeString\n${taskDescription ?? taskTitle}';
       
+      // Create database notification for persistent storage with deduplication
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        try {
+          await NotificationService().createTaskNotification(
+            taskId: taskId,
+            caregiverId: currentUser.uid,
+            elderlyName: elderlyName,
+            taskDescription: taskDescription ?? taskTitle,
+            type: NotificationType.shiftReminder,
+            additionalInfo: 'Task reminder for $timeString',
+          );
+          print('✅ Database notification created for task reminder: $taskId');
+        } catch (e) {
+          print('❌ Error creating database notification: $e');
+        }
+      }
+      
       await _notificationsPlugin.show(
         _generateNotificationId(taskId, 'pre_task'),
         title,
@@ -860,6 +881,24 @@ class TaskReminderService {
       final timeString = _formatTime(taskStartTime);
       final title = '🚨 Task Starting Now!';
       final body = 'Task for $elderlyName is starting now at $timeString\n${taskDescription ?? taskTitle}';
+      
+      // Create database notification for persistent storage with deduplication
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        try {
+          await NotificationService().createTaskNotification(
+            taskId: taskId,
+            caregiverId: currentUser.uid,
+            elderlyName: elderlyName,
+            taskDescription: taskDescription ?? taskTitle,
+            type: NotificationType.taskAssigned,
+            additionalInfo: 'Task starting at $timeString',
+          );
+          print('✅ Database notification created for task start: $taskId');
+        } catch (e) {
+          print('❌ Error creating database notification: $e');
+        }
+      }
       
       await _notificationsPlugin.show(
         _generateNotificationId(taskId, 'task_start'),

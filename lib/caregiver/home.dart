@@ -105,7 +105,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         return querySnapshot.docs.first.data();
       }
     } catch (e) {
-      print('Error fetching caregiver status: $e');
+      // Log error silently
     }
     return null;
   }
@@ -367,12 +367,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                       elderlyData?['elderly_profilePic'] ??
                       elderlyData?['profile_pic'] ??
                       '';
-                  print(
-                    'DEBUG: Found profile pic for ${data['elderly_fname']}: $profilePicUrl',
-                  );
                 }
               } catch (e) {
-                print('DEBUG: Error fetching elderly profile pic: $e');
+                // Error fetching profile pic, continue with empty string
               }
             }
 
