@@ -31,6 +31,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
   DateTime shiftEnd = DateTime.now();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  
+  // Save reference to ScaffoldMessenger to avoid context issues
+  ScaffoldMessengerState? _scaffoldMessenger;
 
   @override
   void initState() {
@@ -39,11 +42,30 @@ class _IncidentScreenState extends State<IncidentScreen> {
     _loadCaregiverName();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Save reference to ScaffoldMessenger to use safely later
+    try {
+      _scaffoldMessenger = ScaffoldMessenger.of(context);
+    } catch (e) {
+      // Context might not be available yet, ignore
+      _scaffoldMessenger = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    reportController.dispose();
+    _scaffoldMessenger = null;
+    super.dispose();
+  }
+
   Future<void> _loadCaregiverName() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       final doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
+      if (doc.exists && mounted) {
         setState(() {
           caregiverName = "${doc['user_fname']} ${doc['user_lname']}";
         });
@@ -60,11 +82,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
@@ -79,11 +103,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
           .get();
 
       if (houseSnapshot.docs.isEmpty) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
@@ -297,64 +323,83 @@ class _IncidentScreenState extends State<IncidentScreen> {
       }
 
       // ✅ If all good (within schedule & shift), proceed normally
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Access granted — within schedule ✅")),
-        );
-      }
+      _safeShowSnackBar("Access granted — within schedule ✅");
     } catch (e) {
       if (mounted) _showError(context, "Error checking schedule: $e");
     }
   }
 
+  /// 🔴 Safe message display helper
+  void _safeShowSnackBar(String message, {bool isError = false}) {
+    if (!mounted || _scaffoldMessenger == null) return;
+    
+    // Use post-frame callback to ensure the widget is still mounted
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _scaffoldMessenger == null) return;
+      _scaffoldMessenger!.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Colors.red : Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    });
+  }
+
   /// 🔴 Error Dialog UI
   void _showError(BuildContext context, String msg) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
-            const SizedBox(height: 12),
-            const Text(
-              "Incident Report Not Sent",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-                color: Colors.black87,
+    if (!mounted) return;
+    
+    // Use a post-frame callback to ensure the widget is still in the tree
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 60, color: Colors.red),
+              const SizedBox(height: 12),
+              const Text(
+                "Incident Report Not Sent",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  color: Colors.black87,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              msg,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15),
+              const SizedBox(height: 16),
+              Text(
+                msg,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15),
+              ),
+            ],
+          ),
+          actions: [
+            Center(
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFF00588e),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 60,
+                    vertical: 10,
+                  ),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text(
+                  "OK",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
             ),
           ],
         ),
-        actions: [
-          Center(
-            child: TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF00588e),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 60,
-                  vertical: 10,
-                ),
-              ),
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text(
-                "OK",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+      );
+    });
   }
 
   /// 🔧 Helper: Get day name
@@ -673,7 +718,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                         builder: (BuildContext ctx) {
                                           bool acknowledged = false;
                                           return StatefulBuilder(
-                                            builder: (context, setState) {
+                                            builder: (context, dialogSetState) {
                                               return Dialog(
                                                 shape: RoundedRectangleBorder(
                                                   borderRadius:
@@ -980,11 +1025,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                     0xFF00588e,
                                                                   ),
                                                               onChanged: (val) {
-                                                                setState(() {
-                                                                  acknowledged =
-                                                                      val ??
-                                                                      false;
-                                                                });
+                                                                // Use a try-catch to handle potential disposal issues
+                                                                try {
+                                                                  dialogSetState(() {
+                                                                    acknowledged = val ?? false;
+                                                                  });
+                                                                } catch (e) {
+                                                                  // Dialog was disposed, ignore the state change
+                                                                }
                                                               },
                                                             ),
                                                             const Expanded(
@@ -1038,6 +1086,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           ctx,
                                                                         ).pop(); // Close modal first
 
+                                                                        // Safety check: ensure the main widget is still mounted before proceeding
+                                                                        if (!mounted) return;
+
                                                                         final user = FirebaseAuth
                                                                             .instance
                                                                             .currentUser;
@@ -1052,6 +1103,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             DateTime.now();
 
                                                                         try {
+                                                                          // Safety check before Firestore operations
+                                                                          if (!mounted) return;
+                                                                          
                                                                           // 1️⃣ Get caregiver info
                                                                           final caregiverId =
                                                                               user.uid;
@@ -1188,78 +1242,29 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             });
                                                                           }
 
+                                                                          // Final safety check before cleanup
+                                                                          if (!mounted) return;
+
                                                                           // 5️⃣ Clear fields + show success
                                                                           reportController
                                                                               .clear();
-                                                                          if (mounted) {
-                                                                            setState(() {
-                                                                              selectedElderlyId =
-                                                                                  null;
-                                                                              selectedElderlyName =
-                                                                                  null;
-                                                                            });
-                                                                          }
+                                                                          
+                                                                          // Use post-frame callback to safely clear state
+                                                                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                                            if (mounted) {
+                                                                              setState(() {
+                                                                                selectedElderlyId = null;
+                                                                                selectedElderlyName = null;
+                                                                              });
+                                                                            }
+                                                                          });
 
                                                                           // ✅ Success notification at top
-                                                                          if (mounted) {
-                                                                            ScaffoldMessenger.of(
-                                                                              context,
-                                                                            ).showSnackBar(
-                                                                              SnackBar(
-                                                                                content: const Text(
-                                                                                  "Incident report submitted successfully.",
-                                                                                ),
-                                                                                behavior: SnackBarBehavior.floating,
-                                                                                margin: const EdgeInsets.fromLTRB(
-                                                                                  16,
-                                                                                  50,
-                                                                                  16,
-                                                                                  0,
-                                                                                ),
-                                                                                backgroundColor: const Color(
-                                                                                  0xFF00588e,
-                                                                                ),
-                                                                                shape: RoundedRectangleBorder(
-                                                                                  borderRadius: BorderRadius.circular(
-                                                                                    10,
-                                                                                  ),
-                                                                                ),
-                                                                                duration: const Duration(
-                                                                                  seconds: 3,
-                                                                                ),
-                                                                              ),
-                                                                            );
-                                                                          }
+                                                                          _safeShowSnackBar("Incident report submitted successfully.");
                                                                         } catch (
                                                                           e
                                                                         ) {
-                                                                          if (mounted) {
-                                                                            ScaffoldMessenger.of(
-                                                                              context,
-                                                                            ).showSnackBar(
-                                                                              SnackBar(
-                                                                                content: Text(
-                                                                                  "Failed to submit report: $e",
-                                                                                ),
-                                                                                behavior: SnackBarBehavior.floating,
-                                                                                margin: const EdgeInsets.fromLTRB(
-                                                                                  16,
-                                                                                  50,
-                                                                                  16,
-                                                                                  0,
-                                                                                ),
-                                                                                backgroundColor: Colors.redAccent,
-                                                                                shape: RoundedRectangleBorder(
-                                                                                  borderRadius: BorderRadius.circular(
-                                                                                    10,
-                                                                                  ),
-                                                                                ),
-                                                                                duration: const Duration(
-                                                                                  seconds: 4,
-                                                                                ),
-                                                                              ),
-                                                                            );
-                                                                          }
+                                                                          _safeShowSnackBar("Failed to submit report: $e", isError: true);
                                                                         }
                                                                       }
                                                                     : null, // ❌ Disabled kapag kulang
