@@ -428,18 +428,9 @@ class ShiftHandoverService {
       print('🚀 ShiftHandoverService: Target date string: $targetDateString');
       print('🚀 ShiftHandoverService: Current user ID: ${user.uid}');
       
-      // If the target date is today, use the original logic
-      final today = DateTime.now();
-      final isToday = targetDate.year == today.year && 
-                     targetDate.month == today.month && 
-                     targetDate.day == today.day;
-      
-      if (isToday) {
-        print('ShiftHandoverService: Target date is today, using current shift handover logic');
-        return await getPreviousShiftData();
-      }
-      
-      print('ShiftHandoverService: Target date is historical, showing shift data FROM that date');
+      // Always show shift data FROM the target date for shift logs
+      // This ensures we get the previous shift's data from the same date, not yesterday's data
+      print('ShiftHandoverService: Showing shift data FROM the target date: $targetDateString');
 
       // Get current caregiver's house and shift information from cg_house_assign
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
@@ -464,18 +455,22 @@ class ShiftHandoverService {
 
       // Determine previous shift timing based on current shift
       String previousShiftType = '';
+      String previousShiftKey = '';
       if (currentShift is String) {
         final shiftLower = currentShift.toLowerCase();
         
         if (shiftLower.contains('1st') || shiftLower.contains('morning') || 
             (currentTimeRange != null && currentTimeRange['start'] == '06:00')) {
           previousShiftType = '3rd Shift'; // Night shift hands over to morning
+          previousShiftKey = '3rd'; // For database lookup
         } else if (shiftLower.contains('2nd') || shiftLower.contains('afternoon') || 
                    (currentTimeRange != null && currentTimeRange['start'] == '14:00')) {
           previousShiftType = '1st Shift'; // Morning shift hands over to afternoon
+          previousShiftKey = '1st'; // For database lookup
         } else if (shiftLower.contains('3rd') || shiftLower.contains('night') || 
                    (currentTimeRange != null && currentTimeRange['start'] == '22:00')) {
           previousShiftType = '2nd Shift'; // Afternoon shift hands over to night
+          previousShiftKey = '2nd'; // For database lookup
         }
       }
 
@@ -489,20 +484,43 @@ class ShiftHandoverService {
         print('🔍 ShiftHandoverService: Target date: $targetDate');
         print('🔍 ShiftHandoverService: Day name: $dayName');
         print('🔍 ShiftHandoverService: Looking for previous shift type: $previousShiftType');
+        print('🔍 ShiftHandoverService: Looking for previous shift key: $previousShiftKey');
         print('🔍 ShiftHandoverService: In house: $currentHouseId');
         
-        final previousCaregiverQuery = await FirebaseFirestore.instance
+        // Try multiple possible shift formats to be flexible
+        final possibleShiftFormats = [
+          previousShiftKey, // e.g., '3rd'
+          previousShiftType, // e.g., '3rd Shift'
+          previousShiftKey.toLowerCase(), // e.g., '3rd'
+          '$previousShiftKey Shift', // e.g., '3rd Shift'
+          '${previousShiftKey.toLowerCase()} shift', // e.g., '3rd shift'
+        ];
+        
+        print('🔍 ShiftHandoverService: Trying shift formats: $possibleShiftFormats');
+        
+        // Get all caregivers in the house first, then filter by shift
+        final allHouseCaregivers = await FirebaseFirestore.instance
             .collection('cg_house_assign')
             .where('house_id', isEqualTo: currentHouseId)
-            .where('shift', isEqualTo: previousShiftType)
             .get();
+        
+        // Filter for caregivers with matching shift format
+        final previousCaregiverDocs = allHouseCaregivers.docs.where((doc) {
+          final data = doc.data();
+          final caregiverShift = data['shift'] as String?;
+          if (caregiverShift == null) return false;
+          
+          // Check if any of our possible formats match
+          return possibleShiftFormats.any((format) => 
+            caregiverShift.toLowerCase() == format.toLowerCase());
+        }).toList();
 
         print('🏠 ShiftHandoverService: Database query completed');
-        print('🏠 ShiftHandoverService: Query filters - house_id: $currentHouseId, shift: $previousShiftType');  
-        print('🏠 ShiftHandoverService: Found ${previousCaregiverQuery.docs.length} total caregivers assigned to $previousShiftType shift in house $currentHouseId');
+        print('🏠 ShiftHandoverService: Query filters - house_id: $currentHouseId, possible shifts: $possibleShiftFormats');  
+        print('🏠 ShiftHandoverService: Found ${previousCaregiverDocs.length} total caregivers assigned to previous shift in house $currentHouseId');
         
         // Debug: show all found caregivers and their house assignments with names
-        for (var doc in previousCaregiverQuery.docs) {
+        for (var doc in previousCaregiverDocs) {
           final data = doc.data();
           final caregiverId = data['caregiver_id'];
           
@@ -525,13 +543,13 @@ class ShiftHandoverService {
           }
         }
 
-        if (previousCaregiverQuery.docs.isEmpty) {
+        if (previousCaregiverDocs.isEmpty) {
           print('❌ ShiftHandoverService: No caregivers found for shift type: $previousShiftType');
           print('❌ ShiftHandoverService: This might indicate the shift type format in database is different');
         }
 
         // Filter by caregivers who were actually scheduled to work on this day
-        for (var doc in previousCaregiverQuery.docs) {
+        for (var doc in previousCaregiverDocs) {
           final data = doc.data();
           final caregiverId = data['caregiver_id'] as String;
           final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];

@@ -111,10 +111,11 @@ import 'package:intl/intl.dart';
     // Use the user's assigned shift, not current time
     if (currentUserShift == '1st') {
       // Current: 1st Shift (6:00 AM - 2:00 PM) -> Previous: 3rd Shift (10:00 PM - 6:00 AM)
+      // For shift logs, we want to see the 3rd shift data from the SAME DATE
       shiftType = '1st Shift (6:00 AM - 2:00 PM)';
       previousShiftType = '3rd Shift (10:00 PM - 6:00 AM)';
       previousShiftKey = '3rd';
-      previousDate = date.subtract(const Duration(days: 1)); // 3rd shift is from previous night
+      // Keep same date - 3rd shift data is logged on the same date
     } else if (currentUserShift == '2nd') {
       // Current: 2nd Shift (2:00 PM - 10:00 PM) -> Previous: 1st Shift (6:00 AM - 2:00 PM)
       shiftType = '2nd Shift (2:00 PM - 10:00 PM)';
@@ -169,22 +170,34 @@ class ShiftLogsScreen extends StatefulWidget {
 }
 
 class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
-  DateTime selectedDate = DateTime.now();
+  late DateTime selectedDate;
   Future<Map<String, dynamic>?>? shiftDataFuture;
   String selectedCaregiverFilter = 'All Caregivers'; // Filter state
 
   @override
   void initState() {
     super.initState();
+    // Explicitly set to today's date to ensure it reflects current day
+    _refreshToCurrentDate();
     // Load today's shift data initially
     _loadShiftData();
   }
 
+  void _refreshToCurrentDate() {
+    final now = DateTime.now();
+    selectedDate = DateTime(now.year, now.month, now.day); // Normalize to start of day
+    print('🗓️ ShiftLogs: Refreshed to current date: ${_formatDate(selectedDate)}');
+    print('🗓️ ShiftLogs: Raw DateTime.now(): $now');
+  }
+
   void _loadShiftData() {
+    print('🗓️ ShiftLogs: Loading shift data for date: ${_formatDate(selectedDate)}');
     setState(() {
       shiftDataFuture = ShiftHandoverService.getPreviousShiftDataForDate(selectedDate);
     });
   }
+
+
 
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -216,7 +229,9 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
   }
 
   String _formatDate(DateTime date) {
-    return DateFormat('MMMM dd, yyyy').format(date);
+    final formatted = DateFormat('MMMM dd, yyyy').format(date);
+    print('🗓️ ShiftLogs: Formatting date $date to: $formatted');
+    return formatted;
   }
 
   // Helper method to filter task logs based on selected caregiver
@@ -313,6 +328,30 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                             ],
                           ),
                         ),
+                        // Today button
+                        InkWell(
+                          onTap: () {
+                            _refreshToCurrentDate();
+                            _loadShiftData();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF4CAF50),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'Today',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Calendar picker button
                         InkWell(
                           onTap: () => _selectDate(context),
                           child: Container(
