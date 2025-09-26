@@ -2042,19 +2042,48 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                   context: ctx,
                                                                   builder: (BuildContext confirmCtx) {
                                                                     return AlertDialog(
-                                                                      title: const Text('Delete Task'),
-                                                                      content: const Text('Are you sure you want to delete this task?'),
+                                                                      shape: RoundedRectangleBorder(
+                                                                        borderRadius: BorderRadius.circular(16),
+                                                                      ),
+                                                                      title: const Row(
+                                                                        children: [
+                                                                          Icon(
+                                                                            Icons.delete_outline,
+                                                                            color: Color(0xFFD32F2F),
+                                                                            size: 28,
+                                                                          ),
+                                                                          SizedBox(width: 8),
+                                                                          Text(
+                                                                            'Delete Task',
+                                                                            style: TextStyle(
+                                                                              color: Color(0xFFD32F2F),
+                                                                              fontWeight: FontWeight.bold,
+                                                                            ),
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                      content: const Text(
+                                                                        'Are you sure you want to delete this task? This action cannot be undone.',
+                                                                        style: TextStyle(fontSize: 16),
+                                                                      ),
                                                                       actions: [
                                                                         TextButton(
                                                                           onPressed: () => Navigator.of(confirmCtx).pop(false),
+                                                                          style: TextButton.styleFrom(
+                                                                            foregroundColor: Colors.grey[600],
+                                                                          ),
                                                                           child: const Text('Cancel'),
                                                                         ),
-                                                                        ElevatedButton(
-                                                                          style: ElevatedButton.styleFrom(
-                                                                            backgroundColor: Color(0xFFB71C1C),
-                                                                          ),
+                                                                        TextButton(
                                                                           onPressed: () => Navigator.of(confirmCtx).pop(true),
-                                                                          child: const Text('Delete', style: TextStyle(color: Colors.white)),
+                                                                          style: TextButton.styleFrom(
+                                                                            backgroundColor: const Color(0xFFD32F2F),
+                                                                            foregroundColor: Colors.white,
+                                                                            shape: RoundedRectangleBorder(
+                                                                              borderRadius: BorderRadius.circular(8),
+                                                                            ),
+                                                                          ),
+                                                                          child: const Text('Delete'),
                                                                         ),
                                                                       ],
                                                                     );
@@ -2200,11 +2229,34 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                         return StatefulBuilder(
                                                                           builder: (context, setState) {
                                                                             return AlertDialog(
-                                                                              title: const Text('Confirm Completion'),
+                                                                              shape: RoundedRectangleBorder(
+                                                                                borderRadius: BorderRadius.circular(16),
+                                                                              ),
+                                                                              title: const Row(
+                                                                                children: [
+                                                                                  Icon(
+                                                                                    Icons.check_circle_outline,
+                                                                                    color: Color(0xFF4CAF50),
+                                                                                    size: 28,
+                                                                                  ),
+                                                                                  SizedBox(width: 8),
+                                                                                  Text(
+                                                                                    'Confirm Completion',
+                                                                                    style: TextStyle(
+                                                                                      color: Color(0xFF4CAF50),
+                                                                                      fontWeight: FontWeight.bold,
+                                                                                    ),
+                                                                                  ),
+                                                                                ],
+                                                                              ),
                                                                               content: Column(
                                                                                 mainAxisSize: MainAxisSize.min,
                                                                                 children: [
-                                                                                  const Text('Please confirm that you have completed this task.'),
+                                                                                  const Text(
+                                                                                    'Please confirm that you have completed this task.',
+                                                                                    style: TextStyle(fontSize: 16),
+                                                                                  ),
+                                                                                  const SizedBox(height: 16),
                                                                                   CheckboxListTile(
                                                                                     value: confirmChecked,
                                                                                     onChanged: (checked) {
@@ -2212,16 +2264,24 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                                         confirmChecked = checked ?? false;
                                                                                       });
                                                                                     },
-                                                                                    title: const Text('I hereby confirm that the task is completed'),
+                                                                                    title: const Text(
+                                                                                      'I hereby confirm that the task is completed',
+                                                                                      style: TextStyle(fontSize: 14),
+                                                                                    ),
+                                                                                    activeColor: const Color(0xFF4CAF50),
+                                                                                    contentPadding: EdgeInsets.zero,
                                                                                   ),
                                                                                 ],
                                                                               ),
                                                                               actions: [
                                                                                 TextButton(
                                                                                   onPressed: () => Navigator.of(confirmCtx).pop(),
+                                                                                  style: TextButton.styleFrom(
+                                                                                    foregroundColor: Colors.grey[600],
+                                                                                  ),
                                                                                   child: const Text('Cancel'),
                                                                                 ),
-                                                                                ElevatedButton(
+                                                                                TextButton(
                                                                                   onPressed: confirmChecked
                                                                                       ? () async {
                                                                                           final docId = task['task_id'];
@@ -2274,6 +2334,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                                           Navigator.of(ctx).pop();
                                                                                         }
                                                                                       : null,
+                                                                                  style: TextButton.styleFrom(
+                                                                                    backgroundColor: confirmChecked ? const Color(0xFF4CAF50) : Colors.grey[300],
+                                                                                    foregroundColor: confirmChecked ? Colors.white : Colors.grey[600],
+                                                                                    shape: RoundedRectangleBorder(
+                                                                                      borderRadius: BorderRadius.circular(8),
+                                                                                    ),
+                                                                                  ),
                                                                                   child: const Text('Submit'),
                                                                                 ),
                                                                               ],
@@ -2540,42 +2607,79 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                       width: 120,
                       child: ElevatedButton(
                         onPressed: () async {
-                          final caregiverId = await _getCurrentCaregiverId(context);
-                          // Fetch caregiver's assigned days and time range first
-                          List<String> caregiverAssignedDays = [];
-                          Map<String, String> caregiverTimeRange = {'start': '00:00', 'end': '23:59'};
-                          final assignSnap = await FirebaseFirestore.instance
-                            .collection('cg_house_assign')
-                            .where('caregiver_id', isEqualTo: caregiverId)
-                            .get();
-                          if (assignSnap.docs.isNotEmpty) {
-                            caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
-                            final timeRange = assignSnap.docs.first.data()['time_range'] as Map<String, dynamic>? ?? {};
-                            caregiverTimeRange = {
-                              'start': timeRange['start'] ?? '00:00',
-                              'end': timeRange['end'] ?? '23:59',
-                            };
-                          }
-                          // Now set selectedDay and fetch ALL assignedElderly with all their assigned days
-                          final now = DateTime.now();
-                          final todayName = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
-                          print('🔍 DEBUG: caregiverAssignedDays = $caregiverAssignedDays');
-                          print('🔍 DEBUG: Today is $todayName');
+                          // Show loading dialog first
+                          showDialog(
+                            context: context,
+                            barrierDismissible: false,
+                            builder: (BuildContext loadingContext) {
+                              return Dialog(
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                child: Container(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const CircularProgressIndicator(
+                                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      const Text(
+                                        'Loading elderly assignments...',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: Color(0xFF22688E),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          );
                           
-                          // Keep selectedDay for the Assigned Days dropdown (but use different logic for elderly dropdown)
-                          String selectedDay = caregiverAssignedDays.contains(todayName)
-                            ? todayName
-                            : (caregiverAssignedDays.isNotEmpty ? caregiverAssignedDays.first : 'Monday');
-                          print('🔍 DEBUG: Selected day for Assigned Days dropdown = $selectedDay');
-                          
-                          // Get ALL elderly assigned to this caregiver (from elderly_caregiver_assign collection)
-                          List<Map<String, dynamic>> assignedElderly = await _getAllAssignedElderlyFromElderlyCaregiver(caregiverId);
-                          print('🔍 DEBUG: assignedElderly result = ${assignedElderly.length} elderly found');
-                          for (var elderly in assignedElderly) {
-                            print('🔍 DEBUG: Elderly: ${elderly['elderly_fname']} (ID: ${elderly['elderly_id']})');
-                          }
-                          final rangeStart = _parseTimeOfDay(caregiverTimeRange['start']!);
-                          final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end']!);
+                          try {
+                            final caregiverId = await _getCurrentCaregiverId(context);
+                            // Fetch caregiver's assigned days and time range first
+                            List<String> caregiverAssignedDays = [];
+                            Map<String, String> caregiverTimeRange = {'start': '00:00', 'end': '23:59'};
+                            final assignSnap = await FirebaseFirestore.instance
+                              .collection('cg_house_assign')
+                              .where('caregiver_id', isEqualTo: caregiverId)
+                              .get();
+                            if (assignSnap.docs.isNotEmpty) {
+                              caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
+                              final timeRange = assignSnap.docs.first.data()['time_range'] as Map<String, dynamic>? ?? {};
+                              caregiverTimeRange = {
+                                'start': timeRange['start'] ?? '00:00',
+                                'end': timeRange['end'] ?? '23:59',
+                              };
+                            }
+                            // Now set selectedDay and fetch ALL assignedElderly with all their assigned days
+                            final now = DateTime.now();
+                            final todayName = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
+                            print('🔍 DEBUG: caregiverAssignedDays = $caregiverAssignedDays');
+                            print('🔍 DEBUG: Today is $todayName');
+                            
+                            // Keep selectedDay for the Assigned Days dropdown (but use different logic for elderly dropdown)
+                            String selectedDay = caregiverAssignedDays.contains(todayName)
+                              ? todayName
+                              : (caregiverAssignedDays.isNotEmpty ? caregiverAssignedDays.first : 'Monday');
+                            print('🔍 DEBUG: Selected day for Assigned Days dropdown = $selectedDay');
+                            
+                            // OPTIMIZATION: Preload ALL elderly data for ALL assigned days at once
+                            Map<String, List<Map<String, dynamic>>> elderlyByDay = await _preloadAllElderlyForAllAssignedDays(caregiverId, caregiverAssignedDays);
+                            List<Map<String, dynamic>> assignedElderly = elderlyByDay[selectedDay] ?? [];
+                            print('🔍 DEBUG: assignedElderly result = ${assignedElderly.length} elderly found for $selectedDay');
+                            for (var elderly in assignedElderly) {
+                              print('🔍 DEBUG: Elderly: ${elderly['elderly_fname']} (ID: ${elderly['elderly_id']})');
+                            }
+                            final rangeStart = _parseTimeOfDay(caregiverTimeRange['start']!);
+                            final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end']!);
+                            
+                            // Close loading dialog
+                            Navigator.of(context).pop();
+                            
                           showDialog(
                             context: context,
                             barrierDismissible: false,
@@ -2591,10 +2695,12 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               DateTime? selectedRecurringStartDate;
                               return StatefulBuilder(
                                 builder: (context, setState) {
-                                  Future<void> updateElderlyList(String newDay) async {
-                                    assignedElderly = await _getAssignedElderlyForCaregiverDay(caregiverId, newDay);
+                                  // OPTIMIZATION: Instant day switching using preloaded data
+                                  void updateElderlyList(String newDay) {
                                     setState(() {
                                       selectedDay = newDay;
+                                      assignedElderly = elderlyByDay[newDay] ?? [];
+                                      selectedElderly = null; // Reset selected elderly when day changes
                                     });
                                   }
                                   return Dialog(
@@ -2655,10 +2761,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                         sortedDays.sort((a, b) => weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b)));
                                                         return sortedDays.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList();
                                                       })(),
-                                                      onChanged: (val) async {
+                                                      onChanged: (val) {
                                                         if (val != null) {
-                                                          await updateElderlyList(val);
-                                                          setState(() {});
+                                                          updateElderlyList(val);
                                                         }
                                                       },
                                                     ),
@@ -3595,6 +3700,17 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               );
                             },
                           );
+                          } catch (e) {
+                            // Close loading dialog if still open
+                            Navigator.of(context).pop();
+                            // Show error message
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error loading task data: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF00588e),
@@ -3688,129 +3804,50 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     }
   }
 
-
-
-
-
-  Future<List<Map<String, dynamic>>> _getAssignedElderlyForCaregiverDay(String caregiverId, String day) async {
+  // OPTIMIZATION: Preload all elderly data for all assigned days at once to avoid repeated DB queries
+  Future<Map<String, List<Map<String, dynamic>>>> _preloadAllElderlyForAllAssignedDays(String caregiverId, List<String> assignedDays) async {
     try {
-      print('🔍 DEBUG: _getAssignedElderlyForCaregiverDay called with caregiverId=$caregiverId, day=$day');
+      print('🚀 OPTIMIZATION: Preloading elderly data for all assigned days: $assignedDays');
       
-      // Query elderly_caregiver_assign collection for this specific day
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
-          .where('day', isEqualTo: day)
-          .get();
-
-      print('🔍 DEBUG: Found ${assignSnapshot.docs.length} assignment documents for $day');
-
-      if (assignSnapshot.docs.isEmpty) {
-        print('🔍 DEBUG: No assignments found for day $day');
-        return [];
-      }
-
-      // Extract elderly IDs from assignments
-      final assignedIds = assignSnapshot.docs
-          .map((doc) => doc.data()['elderly_id'])
-          .where((id) => id != null)
-          .cast<String>()
-          .toSet()
-          .toList();
+      Map<String, List<Map<String, dynamic>>> elderlyByDay = {};
       
-      print('🔍 DEBUG: Found ${assignedIds.length} assigned elderly IDs: $assignedIds');
-
-      if (assignedIds.isEmpty) return [];
-
-      // Fetch elderly details in chunks of 30 (Firestore limit)
-      List<QuerySnapshot> elderlySnapshots = [];
-      
-      for (int i = 0; i < assignedIds.length; i += 30) {
-        final chunk = assignedIds.skip(i).take(30).toList();
-        final chunkSnapshot = await FirebaseFirestore.instance
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-        elderlySnapshots.add(chunkSnapshot);
-      }
-
-      // Build result from elderly data and get ALL assigned days for each elderly
-      List<Map<String, dynamic>> assignedElderly = [];
-      for (var snapshot in elderlySnapshots) {
-        for (var doc in snapshot.docs) {
-          final elderlyData = doc.data() as Map<String, dynamic>;
-          final elderlyId = doc.id;
-          final sex = elderlyData['elderly_sex'] ?? '';
-          final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
-          
-          // Get ALL assigned days for this elderly-caregiver pair
-          final allAssignedDays = await _getAssignedDaysForElderlyAndCaregiver(caregiverId, elderlyId);
-          
-          assignedElderly.add({
-            'elderly_id': elderlyId,
-            'caregiver_id': caregiverId,
-            'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
-            'days_assigned': allAssignedDays, // Include ALL assigned days, not just the queried day
-          });
-        }
+      // Initialize empty lists for all days
+      for (String day in assignedDays) {
+        elderlyByDay[day] = [];
       }
       
-      return assignedElderly;
-    } catch (e) {
-      print('Error in _getAssignedElderlyForCaregiverDay: $e');
-      return [];
-    }
-  }
-
-  // Get ALL elderly assigned to this caregiver from elderly_caregiver_assign collection
-  Future<List<Map<String, dynamic>>> _getAllAssignedElderlyFromElderlyCaregiver(String caregiverId) async {
-    try {
-      print('🔍 DEBUG: _getAllAssignedElderlyFromElderlyCaregiver called with caregiverId=$caregiverId');
-      
-      // Get all assignments for this caregiver from elderly_caregiver_assign collection
+      // Get ALL assignments for this caregiver (single query)
       final assignSnapshot = await FirebaseFirestore.instance
           .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
           .get();
 
-      print('🔍 DEBUG: Found ${assignSnapshot.docs.length} elderly assignment documents');
+      print('🚀 OPTIMIZATION: Found ${assignSnapshot.docs.length} total assignment documents');
 
-      if (assignSnapshot.docs.isEmpty) return [];
+      if (assignSnapshot.docs.isEmpty) return elderlyByDay;
 
-      // Get unique elderly IDs from all assignments
-      Set<String> uniqueElderlyIds = {};
-      Map<String, List<String>> elderlyDaysMap = {}; // Track days for each elderly
-
+      // Group elderly IDs by day and collect all unique elderly IDs
+      Map<String, Set<String>> elderlyIdsByDay = {};
+      Set<String> allElderlyIds = {};
+      
       for (var doc in assignSnapshot.docs) {
         final assignData = doc.data();
-        print('🔍 DEBUG: Elderly assignment document data: $assignData');
-        
         final elderlyId = assignData['elderly_id'] as String?;
-        final day = assignData['day'] as String?; // Use 'day' field instead of 'days_assigned'
-        print('🔍 DEBUG: Extracted elderly_id: $elderlyId, day: $day');
+        final day = assignData['day'] as String?;
         
-        if (elderlyId != null && elderlyId.isNotEmpty && day != null && day.isNotEmpty) {
-          uniqueElderlyIds.add(elderlyId);
-          // Add this day to the elderly's day list
-          if (!elderlyDaysMap.containsKey(elderlyId)) {
-            elderlyDaysMap[elderlyId] = [];
-          }
-          if (!elderlyDaysMap[elderlyId]!.contains(day)) {
-            elderlyDaysMap[elderlyId]!.add(day);
-          }
-          print('🔍 DEBUG: Days assigned for elderly $elderlyId: ${elderlyDaysMap[elderlyId]}');
-        } else {
-          print('🔍 DEBUG: No valid elderly_id or day found in this document');
+        if (elderlyId != null && day != null && assignedDays.contains(day)) {
+          allElderlyIds.add(elderlyId);
+          elderlyIdsByDay.putIfAbsent(day, () => {}).add(elderlyId);
         }
       }
 
-      print('🔍 DEBUG: Found ${uniqueElderlyIds.length} unique elderly IDs: $uniqueElderlyIds');
+      print('🚀 OPTIMIZATION: Found ${allElderlyIds.length} unique elderly IDs across all days');
 
-      if (uniqueElderlyIds.isEmpty) return [];
+      if (allElderlyIds.isEmpty) return elderlyByDay;
 
-      // Fetch elderly details in chunks of 30 (Firestore limit)
-      List<QuerySnapshot> elderlySnapshots = [];
-      final elderlyIds = uniqueElderlyIds.toList();
+      // Fetch ALL elderly details at once (in chunks of 30 due to Firestore limit)
+      Map<String, Map<String, dynamic>> elderlyDataMap = {};
+      final elderlyIds = allElderlyIds.toList();
       
       for (int i = 0; i < elderlyIds.length; i += 30) {
         final chunk = elderlyIds.skip(i).take(30).toList();
@@ -3818,32 +3855,57 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
             .collection('elderly')
             .where(FieldPath.documentId, whereIn: chunk)
             .get();
-        elderlySnapshots.add(chunkSnapshot);
-      }
-
-      // Build result
-      List<Map<String, dynamic>> assignedElderly = [];
-      for (var snapshot in elderlySnapshots) {
-        for (var doc in snapshot.docs) {
-          final elderlyData = doc.data() as Map<String, dynamic>;
-          final elderlyId = doc.id;
-          final sex = elderlyData['elderly_sex'] ?? '';
-          final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
-          
-          assignedElderly.add({
-            'elderly_id': elderlyId,
-            'caregiver_id': caregiverId,
-            'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
-            'days_assigned': elderlyDaysMap[elderlyId] ?? [],
-          });
+            
+        for (var doc in chunkSnapshot.docs) {
+          elderlyDataMap[doc.id] = doc.data();
         }
       }
 
-      print('🔍 DEBUG: Returning ${assignedElderly.length} elderly for dropdown');
-      return assignedElderly;
+      print('🚀 OPTIMIZATION: Loaded data for ${elderlyDataMap.length} elderly');
+
+      // Build the result map - organize elderly by day
+      for (String day in assignedDays) {
+        final elderlyIdsForDay = elderlyIdsByDay[day] ?? {};
+        
+        for (String elderlyId in elderlyIdsForDay) {
+          final elderlyData = elderlyDataMap[elderlyId];
+          if (elderlyData != null) {
+            final sex = elderlyData['elderly_sex'] ?? '';
+            final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
+            
+            // Get ALL assigned days for this elderly-caregiver pair (from our preloaded data)
+            final allAssignedDaysForElderly = elderlyIdsByDay.entries
+                .where((entry) => entry.value.contains(elderlyId))
+                .map((entry) => entry.key)
+                .toList();
+            
+            elderlyByDay[day]!.add({
+              'elderly_id': elderlyId,
+              'caregiver_id': caregiverId,
+              'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
+              'days_assigned': allAssignedDaysForElderly,
+            });
+          }
+        }
+        
+        // Sort elderly by name for consistent ordering
+        elderlyByDay[day]!.sort((a, b) => 
+          (a['elderly_fname'] ?? '').toString().toLowerCase()
+              .compareTo((b['elderly_fname'] ?? '').toString().toLowerCase())
+        );
+        
+        print('🚀 OPTIMIZATION: Day $day has ${elderlyByDay[day]!.length} elderly');
+      }
+
+      return elderlyByDay;
     } catch (e) {
-      print('Error in _getAllAssignedElderlyFromElderlyCaregiver: $e');
-      return [];
+      print('Error in _preloadAllElderlyForAllAssignedDays: $e');
+      // Return empty map with initialized lists for all days
+      Map<String, List<Map<String, dynamic>>> elderlyByDay = {};
+      for (String day in assignedDays) {
+        elderlyByDay[day] = [];
+      }
+      return elderlyByDay;
     }
   }
 
@@ -4362,7 +4424,24 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         }
       }
       
-      // Send missed task notification
+      // Create Firestore notification for missed task (so it shows in notifications screen)
+      if (caregiverId != null) {
+        try {
+          await NotificationService().createTaskNotification(
+            taskId: docId,
+            caregiverId: caregiverId,
+            elderlyName: data['elderly_fname'] ?? 'Unknown',
+            taskDescription: data['task_description'] ?? 'Unknown Task',
+            type: NotificationType.taskMissed,
+            additionalInfo: 'Task was automatically marked as missed due to time expiration',
+          );
+          print('✅ Firestore missed task notification created');
+        } catch (e) {
+          print('❌ Error creating Firestore missed task notification: $e');
+        }
+      }
+
+      // Send local push notification for missed task
       try {
         final taskStartTime = (data['task_start'] as Timestamp?)?.toDate() ?? DateTime.now();
         await TaskReminderService().showMissedTaskNotification(
@@ -4372,9 +4451,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           taskTitle: data['task_description'] ?? 'Task',
           taskDescription: data['task_description'],
         );
-        print('✅ Missed task notification sent');
+        print('✅ Local push missed task notification sent');
       } catch (notificationError) {
-        print('❌ Error sending missed task notification: $notificationError');
+        print('❌ Error sending local push missed task notification: $notificationError');
       }
 
 
