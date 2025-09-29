@@ -3857,7 +3857,12 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
             .get();
             
         for (var doc in chunkSnapshot.docs) {
-          elderlyDataMap[doc.id] = doc.data();
+          final elderlyData = doc.data();
+          // Only include elderly who are not deceased
+          final elderlyStatus = elderlyData['elderly_status'] as String?;
+          if (elderlyStatus != 'Deceased') {
+            elderlyDataMap[doc.id] = elderlyData;
+          }
         }
       }
 
