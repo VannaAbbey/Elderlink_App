@@ -8,7 +8,7 @@ import 'leave_form.dart' as app_leave_form;
 import 'add_task.dart';
 import 'incident.dart';
 import 'shift.dart';
-import 'notifications.dart';
+import '../widgets/notification_icon_button.dart';
 import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
 import '../services/house_service.dart';
@@ -583,21 +583,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                   ),
                                 ],
                               ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.notifications,
-                                  color: Color(0XFF1D66A0),
-                                  size: 35,
-                                ),
-                                onPressed: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          const NotificationsScreen(),
-                                    ),
-                                  );
-                                },
-                              ),
+                              const NotificationIconButton(),
                             ],
                           ),
                           const SizedBox(height: 20),

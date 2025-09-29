@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart' as app_auth;
-import 'notifications.dart';
 import 'shift_logs.dart';
 import '../services/task_log_service.dart';
 import '../services/additional_log_service.dart';
+import '../widgets/notification_icon_button.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -290,15 +290,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
                     onPressed: toggleSidebar,
                   ),
                   actions: [
-                    IconButton(
-                      icon: const Icon(Icons.notifications, color: Color(0xFF00588e), size: 35),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => const NotificationsScreen(),
-                          ),
-                        );
-                      },
+                    NotificationIconButton(
+                      iconColor: Color(0xFF00588e),
+                      iconSize: 35,
                     ),
                   ],
                 ),
@@ -530,7 +524,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
                             width: double.infinity,
                             height: 48,
                             child: ElevatedButton(
-                              onPressed: () {
+                              onPressed: () async {
+                                // Check if caregiver is on duty before allowing access to Write Additional Log
+                                final isOnDuty = await _isCaregiverOnDuty();
+                                if (!isOnDuty) {
+                                  _showNotOnDutyToastForAdditionalLog();
+                                  return;
+                                }
+
                                 _showAdditionalLogModal(context);
                               },
                               style: ElevatedButton.styleFrom(
@@ -557,7 +558,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
                             width: 200,
                             height: 48,
                             child: ElevatedButton(
-                              onPressed: () {
+                              onPressed: () async {
+                                // Check if caregiver is on duty before allowing access to Shift Logs
+                                final isOnDuty = await _isCaregiverOnDuty();
+                                if (!isOnDuty) {
+                                  _showNotOnDutyToast();
+                                  return;
+                                }
+
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (context) => const ShiftLogsScreen(),
@@ -650,5 +658,134 @@ class _ShiftScreenState extends State<ShiftScreen> {
           ),
         ],
       );
+    }
+
+    /// Validates if the caregiver is currently on duty
+    /// Returns true if on duty, false otherwise
+    Future<bool> _isCaregiverOnDuty() async {
+      try {
+        final currentUser = FirebaseAuth.instance.currentUser;
+        if (currentUser == null) return false;
+
+        final caregiverId = currentUser.uid;
+        final now = DateTime.now();
+        final dayName = _getDayName(now.weekday); // Use existing helper function
+
+        // Get caregiver's house assignment
+        final houseSnapshot = await FirebaseFirestore.instance
+            .collection('cg_house_assign')
+            .where('caregiver_id', isEqualTo: caregiverId)
+            .where('is_current', isEqualTo: true)
+            .where('is_absent', isEqualTo: false)
+            .limit(1)
+            .get();
+
+        if (houseSnapshot.docs.isEmpty) {
+          return false;
+        }
+
+        final houseData = houseSnapshot.docs.first.data();
+        final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
+        final startDate = (houseData['start_date'] as Timestamp).toDate();
+        final endDate = (houseData['end_date'] as Timestamp).toDate();
+
+        // Check if current date is within assignment period
+        if (now.isBefore(startDate) || now.isAfter(endDate)) {
+          return false;
+        }
+
+        // Check if today is an assigned day
+        if (!daysAssigned.contains(dayName)) {
+          return false;
+        }
+
+        // Check if current time is within shift hours
+        final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+        int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
+        
+        if (timeRange.isNotEmpty) {
+          final startParts = (timeRange['start'] as String).split(':');
+          final endParts = (timeRange['end'] as String).split(':');
+          startHour = int.parse(startParts[0]);
+          startMinute = int.parse(startParts[1]);
+          endHour = int.parse(endParts[0]);
+          endMinute = int.parse(endParts[1]);
+        }
+
+        DateTime calculatedShiftStart = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          startHour,
+          startMinute,
+        );
+        DateTime calculatedShiftEnd = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          endHour,
+          endMinute,
+        );
+
+        // Handle overnight shifts (e.g., 22:00 - 06:00)
+        if (calculatedShiftEnd.isBefore(calculatedShiftStart)) {
+          if (now.isBefore(calculatedShiftEnd)) {
+            calculatedShiftStart = calculatedShiftStart.subtract(const Duration(days: 1));
+          } else {
+            calculatedShiftEnd = calculatedShiftEnd.add(const Duration(days: 1));
+          }
+        }
+
+        final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
+        
+        return isWithinShift;
+      } catch (e) {
+        print('Error checking duty status: $e');
+        return false;
+      }
+    }
+
+    /// Shows a toast message for when caregiver is not on duty
+    void _showNotOnDutyToast() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You are currently not on duty. Cannot go to the Shift Logs section.'),
+          backgroundColor: Color(0xFFD32F2F),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+
+    /// Shows a toast message for when caregiver is not on duty for additional logs
+    void _showNotOnDutyToastForAdditionalLog() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You are currently not on duty. Cannot add additional logs.'),
+          backgroundColor: Color(0xFFD32F2F),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+
+    /// Helper function to get day name from weekday number
+    String _getDayName(int weekday) {
+      switch (weekday) {
+        case DateTime.monday:
+          return 'Monday';
+        case DateTime.tuesday:
+          return 'Tuesday';
+        case DateTime.wednesday:
+          return 'Wednesday';
+        case DateTime.thursday:
+          return 'Thursday';
+        case DateTime.friday:
+          return 'Friday';
+        case DateTime.saturday:
+          return 'Saturday';
+        case DateTime.sunday:
+          return 'Sunday';
+        default:
+          return '';
+      }
     }
 }

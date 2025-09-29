@@ -4,6 +4,7 @@ import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:intl/intl.dart';
 import '../services/task_reminder_service.dart';
 import '../services/task_log_service.dart';
 import '../services/notification_service.dart';
@@ -2222,6 +2223,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                               Flexible(
                                                                 child: TextButton.icon(
                                                                   onPressed: () async {
+                                                                    // Check if caregiver is on duty before allowing task completion
+                                                                    final isOnDuty = await _isCaregiverOnDuty();
+                                                                    if (!isOnDuty) {
+                                                                      _showNotOnDutyDialog(ctx);
+                                                                      return;
+                                                                    }
+
                                                                     bool confirmChecked = false;
                                                                     await showDialog(
                                                                       context: ctx,
@@ -2362,7 +2370,14 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                               const SizedBox(width: 8),
                                                               Flexible(
                                                                 child: TextButton.icon(
-                                                                  onPressed: () {
+                                                                  onPressed: () async {
+                                                                    // Check if caregiver is on duty before allowing task to be marked incomplete
+                                                                    final isOnDuty = await _isCaregiverOnDuty();
+                                                                    if (!isOnDuty) {
+                                                                      _showNotOnDutyDialog(ctx);
+                                                                      return;
+                                                                    }
+
                                                                     setState(() {
                                                                       showReasonInput = true;
                                                                     });
@@ -2405,6 +2420,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                 height: 44,
                                                                 child: ElevatedButton(
                                                                   onPressed: () async {
+                                                                    // Check if caregiver is on duty before submitting incomplete reason
+                                                                    final isOnDuty = await _isCaregiverOnDuty();
+                                                                    if (!isOnDuty) {
+                                                                      _showNotOnDutyDialog(ctx);
+                                                                      return;
+                                                                    }
+
                                                                     final reasonText = reasonController.text.trim();
                                                                     if (reasonText.isNotEmpty) {
                                                                       final docId = task['task_id'];
@@ -4601,5 +4623,138 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         );
       },
     ) ?? false; // Return false if dialog is dismissed
+  }
+
+  /// Validates if the caregiver is currently on duty
+  /// Returns true if on duty, false otherwise
+  Future<bool> _isCaregiverOnDuty() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return false;
+
+      final caregiverId = currentUser.uid;
+      final now = DateTime.now();
+      final dayName = DateFormat('EEEE').format(now); // e.g., "Monday"
+
+      // Get caregiver's house assignment
+      final houseSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .where('is_current', isEqualTo: true)
+          .where('is_absent', isEqualTo: false)
+          .limit(1)
+          .get();
+
+      if (houseSnapshot.docs.isEmpty) {
+        return false;
+      }
+
+      final houseData = houseSnapshot.docs.first.data();
+      final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
+      final startDate = (houseData['start_date'] as Timestamp).toDate();
+      final endDate = (houseData['end_date'] as Timestamp).toDate();
+
+      // Check if current date is within assignment period
+      if (now.isBefore(startDate) || now.isAfter(endDate)) {
+        return false;
+      }
+
+      // Check if today is an assigned day
+      if (!daysAssigned.contains(dayName)) {
+        return false;
+      }
+
+      // Check if current time is within shift hours
+      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
+      
+      if (timeRange.isNotEmpty) {
+        final startParts = (timeRange['start'] as String).split(':');
+        final endParts = (timeRange['end'] as String).split(':');
+        startHour = int.parse(startParts[0]);
+        startMinute = int.parse(startParts[1]);
+        endHour = int.parse(endParts[0]);
+        endMinute = int.parse(endParts[1]);
+      }
+
+      DateTime calculatedShiftStart = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        startHour,
+        startMinute,
+      );
+      DateTime calculatedShiftEnd = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        endHour,
+        endMinute,
+      );
+
+      // Handle overnight shifts (e.g., 22:00 - 06:00)
+      if (calculatedShiftEnd.isBefore(calculatedShiftStart)) {
+        if (now.isBefore(calculatedShiftEnd)) {
+          calculatedShiftStart = calculatedShiftStart.subtract(const Duration(days: 1));
+        } else {
+          calculatedShiftEnd = calculatedShiftEnd.add(const Duration(days: 1));
+        }
+      }
+
+      final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
+      
+      return isWithinShift;
+    } catch (e) {
+      print('Error checking duty status: $e');
+      return false;
+    }
+  }
+
+  /// Shows a dialog informing the user they are not on duty
+  void _showNotOnDutyDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.access_time_outlined,
+                color: Color(0xFFD32F2F),
+                size: 28,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Not On Duty',
+                style: TextStyle(
+                  color: Color(0xFFD32F2F),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'You are currently not on duty. Cannot update this task\'s status.',
+            style: TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

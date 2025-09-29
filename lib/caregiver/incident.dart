@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'caregiver_sidebar.dart';
-import 'notifications.dart';
+import '../widgets/notification_icon_button.dart';
 
 class IncidentScreen extends StatefulWidget {
   const IncidentScreen({super.key});
@@ -599,20 +599,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                     onPressed: toggleSidebar,
                   ),
                   actions: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.notifications,
-                        color: Color(0xFF00588e),
-                        size: 35,
-                      ),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => const NotificationsScreen(),
-                          ),
-                        );
-                      },
-                    ),
+                    const NotificationIconButton(),
                   ],
                 ),
                 body: Center(
