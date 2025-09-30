@@ -1,3 +1,4 @@
+import 'package:elderlink_app/nurse/leave_form.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'edit_profile.dart';
@@ -14,23 +15,10 @@ class IncidentReportScreen extends StatefulWidget {
 class _IncidentReportScreenState extends State<IncidentReportScreen> {
   DateTime _selectedDate = DateTime.now();
   bool _showCalendar = false;
-  bool isSidebarOpen = false; // 🔹 added for sidebar state
+  bool isSidebarOpen = false;
 
   String? nurseName;
-
-  // Dummy emergency data
-  final List<Map<String, String>> emergencies = [
-    {
-      'house': 'St. Gabriel',
-      'time': '7:30 AM',
-      'desc': 'Lolo Garin slipped and broke his ankle',
-    },
-    {
-      'house': 'St. Sebastian',
-      'time': '9:00 AM',
-      'desc': 'Lola Marian was cut by a broken glass',
-    },
-  ];
+  List<Map<String, dynamic>> emergencies = [];
 
   void _pickDate() async {
     setState(() => _showCalendar = true);
@@ -40,6 +28,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
     setState(() {
       _selectedDate = date;
       _showCalendar = false;
+      _loadIncidents();
     });
   }
 
@@ -53,6 +42,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
   void initState() {
     super.initState();
     _loadNurseData();
+    _loadIncidents();
   }
 
   Future<void> _loadNurseData() async {
@@ -63,24 +53,98 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
             .collection('users')
             .doc(user.uid)
             .get();
-
         if (doc.exists) {
           setState(() {
-            nurseName = "${doc['user_fname']}";
-          });
-        } else {
-          setState(() {
-            nurseName = null; // para lumabas "No name found"
+            nurseName = doc['user_fname'];
           });
         }
       }
     } catch (e) {
       print("❌ Error loading nurse data: $e");
-      setState(() {
-        nurseName = null;
-      });
+      setState(() => nurseName = null);
     }
   }
+
+  Future<void> _loadIncidents() async {
+  try {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('incident_report')
+        .where(
+          'incident_date_time',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(
+              DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day)),
+        )
+        .where(
+          'incident_date_time',
+          isLessThan: Timestamp.fromDate(
+              DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day + 1)),
+        )
+        .get();
+
+    List<Map<String, dynamic>> loaded = [];
+
+    for (var doc in snapshot.docs) {
+      // HOUSE NAME
+      String houseName = "Unknown House";
+      if (doc['house_id'] != null) {
+        final houseQuery = await FirebaseFirestore.instance
+            .collection('house')
+            .where('house_id', isEqualTo: doc['house_id'])
+            .limit(1)
+            .get();
+        if (houseQuery.docs.isNotEmpty) {
+          houseName = houseQuery.docs.first['house_name'];
+        }
+      }
+
+      // ELDERLY NAME
+      String elderlyName = "Unknown Elderly";
+      if (doc['elderly_id'] != null) {
+        final elderlyDoc = await FirebaseFirestore.instance
+            .collection('elderly')
+            .doc(doc['elderly_id'])
+            .get();
+        if (elderlyDoc.exists) {
+          elderlyName =
+              "${elderlyDoc['elderly_fname']} ${elderlyDoc['elderly_lname']}";
+        }
+      }
+
+      // CAREGIVER NAME
+      String caregiverName = "Unknown Caregiver";
+      if (doc['user_id_cg'] != null) {
+        final caregiverDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(doc['user_id_cg'])
+            .get();
+        if (caregiverDoc.exists) {
+          caregiverName =
+              "${caregiverDoc['user_fname']} ${caregiverDoc['user_lname']}";
+        }
+      }
+
+      loaded.add({
+        'house': houseName,
+        'elderly': elderlyName,
+        'submitted_by': caregiverName,
+        'time': DateFormat('h:mm a')
+            .format((doc['incident_date_time'] as Timestamp).toDate()),
+        'desc': doc['incident_desc'],
+        'incident_id': doc.id,
+        'user_id_nu': doc['user_id_nu'],
+        'verified': doc['incident_verify'] ?? false,
+        'timestamp': (doc['incident_date_time'] as Timestamp).toDate(),
+      });
+    }
+
+    // Sort by timestamp descending (latest on top)
+    loaded.sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
+
+    setState(() => emergencies = loaded);
+  } catch (e) {
+    print("❌ Error loading incidents: $e");
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +167,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       GestureDetector(
-                        onTap: toggleSidebar, // 🔹 open/close sidebar
+                        onTap: toggleSidebar,
                         child: const Icon(
                           Icons.menu,
                           size: 30,
@@ -127,7 +191,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Date + Calendar icon
+                  // Date + Calendar
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -164,53 +228,72 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                             color: Colors.lightBlue[100],
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 50,
-                                height: 50,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF00588E),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(
-                                  Icons.home,
-                                  color: Colors.white,
-                                  size: 28,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      em['house']!,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: Color(0xFF00588E),
-                                      ),
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 50,
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF00588E),
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'What happened?',
-                                      style: TextStyle(
-                                        color: Colors.grey[800],
-                                        fontWeight: FontWeight.w500,
-                                      ),
+                                    child: const Icon(
+                                      Icons.home,
+                                      color: Colors.white,
+                                      size: 28,
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(em['desc']!),
-                                  ],
-                                ),
-                              ),
-                              Text(
-                                em['time']!,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black54,
-                                ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          em['house'],
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                            color: Color(0xFF00588E),
+                                          ),
+                                        ),
+                                        Text(
+                                          em['elderly'],
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        Text(
+                                          "Submitted by: ${em['submitted_by']}",
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black54,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        const Text(
+                                          'What happened?',
+                                          style: TextStyle(
+                                            color: Colors.grey,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(em['desc']),
+                                      ],
+                                    ),
+                                  ),
+                                  Text(
+                                    em['time'],
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -245,7 +328,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
               ),
             ),
 
-          // Sidebar Overlay (correctly inside Stack)
+          // Sidebar Overlay
           if (isSidebarOpen) _buildSidebarOverlay(),
         ],
       ),
@@ -280,7 +363,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                   Text(
                     nurseName != null ? "Nurse $nurseName" : "No name found",
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: Colors.black,
@@ -305,14 +388,17 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                       Icons.settings,
                       color: Color(0xFF00588E),
                     ),
-                    title: const Text("Settings"),
-                    onTap: toggleSidebar,
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.help, color: Color(0xFF00588E)),
-                    title: const Text("Help & Support"),
-                    onTap: toggleSidebar,
-                  ),
+                    title: const Text("Request Leave"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const LeaveForm(),
+                        ),
+                      );
+                    },
+                  ),                 
                   const Divider(),
                   const SizedBox(height: 20),
                   Center(
@@ -328,10 +414,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                           horizontal: 60,
                         ),
                       ),
-                      onPressed: () {
-                        // TODO: hook into AuthProvider kung gusto logout
-                        toggleSidebar();
-                      },
+                      onPressed: toggleSidebar,
                       child: const Text(
                         'LOGOUT',
                         style: TextStyle(

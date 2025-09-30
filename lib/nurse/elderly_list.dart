@@ -56,64 +56,72 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
   }
 
   Future<void> fetchElderly() async {
-    setState(() => isLoading = true);
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('elderly')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('elderly_status', isEqualTo: selectedStatus)
-          .get();
+  setState(() => isLoading = true);
+  try {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('elderly')
+        .where('house_id', isEqualTo: widget.houseId)
+        .where('elderly_status', isEqualTo: selectedStatus)
+        .get();
 
-      allElderly = snapshot.docs.map((doc) {
-        final data = doc.data();
-        return {
-          'elderly_id': doc.id,
-          'elderly_fname': data['elderly_fname'] ?? '',
-          'elderly_lname': data['elderly_lname'] ?? '',
-          'elderly_profilePic': data['elderly_profilePic'] ?? '',
-          'elderly_status': data['elderly_status'] ?? 'Alive',
-        };
-      }).toList();
+    allElderly = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return {
+        'elderly_id': doc.id,
+        'elderly_fname': data['elderly_fname'] ?? '',
+        'elderly_lname': data['elderly_lname'] ?? '',
+        'elderly_profilePic': data['elderly_profilePic'] ?? '',
+        'elderly_status': data['elderly_status'] ?? 'Alive',
+        'elderly_condition': data['elderly_condition'] ?? '',
+        'elderly_dietNotes': data['elderly_dietNotes'] ?? '',
+        'elderly_mobilityStatus': data['elderly_mobilityStatus'] ?? '',
+        'elderly_sex': data['elderly_sex'] ?? '',
+      };
+    }).toList();
 
-      filterElderly();
-    } catch (e) {
-      print('Error fetching elderly: $e');
-    } finally {
-      setState(() => isLoading = false);
-    }
+    filterElderly();
+  } catch (e) {
+    print('Error fetching elderly: $e');
+  } finally {
+    setState(() => isLoading = false);
+  }
+}
+
+void filterElderly() {
+  List<Map<String, dynamic>> filtered = allElderly;
+
+  if (searchQuery.isNotEmpty) {
+    final query = searchQuery.toLowerCase();
+
+    filtered = filtered.where((e) {
+      final fullName = '${e['elderly_fname']} ${e['elderly_lname']}'.toLowerCase();
+      final condition = (e['elderly_condition'] ?? '').toLowerCase();
+      final diet = (e['elderly_dietNotes'] ?? '').toLowerCase();
+      final mobility = (e['elderly_mobilityStatus'] ?? '').toLowerCase();
+      final sex = (e['elderly_sex'] ?? '').toLowerCase();
+
+      return fullName.contains(query) ||
+          condition.contains(query) ||
+          diet.contains(query) ||
+          mobility.contains(query) ||
+          sex.contains(query);
+    }).toList();
   }
 
-  void filterElderly() {
-    List<Map<String, dynamic>> filtered = allElderly;
-
-    if (searchQuery.isNotEmpty) {
-      filtered = filtered
-          .where(
-            (e) => ('${e['elderly_fname']} ${e['elderly_lname']}')
-                .toLowerCase()
-                .contains(searchQuery.toLowerCase()),
-          )
-          .toList();
-    }
-
-    if (sortOrder == 'A-Z') {
-      filtered.sort(
-        (a, b) => ('${a['elderly_fname']} ${a['elderly_lname']}').compareTo(
-          '${b['elderly_fname']} ${b['elderly_lname']}',
-        ),
-      );
-    } else {
-      filtered.sort(
-        (a, b) => ('${b['elderly_fname']} ${b['elderly_lname']}').compareTo(
-          '${a['elderly_fname']} ${a['elderly_lname']}',
-        ),
-      );
-    }
-
-    setState(() {
-      filteredElderly = filtered;
-    });
+  if (sortOrder == 'A-Z') {
+    filtered.sort((a, b) =>
+        ('${a['elderly_fname']} ${a['elderly_lname']}')
+            .compareTo('${b['elderly_fname']} ${b['elderly_lname']}'));
+  } else {
+    filtered.sort((a, b) =>
+        ('${b['elderly_fname']} ${b['elderly_lname']}')
+            .compareTo('${a['elderly_fname']} ${a['elderly_lname']}'));
   }
+
+  setState(() {
+    filteredElderly = filtered;
+  });
+}
 
   @override
   Widget build(BuildContext context) {

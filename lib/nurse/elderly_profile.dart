@@ -57,11 +57,15 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       // If already deceased, load details
       causeController.text = elderly['elderly_causeDeath'] ?? '';
       if (elderly['elderly_deathDate'] != null &&
-          elderly['elderly_deathDate'].toString().isNotEmpty) {
-        dateOfDeath = DateTime.tryParse(
-          elderly['elderly_deathDate'].toString(),
-        );
-      }
+    elderly['elderly_deathDate'].toString().isNotEmpty) {
+  if (elderly['elderly_deathDate'] is Timestamp) {
+    dateOfDeath = (elderly['elderly_deathDate'] as Timestamp).toDate();
+  } else {
+    dateOfDeath = DateTime.tryParse(
+      elderly['elderly_deathDate'].toString(),
+    );
+  }
+}
 
       // Fetch house name
       if (elderly['house_id'] != null) {
@@ -134,9 +138,15 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
   }
 
   void showDropdownOverlay(String title, String field, List<String> options) {
-    String selectedValue = field == 'elderly_mobilityStatus'
+    // Piliin ang tamang initial value, pero siguraduhin na kasama siya sa options.
+    String currentValue = field == 'elderly_mobilityStatus'
         ? mobilityStatus
         : lifeStatus;
+
+    // Kung hindi tugma sa options, fallback sa unang item
+    String selectedValue = options.contains(currentValue)
+        ? currentValue
+        : options.first;
 
     showDialog(
       context: context,
@@ -179,35 +189,65 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, // 🔹 align left
               children: [
-                Row(
+                // Date of Death
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Date of Death: '),
-                    TextButton(
-                      onPressed: () async {
-                        final pickedDate = await showDatePicker(
-                          context: context,
-                          initialDate: DateTime.now(),
-                          firstDate: DateTime(1900),
-                          lastDate: DateTime.now(),
-                        );
-                        if (pickedDate != null) {
-                          setState(() => dateOfDeath = pickedDate);
-                        }
-                      },
-                      child: Text(
-                        dateOfDeath == null
-                            ? 'Select Date'
-                            : DateFormat('MMMM d, yyyy').format(dateOfDeath!),
+                    const Text(
+                      'Date of Death:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF00588E),
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(30),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      ),
+      onPressed: () async {
+        final pickedDate = await showDatePicker(
+          context: context,
+          initialDate: DateTime.now(),
+          firstDate: DateTime(1900),
+          lastDate: DateTime.now(),
+        );
+        if (pickedDate != null) {
+          setState(() => dateOfDeath = pickedDate);
+        }
+      },
+      child: Text(
+        dateOfDeath == null
+            ? 'Select Date'
+            : DateFormat('MMMM d, yyyy').format(dateOfDeath!),
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+    ),
                   ],
                 ),
-                const SizedBox(height: 10),
+
+                const SizedBox(height: 16),
+
+                // Cause of Death
+                const Text(
+                  'Cause of Death:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 6),
                 TextField(
                   controller: causeController,
                   decoration: const InputDecoration(
-                    labelText: 'Cause of Death',
+                    hintText: 'Enter cause of death',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -227,7 +267,15 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                   );
                   return;
                 }
-                Navigator.pop(context);
+
+                // ✅ Gamitin parent setState para magreflect agad sa ElderlyProfile
+                this.setState(() {
+                  elderly['elderly_deathDate'] = dateOfDeath;
+                  elderly['elderly_causeDeath'] = causeController.text;
+                  lifeStatus = 'Deceased'; // siguraduhin na set din
+                });
+
+                Navigator.pop(context); // close dialog
               },
               child: const Text('Save'),
             ),
@@ -590,23 +638,24 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                         fieldFontSize,
                       ),
                       if (lifeStatus == 'Deceased') ...[
-                        const SizedBox(height: 10),
-                        buildField(
-                          'Date of Death',
-                          dateOfDeath != null
-                              ? DateFormat('MMMM d, yyyy').format(dateOfDeath!)
-                              : 'Not set',
-                          fieldFontSize,
-                        ),
-                        const SizedBox(height: 10),
-                        buildField(
-                          'Cause of Death',
-                          causeController.text.isNotEmpty
-                              ? causeController.text
-                              : 'Not set',
-                          fieldFontSize,
-                        ),
-                      ],
+  const SizedBox(height: 10),
+  buildField(
+    'Date of Death',
+    dateOfDeath != null
+        ? DateFormat('MMMM d, yyyy').format(dateOfDeath!)
+        : 'Not set',
+    fieldFontSize,
+  ),
+  const SizedBox(height: 10),
+  buildField(
+    'Cause of Death',
+    causeController.text.isNotEmpty
+        ? causeController.text
+        : 'Not set',
+    fieldFontSize,
+  ),
+],
+
                       const SizedBox(height: 25),
 
                       // ✅ Button INSIDE container

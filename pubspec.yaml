@@ -54,6 +54,13 @@ dependencies:
   provider: ^6.0.5
   dropdown_button2: ^2.3.9
 
+  # << Add Flutter Local Notifications here >>
+  firebase_messaging: ^16.0.1
+  flutter_local_notifications: ^13.0.0
+  audioplayers: ^6.5.1
+
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -104,6 +111,8 @@ flutter:
     - assets/images/Emmanuel_Logo.png
     - assets/images/Gabriel_Logo.png
     - assets/images/Rose_Logo.png
+    - assets/sounds/alarm.mp3
+
 
   
   fonts:
