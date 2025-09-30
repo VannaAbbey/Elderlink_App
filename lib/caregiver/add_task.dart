@@ -366,7 +366,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
               child: Scaffold(
                 backgroundColor: Colors.transparent,
                 appBar: AppBar(
-                  backgroundColor: Colors.white,
+                  backgroundColor: const Color(0x00FFFFFF),
                   surfaceTintColor: Colors.white,
                   scrolledUnderElevation: 0,
                   elevation: 0,

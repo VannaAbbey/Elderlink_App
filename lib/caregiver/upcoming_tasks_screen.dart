@@ -49,24 +49,8 @@ Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
   final docRef = await FirebaseFirestore.instance.collection('care_tasks').add(dataWithCreator);
   print('📝 Task created in Firestore with ID: ${docRef.id}');
   
-  // Create task assignment notification (with duplicate prevention)
-  if (caregiverId != null) {
-    try {
-      print('� About to create notification for task: ${docRef.id}');
-      
-      await NotificationService().createTaskNotification(
-        taskId: docRef.id,
-        caregiverId: caregiverId,
-        elderlyName: taskData['elderly_fname'] ?? 'Unknown',
-        taskDescription: taskData['task_description'] ?? 'Unknown Task',
-        type: NotificationType.taskAssigned,
-      );
-      
-      print('✅ Notification creation completed for task: ${docRef.id}');
-    } catch (e) {
-      print('❌ Error creating task assignment notification: $e');
-    }
-  }
+  // Note: Task notifications are handled by the reminder service when tasks are due to start
+  // not immediately upon creation to avoid premature notifications
 }
 
 // Firestore helper/service class for task updates
@@ -178,16 +162,46 @@ class TaskService {
       
       final assignData = assignSnapshot.docs.first.data();
       final timeRange = assignData['time_range'] as Map<String, dynamic>? ?? {};
+      final shiftStartTime = timeRange['start'] ?? '00:00';
       final shiftEndTime = timeRange['end'] ?? '23:59';
       
-      // Parse shift end time
+      // Parse shift start and end times
+      final startTimeParts = shiftStartTime.split(':');
+      final startHour = int.parse(startTimeParts[0]);
+      final startMinute = int.parse(startTimeParts[1]);
+      
       final endTimeParts = shiftEndTime.split(':');
       final endHour = int.parse(endTimeParts[0]);
       final endMinute = int.parse(endTimeParts[1]);
-      
+
       final now = DateTime.now();
-      final shiftEndToday = DateTime(now.year, now.month, now.day, endHour, endMinute);
       
+      // Create shift start and end times for today
+      final shiftStartToday = DateTime(now.year, now.month, now.day, startHour, startMinute);
+      DateTime shiftEndToday = DateTime(now.year, now.month, now.day, endHour, endMinute);
+      
+      // Handle overnight shifts (e.g., 22:00 to 06:00)
+      // If end time is earlier than start time, the shift crosses midnight
+      if (endHour < startHour || (endHour == startHour && endMinute <= startMinute)) {
+        // This is an overnight shift
+        // If current time is before shift start time, we're in the "next day" portion
+        // So the shift end should be today, not tomorrow
+        if (now.hour < startHour || (now.hour == startHour && now.minute < startMinute)) {
+          // We're in the "next day" portion (after midnight, before shift start)
+          // Shift end is today
+          shiftEndToday = DateTime(now.year, now.month, now.day, endHour, endMinute);
+          print('🌙 Detected overnight shift (in end period): $shiftStartTime to $shiftEndTime (ends today)');
+        } else {
+          // We're in the "same day" portion (after shift start, before midnight)
+          // Shift end is tomorrow
+          shiftEndToday = DateTime(now.year, now.month, now.day + 1, endHour, endMinute);
+          print('🌙 Detected overnight shift (in start period): $shiftStartTime to $shiftEndTime (ends tomorrow)');
+        }
+      } else {
+        print('☀️ Detected regular shift: $shiftStartTime to $shiftEndTime (same day)');
+      }
+
+      print('Shift starts at: $shiftStartTime ($shiftStartToday)');
       print('Shift ends at: $shiftEndTime ($shiftEndToday)');
       print('Current time: $now');
       print('now.isAfter(shiftEndToday): ${now.isAfter(shiftEndToday)}');
@@ -1832,8 +1846,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
 
   @override
   Widget build(BuildContext context) {
-    // Trigger progressive task system check once when screen loads (includes shift time validation)
-    _checkProgressiveTaskSystem(context);
+    // Progressive task system is triggered in initState, didChangeAppLifecycleState, and onRefresh
+    // DO NOT call it here as build() runs frequently and would cause immediate task recurrence
     
     return RefreshIndicator(
       onRefresh: _onRefresh,
@@ -4203,7 +4217,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         taskEndTime: taskEndDateTime,
         taskTitle: taskDescription,
         elderlyName: elderlyFname,
-        taskDescription: 'Task for $elderlyFname',
+        taskDescription: taskDescription, // Use actual task description, not "Task for [name]"
       );
 
       print('✅ Task reminders scheduled for: $taskDescription at $taskStartDateTime');
@@ -4211,6 +4225,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       print('❌ Error scheduling task reminders: $e');
       // Don't fail task creation if reminder scheduling fails
     }
+
+    // Note: Task assignment notifications are now handled by the reminder service
+    // when the task is actually due to start, not immediately upon creation
   }
 
   // Helper function to get next assigned date for recurring tasks

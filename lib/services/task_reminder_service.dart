@@ -880,9 +880,9 @@ class TaskReminderService {
     try {
       final timeString = _formatTime(taskStartTime);
       final title = '🚨 Task Starting Now!';
-      final body = 'Task for $elderlyName is starting now at $timeString\n${taskDescription ?? taskTitle}';
+      final body = '${taskDescription ?? taskTitle} for $elderlyName is starting now at $timeString';
       
-      // Create database notification for persistent storage with deduplication
+      // Create database notification when task starts (not when assigned)
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser != null) {
         try {
