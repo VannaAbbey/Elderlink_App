@@ -745,25 +745,72 @@ class _ShiftScreenState extends State<ShiftScreen> {
       }
     }
 
-    /// Shows a toast message for when caregiver is not on duty
-    void _showNotOnDutyToast() {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are currently not on duty. Cannot go to the Shift Logs section.'),
-          backgroundColor: Color(0xFFD32F2F),
-          duration: Duration(seconds: 3),
+    /// Shows a dialog message for when caregiver is not on duty
+    void _showNotOnDutyDialog(String title, String message, String shiftRange) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 60, color: Colors.red),
+              const SizedBox(height: 12),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "$message\n\n"
+                "$shiftRange",
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15),
+              ),
+            ],
+          ),
+          actions: [
+            Center(
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFF00588e),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 50,
+                    vertical: 10,
+                  ),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text(
+                  "OK",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
         ),
       );
     }
 
-    /// Shows a toast message for when caregiver is not on duty for additional logs
+    /// Shows a dialog message for when caregiver is not on duty for shift logs
+    void _showNotOnDutyToast() {
+      _showNotOnDutyDialog(
+        'Unable to access shift logs',
+        'You are currently not allowed to access the shift logs right now.',
+        'Your shift: 2:00 PM - 10:00 PM'
+      );
+    }
+
+    /// Shows a dialog message for when caregiver is not on duty for additional logs
     void _showNotOnDutyToastForAdditionalLog() {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are currently not on duty. Cannot add additional logs.'),
-          backgroundColor: Color(0xFFD32F2F),
-          duration: Duration(seconds: 3),
-        ),
+      _showNotOnDutyDialog(
+        'Unable to add additional logs',
+        'You are currently not allowed to write any additional logs right now.',
+        'Your shift: 2:00 PM - 10:00 PM'
       );
     }
 
