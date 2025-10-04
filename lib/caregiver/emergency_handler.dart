@@ -134,11 +134,13 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   // ✅ Save to Firestore with BOTH house_id & house_name
   await FirebaseFirestore.instance.collection("emergency_alert").add({
     "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
-    "alert_description": result["description"],
+    "emergency_type": result["emergencyType"], // Main field for emergency type
+    "additional_info": result["description"], // Optional additional information
     "alert_timestamp": DateTime.now(),
     "alert_verify": false,
     "house_id": houseNameToId[result["houseName"]] ?? "",
     "house_name": result["houseName"],
+    "caregiver_name": result["caregiverName"], // Add caregiver name field
     "user_id_cg": user.uid,
     "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
   });

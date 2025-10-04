@@ -5,6 +5,53 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'caregiver_sidebar.dart';
 import '../widgets/notification_icon_button.dart';
 
+// Helper function to show error modal
+void _showErrorModal(BuildContext context, String message) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 60, color: Colors.red),
+          const SizedBox(height: 12),
+          const Text(
+            "Can't submit incident report",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15),
+          ),
+        ],
+      ),
+      actions: [
+        Center(
+          child: TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: Color(0xFF00588e),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 10),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "OK",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class IncidentScreen extends StatefulWidget {
   const IncidentScreen({super.key});
 
@@ -18,6 +65,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   String? selectedElderlyId;
   String? selectedElderlyName;
+  String? selectedIncidentType; // new incident type variable
   final TextEditingController reportController = TextEditingController();
   bool isLoading = true;
   bool isOnDuty = false;
@@ -25,6 +73,20 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   // caregiver name
   String? caregiverName;
+
+  // Incident types list
+  final List<String> incidentTypes = [
+    'Elderly fought with another elderly',
+    'Verbal abuse or aggressive behavior',
+    'Refusal of care (e.g., won\'t bathe, won\'t eat)',
+    'Wandering into another residential house',
+    'Equipment malfunction/not working as intended',
+    'Personal belongings lost or damaged',
+    'Refusal to participate in activities',
+    'Crying, agitation, or loneliness episodes',
+    'Elderly showing confusion or disorientation',
+    'Others (please specify below)',
+  ];
 
   // Shift state
   DateTime shiftStart = DateTime.now();
@@ -670,6 +732,82 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             ),
                           ),
                           const SizedBox(height: 18),
+
+                          // Incident Type
+                          Row(
+                            children: const [
+                              Icon(Icons.warning, color: Color(0xFF00588e)),
+                              SizedBox(width: 8),
+                              Text(
+                                'What is the Incident?',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Color(0xFF00588e),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Color(0xFFE6F3FA),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: selectedIncidentType,
+                                hint: Text(
+                                  isLoading
+                                      ? 'Loading...'
+                                      : (isOnDuty
+                                            ? 'Select incident type'
+                                            : 'Not your schedule today/shift'),
+                                ),
+                                isExpanded: true,
+                                icon: const Icon(
+                                  Icons.arrow_drop_down,
+                                  color: Color(0xFF00588e),
+                                ),
+                                menuMaxHeight: 300, // Make dropdown scrollable
+                                items: incidentTypes.map((type) {
+                                  return DropdownMenuItem<String>(
+                                    value: type,
+                                    child: Text(type),
+                                  );
+                                }).toList(),
+                                onChanged: isOnDuty
+                                    ? (value) {
+                                        setState(() {
+                                          selectedIncidentType = value;
+                                        });
+                                      }
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+
+                          // Other information
+                          Row(
+                            children: const [
+                              Icon(
+                                Icons.info_outline,
+                                color: Color(0xFF00588e),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Other information',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Color(0xFF00588e),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
                           Container(
                             decoration: BoxDecoration(
                               color: Color(0xFFE6F3FA),
@@ -677,10 +815,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             ),
                             child: TextField(
                               controller: reportController,
-                              maxLines: 20,
+                              maxLines: 15,
                               enabled: isOnDuty,
                               decoration: const InputDecoration(
-                                hintText: 'Write the incident report here.',
+                                hintText: 'Write here what happened... (optional)',
                                 hintStyle: TextStyle(
                                   fontStyle: FontStyle.italic,
                                 ),
@@ -695,6 +833,24 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             child: ElevatedButton(
                               onPressed: isOnDuty
                                   ? () {
+                                      // Validation checks
+                                      if (selectedElderlyId == null) {
+                                        _showErrorModal(context, "Please select an elderly person.");
+                                        return;
+                                      }
+                                      
+                                      if (selectedIncidentType == null) {
+                                        _showErrorModal(context, "Please select an incident type.");
+                                        return;
+                                      }
+                                      
+                                      // Check if "Others" is selected but text field is empty
+                                      if (selectedIncidentType == "Others (please specify below)" &&
+                                          reportController.text.trim().isEmpty) {
+                                        _showErrorModal(context, "Please fill in the additional information field!");
+                                        return;
+                                      }
+
                                       final formattedDate = DateFormat(
                                         'MM/dd/yy | h:mm a',
                                       ).format(DateTime.now());
@@ -887,7 +1043,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                           ],
                                                         ),
                                                         const SizedBox(
-                                                          height: 20,
+                                                          height: 10,
                                                         ),
                                                         Row(
                                                           children: [
@@ -901,7 +1057,50 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                               width: 8,
                                                             ),
                                                             const Text(
-                                                              'Incident Description:',
+                                                              'Incident Type:',
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 4,
+                                                            ),
+                                                            Expanded(
+                                                              child: Text(
+                                                                selectedIncidentType ?? '',
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          15,
+                                                                    ),
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .visible,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 20,
+                                                        ),
+                                                        Row(
+                                                          children: [
+                                                            const Icon(
+                                                              Icons.info_outline,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
+                                                            const Text(
+                                                              'Additional Information:',
                                                               style: TextStyle(
                                                                 fontWeight:
                                                                     FontWeight
@@ -940,13 +1139,17 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                   Alignment
                                                                       .topLeft,
                                                               child: Text(
-                                                                reportController
-                                                                    .text,
-                                                                style: const TextStyle(
-                                                                  fontStyle:
-                                                                      FontStyle
-                                                                          .italic,
+                                                                reportController.text.trim().isEmpty 
+                                                                    ? 'No additional information provided.'
+                                                                    : reportController.text,
+                                                                style: TextStyle(
+                                                                  fontStyle: reportController.text.trim().isEmpty 
+                                                                      ? FontStyle.italic
+                                                                      : FontStyle.normal,
                                                                   fontSize: 15,
+                                                                  color: reportController.text.trim().isEmpty
+                                                                      ? Colors.grey[600]
+                                                                      : Colors.black,
                                                                 ),
                                                               ),
                                                             ),
@@ -1221,7 +1424,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               'elderly_id': selectedElderlyId,
                                                                               'house_id': houseId,
                                                                               'incident_date_time': formattedDate,
-                                                                              'incident_desc': reportController.text.trim(),
+                                                                              'incident_type': selectedIncidentType, // Main field for incident type
+                                                                              'additional_info': reportController.text.trim(), // Optional additional information
                                                                               'incident_id': incidentDocRef.id,
                                                                               'incident_verify': true,
                                                                               'user_id_cg': caregiverId,
@@ -1242,6 +1446,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               setState(() {
                                                                                 selectedElderlyId = null;
                                                                                 selectedElderlyName = null;
+                                                                                selectedIncidentType = null;
                                                                               });
                                                                             }
                                                                           });

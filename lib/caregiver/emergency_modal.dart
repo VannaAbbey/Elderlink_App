@@ -1,12 +1,59 @@
 import 'package:flutter/material.dart';
 
+// Helper function to show error modal
+void _showErrorModal(BuildContext context, String message) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 60, color: Colors.red),
+          const SizedBox(height: 12),
+          const Text(
+            "Can't send to Medical Services",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15),
+          ),
+        ],
+      ),
+      actions: [
+        Center(
+          child: TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: Color(0xFF00588e),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 10),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "OK",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 Future<Map<String, dynamic>?> showEmergencyModal(
   BuildContext context, {
   required String defaultHouse,
   required String caregiverName, // ipapasa from handler
 }) async {
   String? selectedHouse = defaultHouse;
-  String selectedType = "Medical"; // default
+  String? selectedEmergencyType; // new emergency type variable
   String emergencyDetails = '';
   bool acknowledged = false;
 
@@ -16,6 +63,19 @@ Future<Map<String, dynamic>?> showEmergencyModal(
     'St. Charbell',
     'St. Rose',
     'St. Gabriel',
+  ];
+
+  final List<String> emergencyTypes = [
+    'Elderly has slipped/fell down',
+    'Elderly is having a stroke',
+    'Elderly is having a heart attack',
+    'Elderly is having a seizure',
+    'Elderly is choking on something',
+    'Elderly became unconscious',
+    'Elderly is having an allergic reaction',
+    'Elderly is missing/has wandered off',
+    'Elderly is having a fever',
+    'Others (please specify below)',
   ];
 
   final TextEditingController detailsController = TextEditingController();
@@ -62,15 +122,18 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              IconButton(
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                icon: const Icon(
-                                  Icons.close,
-                                  size: 28,
-                                  color: Color(0xFF00588e),
+                              Transform.translate(
+                                offset: const Offset(16, -3), // Move right and up
+                                child: IconButton(
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  icon: const Icon(
+                                    Icons.close,
+                                    size: 28,
+                                    color: Color(0xFF00588e),
+                                  ),
+                                  onPressed: () => Navigator.of(context).pop(),
                                 ),
-                                onPressed: () => Navigator.of(context).pop(),
                               ),
                             ],
                           ),
@@ -141,16 +204,65 @@ Future<Map<String, dynamic>?> showEmergencyModal(
 
                       const SizedBox(height: 18),
 
+                      // Emergency Type
+                      Row(
+                        children: [
+                          const Icon(Icons.warning, color: Color(0xFF00588e)),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'What is the Emergency?',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Color(0xFF00588e),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE6F3FA),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedEmergencyType,
+                            isExpanded: true,
+                            hint: const Text('Select emergency type'),
+                            menuMaxHeight: 300, // Make dropdown scrollable
+                            icon: const Icon(
+                              Icons.arrow_drop_down,
+                              color: Color(0xFF00588e),
+                            ),
+                            items: emergencyTypes.map((type) {
+                              return DropdownMenuItem<String>(
+                                value: type,
+                                child: Text(type),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              setState(() {
+                                selectedEmergencyType = value;
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 18),
+
                       // Details
                       Row(
                         children: [
                           const Icon(
-                            Icons.medical_services,
+                            Icons.info_outline,
                             color: Color(0xFF00588e),
                           ),
                           const SizedBox(width: 8),
                           const Text(
-                            'What is the emergency?',
+                            'Other information',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
@@ -169,7 +281,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                           controller: detailsController,
                           maxLines: 5,
                           decoration: const InputDecoration(
-                            hintText: 'Write here what happened...',
+                            hintText: 'Write here what happened... (optional)',
                             border: InputBorder.none,
                             contentPadding: EdgeInsets.all(12),
                           ),
@@ -236,11 +348,18 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                           onPressed:
                               acknowledged &&
                                   selectedHouse != null &&
-                                  emergencyDetails.isNotEmpty
+                                  selectedEmergencyType != null
                               ? () {
+                                  // Check if "Others" is selected but text field is empty
+                                  if (selectedEmergencyType == "Others (please specify below)" &&
+                                      emergencyDetails.trim().isEmpty) {
+                                    _showErrorModal(context, "Please fill in the field!");
+                                    return;
+                                  }
+                                  
                                   Navigator.of(context).pop({
                                     "houseName": selectedHouse,
-                                    "type": selectedType,
+                                    "emergencyType": selectedEmergencyType,
                                     "description": emergencyDetails,
                                     "caregiverName": caregiverName,
                                   });
