@@ -47,7 +47,19 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
   }
 
   String _getCurrentDay() {
-    return DateFormat('EEEE').format(DateTime.now());
+    final now = DateTime.now();
+    final currentHour = now.hour;
+
+    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
+    // we need to look at the previous day's assignments
+    if (currentHour >= 0 && currentHour < 6) {
+      // It's after midnight during third shift, so get previous day
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('EEEE').format(previousDay);
+    }
+
+    // For all other times, use current day
+    return DateFormat('EEEE').format(now);
   }
 
   Future<String?> _getNurseId() async {

@@ -29,11 +29,35 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
   }
 
   String _getCurrentDay() {
-    return DateFormat('EEEE').format(DateTime.now());
+    final now = DateTime.now();
+    final currentHour = now.hour;
+
+    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
+    // we need to look at the previous day's assignments
+    if (currentHour >= 0 && currentHour < 6) {
+      // It's after midnight during third shift, so get previous day
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('EEEE').format(previousDay);
+    }
+
+    // For all other times, use current day
+    return DateFormat('EEEE').format(now);
   }
 
   String _getTodayDateString() {
-    return DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final now = DateTime.now();
+    final currentHour = now.hour;
+
+    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
+    // we need to use the previous day's date for assignments
+    if (currentHour >= 0 && currentHour < 6) {
+      // It's after midnight during third shift, so get previous day's date
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('yyyy-MM-dd').format(previousDay);
+    }
+
+    // For all other times, use current date
+    return DateFormat('yyyy-MM-dd').format(now);
   }
 
   String _getPreviousShift() {
@@ -148,15 +172,20 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
   }
 
   // Create daily vital assignments for all assigned elderly
-  Future<void> _cleanupIncorrectAssignments() async {
+  Future<void> _cleanupIncorrectAssignments(
+    String nurseId,
+    List<String> validElderlyIds,
+  ) async {
     final today = _getTodayDateString();
     final currentShift = _getCurrentShift();
 
     print('🧹 Cleaning up incorrect assignments...');
+    print('🧹 Valid elderly IDs for this nurse: $validElderlyIds');
 
-    // Get all assignments for today
+    // Get all assignments for this nurse, today, and current shift
     final incorrectAssignments = await _firestore
         .collection('daily_vital_assignments')
+        .where('assigned_nurse_id', isEqualTo: nurseId)
         .where('assigned_date', isEqualTo: today)
         .where('shift', isEqualTo: currentShift)
         .get();
@@ -165,26 +194,57 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
     for (final doc in incorrectAssignments.docs) {
       final data = doc.data();
       final elderlyId = data['elderly_id'];
+      final assignmentHouseId = data['house_id'];
+      bool shouldDelete = false;
+      String deleteReason = '';
 
-      // Get the actual elderly data to check house_id
-      final elderlyDoc = await _firestore
-          .collection('elderly')
-          .doc(elderlyId)
-          .get();
+      // Check if elderly ID is in the valid list for this nurse
+      if (!validElderlyIds.contains(elderlyId)) {
+        shouldDelete = true;
+        deleteReason = 'Elderly not assigned to this nurse';
+      }
+      // Check if house_id matches the current tab's house
+      else if (assignmentHouseId != widget.houseId) {
+        shouldDelete = true;
+        deleteReason =
+            'Wrong house_id (was: $assignmentHouseId, should be: ${widget.houseId})';
+      }
+      // Double-check against actual elderly data
+      else {
+        final elderlyDoc = await _firestore
+            .collection('elderly')
+            .doc(elderlyId)
+            .get();
 
-      if (elderlyDoc.exists) {
-        final elderlyData = elderlyDoc.data()!;
-        final actualHouseId = elderlyData['house_id'];
-        final assignmentHouseId = data['house_id'];
+        if (elderlyDoc.exists) {
+          final elderlyData = elderlyDoc.data()!;
+          final actualHouseId = elderlyData['house_id'];
+          final elderlyStatus = elderlyData['elderly_status'];
 
-        // If assignment house_id doesn't match elderly's actual house_id, delete it
-        if (actualHouseId != assignmentHouseId) {
-          await doc.reference.delete();
-          deletedCount++;
-          print(
-            '🗑️ Deleted incorrect assignment: ${data['elderly_name']} (was: $assignmentHouseId, should be: $actualHouseId)',
-          );
+          // Delete if elderly's actual house doesn't match assignment house
+          if (actualHouseId != assignmentHouseId) {
+            shouldDelete = true;
+            deleteReason =
+                'Elderly actual house mismatch (assignment: $assignmentHouseId, actual: $actualHouseId)';
+          }
+          // Delete if elderly is not alive
+          else if (elderlyStatus != 'Alive') {
+            shouldDelete = true;
+            deleteReason =
+                'Elderly status is not Alive (status: $elderlyStatus)';
+          }
+        } else {
+          shouldDelete = true;
+          deleteReason = 'Elderly document does not exist';
         }
+      }
+
+      if (shouldDelete) {
+        await doc.reference.delete();
+        deletedCount++;
+        print(
+          '🗑️ Deleted incorrect assignment: ${data['elderly_name']} - $deleteReason',
+        );
       }
     }
 
@@ -308,9 +368,6 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
       // Handle shift transition - only mark as missed if different nurse is taking over
       await _handleShiftTransition(nurseId);
 
-      // Clean up any incorrect assignments first
-      await _cleanupIncorrectAssignments();
-
       // First check if nurse is assigned to work this shift on this day
       print('Checking shift assignment for nurseId: $nurseId');
       print('Looking for - Shift: $currentShift, Day: $currentDay');
@@ -398,6 +455,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
         return [];
       }
 
+      // Clean up any incorrect assignments first (now that we have valid elderly IDs)
+      await _cleanupIncorrectAssignments(nurseId, elderlyIdsForThisHouse);
+
       // Create daily vital assignments for elderly in THIS HOUSE ONLY
       print(
         '🚀 About to call _createDailyVitalAssignments with nurseId: $nurseId and ${elderlyIdsForThisHouse.length} elderly',
@@ -461,10 +521,16 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
         final status = assignmentData['status'];
         final originalNurse = assignmentData['assigned_nurse_name'];
 
-        // Prevent duplicates and ensure correct house
+        // CRITICAL VALIDATION: Only show elderly that are actually assigned to this nurse AND belong to this house
         if (assignmentData['house_id'] == widget.houseId &&
-            !seenElderlyIds.contains(elderlyId)) {
+            !seenElderlyIds.contains(elderlyId) &&
+            elderlyIdsForThisHouse.contains(elderlyId)) {
+          // ADDED: Must be in the valid assigned list
           seenElderlyIds.add(elderlyId);
+
+          print(
+            '✅ VALIDATED: Including elderly ${assignmentData['elderly_name']} - assigned to this nurse and belongs to this house',
+          );
 
           // Determine if this is an inherited assignment (created from previous shift)
           final isInherited = assignmentData['inherited_from_shift'] != null;
@@ -607,6 +673,20 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
         } else if (seenElderlyIds.contains(elderlyId)) {
           print(
             '🔄 DUPLICATE: Skipping duplicate elderly: ${assignmentData['elderly_name']} (${elderlyId})',
+          );
+        } else {
+          // Debug: Why was this elderly rejected?
+          final reasons = <String>[];
+          if (assignmentData['house_id'] != widget.houseId) {
+            reasons.add(
+              'wrong house (${assignmentData['house_id']} != ${widget.houseId})',
+            );
+          }
+          if (!elderlyIdsForThisHouse.contains(elderlyId)) {
+            reasons.add('not assigned to this nurse');
+          }
+          print(
+            '❌ REJECTED: Skipping elderly ${assignmentData['elderly_name']} - ${reasons.join(', ')}',
           );
         }
       }
