@@ -746,7 +746,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     }
 
     /// Shows a dialog message for when caregiver is not on duty
-    void _showNotOnDutyDialog(String title, String message, String shiftRange) {
+    void _showNotOnDutyDialog(String title, String message) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -766,8 +766,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                "$message\n\n"
-                "$shiftRange",
+                message,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 15),
               ),
@@ -800,8 +799,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     void _showNotOnDutyToast() {
       _showNotOnDutyDialog(
         'Unable to access shift logs',
-        'You are currently not allowed to access the shift logs right now.',
-        'Your shift: 2:00 PM - 10:00 PM'
+        'You are currently not allowed to access the shift logs right now.'
       );
     }
 
@@ -809,8 +807,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     void _showNotOnDutyToastForAdditionalLog() {
       _showNotOnDutyDialog(
         'Unable to add additional logs',
-        'You are currently not allowed to write any additional logs right now.',
-        'Your shift: 2:00 PM - 10:00 PM'
+        'You are currently not allowed to write any additional logs right now.'
       );
     }
 

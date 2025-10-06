@@ -279,7 +279,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
           for (var doc in chunkSnapshot.docs) {
             final data = doc.data();
-            if (data['house_id'] == houseId) {
+            // Filter out deceased elderly and only include those in the same house
+            if (data['house_id'] == houseId && 
+                data['elderly_status'] != 'Deceased') {
               elderlyDetails.add({
                 'id': doc.id,
                 'name':
@@ -901,23 +903,26 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                               MainAxisAlignment
                                                                   .end,
                                                           children: [
-                                                            IconButton(
-                                                              padding:
-                                                                  EdgeInsets
-                                                                      .zero,
-                                                              constraints:
-                                                                  const BoxConstraints(),
-                                                              icon: const Icon(
-                                                                Icons.close,
-                                                                size: 28,
-                                                                color: Color(
-                                                                  0xFF00588e,
+                                                            Transform.translate(
+                                                              offset: const Offset(16, -3),
+                                                              child: IconButton(
+                                                                padding:
+                                                                    EdgeInsets
+                                                                        .zero,
+                                                                constraints:
+                                                                    const BoxConstraints(),
+                                                                icon: const Icon(
+                                                                  Icons.close,
+                                                                  size: 28,
+                                                                  color: Color(
+                                                                    0xFF00588e,
+                                                                  ),
                                                                 ),
+                                                                onPressed: () =>
+                                                                    Navigator.of(
+                                                                      context,
+                                                                    ).pop(),
                                                               ),
-                                                              onPressed: () =>
-                                                                  Navigator.of(
-                                                                    context,
-                                                                  ).pop(),
                                                             ),
                                                           ],
                                                         ),
