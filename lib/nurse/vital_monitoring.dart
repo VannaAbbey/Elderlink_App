@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../auth/login.dart';
-import 'vital_monitoring_layout.dart';
+import 'vital_monitoring_new_layout.dart';
+import 'medication_activity_logs.dart';
 
 /// =============================
 /// Medication Management Screen
@@ -11,12 +12,10 @@ class VitalMonitoringScreen extends StatefulWidget {
   const VitalMonitoringScreen({super.key});
 
   @override
-  State<VitalMonitoringScreen> createState() =>
-      _VitalMonitoringScreenState();
+  State<VitalMonitoringScreen> createState() => _VitalMonitoringScreenState();
 }
 
-class _VitalMonitoringScreenState
-    extends State<VitalMonitoringScreen> {
+class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   String _search = '';
@@ -60,6 +59,18 @@ class _VitalMonitoringScreenState
 
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
 
+  void _onBellPressed() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MedicationActivityLogsScreen(
+          houseId: selectedHouseId ?? 'H001', // Use selected house or default
+          nurseName: nurseName,
+        ),
+      ),
+    );
+  }
+
   /// Fetch Houses
   Future<List<Map<String, dynamic>>> fetchHouses() async {
     final snap = await _firestore.collection('house').get();
@@ -84,8 +95,10 @@ class _VitalMonitoringScreenState
       final data = d.data();
       return {
         'elderly_id': d.id,
-        'elderly_name': data['elderly_name'] ??
-            "${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}".trim(),
+        'elderly_name':
+            data['elderly_name'] ??
+            "${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}"
+                .trim(),
         'elderly_age': data['elderly_age'] ?? '',
       };
     }).toList();
@@ -93,11 +106,11 @@ class _VitalMonitoringScreenState
     // Apply search filter
     if (_search.isNotEmpty) {
       return list
-          .where((e) =>
-              (e['elderly_name'] ?? '')
-                  .toString()
-                  .toLowerCase()
-                  .contains(_search.toLowerCase()))
+          .where(
+            (e) => (e['elderly_name'] ?? '').toString().toLowerCase().contains(
+              _search.toLowerCase(),
+            ),
+          )
           .toList();
     }
     return list;
@@ -120,7 +133,7 @@ class _VitalMonitoringScreenState
 
   @override
   Widget build(BuildContext context) {
-    return VitalMonitoringLayout(
+    return VitalMonitoringNewLayout(
       search: _search,
       onSearchChanged: (v) => setState(() => _search = v),
       toggleSidebar: toggleSidebar,
@@ -133,7 +146,7 @@ class _VitalMonitoringScreenState
       onHouseSelected: (houseId) {
         setState(() => selectedHouseId = houseId);
       },
-     
+      onBellPressed: _onBellPressed,
     );
   }
 }

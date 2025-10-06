@@ -110,7 +110,11 @@ class EmergencyService {
       print('❌ Notification error: $e');
     }
 
-    await _showModal(alertId, description: description, timestamp: formattedTime);
+    await _showModal(
+      alertId,
+      description: description,
+      timestamp: formattedTime,
+    );
   }
 
   static Future<void> _showModal(
@@ -265,21 +269,21 @@ class MyApp extends StatelessWidget {
           .orderBy('alert_timestamp', descending: true)
           .snapshots()
           .listen((snapshot) {
-        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-        for (var doc in snapshot.docs) {
-          final data = doc.data();
-          final alertId = doc.id;
-          final description = data['alert_description'] ?? 'No description';
-          final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
+            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+            for (var doc in snapshot.docs) {
+              final data = doc.data();
+              final alertId = doc.id;
+              final description = data['alert_description'] ?? 'No description';
+              final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
 
-          if (currentUserId != null && nurseArray.contains(currentUserId)) {
-            EmergencyService.showEmergencyAlert(
-              alertId: alertId,
-              description: description,
-            );
-          }
-        }
-      });
+              if (currentUserId != null && nurseArray.contains(currentUserId)) {
+                EmergencyService.showEmergencyAlert(
+                  alertId: alertId,
+                  description: description,
+                );
+              }
+            }
+          });
     } catch (e) {
       print('❌ Firestore emergency listener error: $e');
     }
@@ -292,54 +296,59 @@ class MyApp extends StatelessWidget {
           .orderBy('incident_date_time', descending: true)
           .snapshots()
           .listen((snapshot) async {
-        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
-        for (var doc in snapshot.docs) {
-          final data = doc.data();
-          final incidentId = doc.id;
-          final description = data['incident_desc'] ?? 'No description';
-          final timestampRaw = data['incident_date_time']?.toDate();
-          if (timestampRaw == null) continue;
+            for (var doc in snapshot.docs) {
+              final data = doc.data();
+              final incidentId = doc.id;
+              final incidentType = data['incident_type'] ?? 'No incident type';
+              final additionalInfo = data['additional_info'] ?? '';
+              final description = additionalInfo.isNotEmpty
+                  ? '$incidentType - $additionalInfo'
+                  : incidentType;
+              final timestampRaw = data['incident_date_time']?.toDate();
+              if (timestampRaw == null) continue;
 
-          // skip if already notified
-          if (_lastIncidentTime != null &&
-              !timestampRaw.isAfter(_lastIncidentTime!)) {
-            continue;
-          }
+              // skip if already notified
+              if (_lastIncidentTime != null &&
+                  !timestampRaw.isAfter(_lastIncidentTime!)) {
+                continue;
+              }
 
-          final houseId = data['house_id'];
-          String houseName = 'Unknown house';
-          if (houseId != null) {
-            final houseDoc = await FirebaseFirestore.instance
-                .collection('house')
-                .where('house_id', isEqualTo: houseId.toString())
-                .limit(1)
-                .get();
-            if (houseDoc.docs.isNotEmpty) {
-              houseName =
-                  houseDoc.docs.first.data()['house_name'] ?? 'Unknown house';
+              final houseId = data['house_id'];
+              String houseName = 'Unknown house';
+              if (houseId != null) {
+                final houseDoc = await FirebaseFirestore.instance
+                    .collection('house')
+                    .where('house_id', isEqualTo: houseId.toString())
+                    .limit(1)
+                    .get();
+                if (houseDoc.docs.isNotEmpty) {
+                  houseName =
+                      houseDoc.docs.first.data()['house_name'] ??
+                      'Unknown house';
+                }
+              }
+
+              final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
+              if (currentUserId != null && nurseArray.contains(currentUserId)) {
+                final formattedTime = DateFormat('h:mm a').format(timestampRaw);
+                await IncidentService.showIncidentNotification(
+                  incidentId: incidentId,
+                  title: '📝 Incident Report',
+                  description: description,
+                  houseName: houseName,
+                  timestamp: formattedTime,
+                );
+
+                // update last notified timestamp
+                if (_lastIncidentTime == null ||
+                    timestampRaw.isAfter(_lastIncidentTime!)) {
+                  _lastIncidentTime = timestampRaw;
+                }
+              }
             }
-          }
-
-          final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
-          if (currentUserId != null && nurseArray.contains(currentUserId)) {
-            final formattedTime = DateFormat('h:mm a').format(timestampRaw);
-            await IncidentService.showIncidentNotification(
-              incidentId: incidentId,
-              title: '📝 Incident Report',
-              description: description,
-              houseName: houseName,
-              timestamp: formattedTime,
-            );
-
-            // update last notified timestamp
-            if (_lastIncidentTime == null ||
-                timestampRaw.isAfter(_lastIncidentTime!)) {
-              _lastIncidentTime = timestampRaw;
-            }
-          }
-        }
-      });
+          });
     } catch (e) {
       print('❌ Firestore incident listener error: $e');
     }
@@ -360,11 +369,9 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           fontFamily: 'Poppins',
           textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
-          colorScheme:
-              ColorScheme.fromSeed(seedColor: const Color(0xFFA5D4DC)),
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFA5D4DC)),
           inputDecorationTheme: const InputDecorationTheme(
-            contentPadding:
-                EdgeInsets.symmetric(vertical: 2, horizontal: 20),
+            contentPadding: EdgeInsets.symmetric(vertical: 2, horizontal: 20),
             filled: true,
             fillColor: Color(0xFFC1E5E9),
             border: OutlineInputBorder(

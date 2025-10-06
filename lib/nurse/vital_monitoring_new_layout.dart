@@ -1,11 +1,11 @@
-// lib/nurse/medication_management_layout.dart
+// lib/nurse/vital_monitoring_new_layout.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'medication_upcoming.dart';
-import 'medication_completed.dart';
-import 'medication_missed.dart';
+import 'vital_upcoming.dart';
+import 'vital_completed.dart';
+import 'vital_missed.dart';
 
-class MedicationManagementLayout extends StatelessWidget {
+class VitalMonitoringNewLayout extends StatelessWidget {
   final String search;
   final ValueChanged<String> onSearchChanged;
   final VoidCallback toggleSidebar;
@@ -19,7 +19,7 @@ class MedicationManagementLayout extends StatelessWidget {
   final ValueChanged<String?> onHouseSelected;
   final VoidCallback? onBellPressed;
 
-  const MedicationManagementLayout({
+  const VitalMonitoringNewLayout({
     super.key,
     required this.search,
     required this.onSearchChanged,
@@ -33,13 +33,14 @@ class MedicationManagementLayout extends StatelessWidget {
     required this.onHouseSelected,
     this.onBellPressed,
   });
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF00588E),
         title: const Text(
-          'Medication Management',
+          'Vital Monitoring',
           style: TextStyle(color: Colors.white),
         ),
         leading: IconButton(
@@ -85,6 +86,9 @@ class MedicationManagementLayout extends StatelessWidget {
                         unselectedLabelColor: Colors.grey,
                         indicatorColor: const Color(0xFF00588E),
                         tabs: houses.map((house) {
+                          print(
+                            '🏠 Creating tab for house: ${house['house_name']} with ID: ${house['house_id']}',
+                          );
                           return Tab(
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -117,7 +121,7 @@ class MedicationManagementLayout extends StatelessWidget {
                             length: 3,
                             child: Column(
                               children: [
-                                // Medication Status Tabs
+                                // Vital Status Tabs
                                 TabBar(
                                   labelColor: const Color(0xFF00588E),
                                   unselectedLabelColor: Colors.grey,
@@ -129,19 +133,26 @@ class MedicationManagementLayout extends StatelessWidget {
                                   ],
                                 ),
 
-                                // Medication Content
+                                // Vital Content
                                 Expanded(
                                   child: TabBarView(
                                     children: [
-                                      UpcomingMedicationsTab(
+                                      Builder(
+                                        builder: (context) {
+                                          print(
+                                            '🔄 Creating UpcomingVitalsTab for house: ${house['house_name']} with ID: ${house['house_id']}',
+                                          );
+                                          return UpcomingVitalsTab(
+                                            houseId: house['house_id'],
+                                            nurseName: nurseName,
+                                          );
+                                        },
+                                      ),
+                                      CompletedVitalsTab(
                                         houseId: house['house_id'],
                                         nurseName: nurseName,
                                       ),
-                                      CompletedMedicationsTab(
-                                        houseId: house['house_id'],
-                                        nurseName: nurseName,
-                                      ),
-                                      MissedMedicationsTab(
+                                      MissedVitalsTab(
                                         houseId: house['house_id'],
                                         nurseName: nurseName,
                                       ),

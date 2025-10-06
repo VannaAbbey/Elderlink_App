@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../auth/login.dart';
 import 'medication_management_layout.dart';
+import 'medication_activity_logs.dart';
 
 /// =============================
 /// Medication Management Screen
@@ -60,6 +60,18 @@ class _MedicationManagementScreenState
 
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
 
+  void _onBellPressed() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MedicationActivityLogsScreen(
+          houseId: selectedHouseId ?? 'H001', // Use selected house or default
+          nurseName: nurseName,
+        ),
+      ),
+    );
+  }
+
   /// Fetch Houses
   Future<List<Map<String, dynamic>>> fetchHouses() async {
     final snap = await _firestore.collection('house').get();
@@ -72,50 +84,118 @@ class _MedicationManagementScreenState
     return list;
   }
 
-  /// ✅ Fetch Elderly under a house
+  /// ✅ Fetch Elderly under a house (assigned only for this nurse + today + current shift)
   Future<List<Map<String, dynamic>>> fetchElderlies(String houseId) async {
-    final snap = await _firestore
-        .collection('elderly')
-        .where('house_id', isEqualTo: houseId)
-        .where('elderly_status', isEqualTo: 'Alive') // optional filter
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return [];
+
+    // 🔹 Step 1: Load nurse profile to get the correct nurse_id (doc ID)
+    final userDoc = await _firestore
+        .collection('users')
+        .doc(currentUser.uid)
+        .get();
+    if (!userDoc.exists) return [];
+    final nurseId = userDoc.id; // ✅ Firestore doc ID is nurse_id
+
+    // 🔹 Step 2: Determine today's day string
+    final days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    final today = days[DateTime.now().weekday - 1];
+
+    // 🔹 Step 3: Get current shift assignment
+    final shiftSnap = await _firestore
+        .collection('nurse_shift_assign')
+        .where('nurse_id', isEqualTo: nurseId)
+        .where('is_current', isEqualTo: true)
+        .where('days_assigned', arrayContains: today)
         .get();
 
-    final list = snap.docs.map((d) {
-      final data = d.data();
-      return {
-        'elderly_id': d.id,
-        'elderly_name': data['elderly_name'] ??
-            "${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}".trim(),
-        'elderly_age': data['elderly_age'] ?? '',
-      };
-    }).toList();
+    if (shiftSnap.docs.isEmpty) return []; // No shift assigned today
 
-    // Apply search filter
+    final currentShift = shiftSnap.docs.first.data()['shift'] as String?;
+    if (currentShift == null) return [];
+
+    // 🔹 Step 4: Get elderly assignments for this nurse + today + shift
+    final assignSnap = await _firestore
+        .collection('nurse_elderly_assign')
+        .where('nurse_id', isEqualTo: nurseId)
+        .where('is_current', isEqualTo: true)
+        .where('day', isEqualTo: today)
+        .where('shift', isEqualTo: currentShift)
+        .get();
+
+    if (assignSnap.docs.isEmpty) return [];
+
+    // 🔹 Step 4: Collect elderly IDs assigned to this nurse
+    final Set<String> assignedIds = {};
+    for (var doc in assignSnap.docs) {
+      final data = doc.data();
+      final ids = (data['elderly_ids'] as List?) ?? [];
+      for (var e in ids) {
+        assignedIds.add(e.toString());
+      }
+    }
+
+    if (assignedIds.isEmpty) return [];
+
+    // 🔹 Step 5: Query all elderly first to debug
+    List<Map<String, dynamic>> results = [];
+    final allIds = assignedIds.toList();
+    print('🔍 DEBUG: Total assigned elderly IDs: ${allIds.length}');
+    print('🔍 DEBUG: House ID being filtered: $houseId');
+
+    for (var i = 0; i < allIds.length; i += 10) {
+      final batchIds = allIds.skip(i).take(10).toList();
+      print(
+        '🔍 DEBUG: Processing batch ${i ~/ 10 + 1} with ${batchIds.length} IDs',
+      );
+
+      // First get all elderly without house filter
+      final snap = await _firestore
+          .collection('elderly')
+          .where(FieldPath.documentId, whereIn: batchIds)
+          .get();
+
+      print('🔍 DEBUG: Found ${snap.docs.length} elderly in this batch');
+
+      // Process and filter by house
+      for (var doc in snap.docs) {
+        final data = doc.data();
+        final elderlyHouseId = data['house_id'];
+        print('🔍 DEBUG: Elderly ${doc.id} is in house $elderlyHouseId');
+
+        if (elderlyHouseId == houseId) {
+          results.add({
+            'elderly_id': doc.id,
+            'elderly_name':
+                "${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}"
+                    .trim(),
+            'elderly_age': data['elderly_age'] ?? '',
+            'house_id': elderlyHouseId,
+          });
+        }
+      }
+    }
+
+    // 🔹 Step 6: Apply search filter
     if (_search.isNotEmpty) {
-      return list
-          .where((e) =>
-              (e['elderly_name'] ?? '')
-                  .toString()
-                  .toLowerCase()
-                  .contains(_search.toLowerCase()))
+      results = results
+          .where(
+            (e) => (e['elderly_name'] ?? '').toString().toLowerCase().contains(
+              _search.toLowerCase(),
+            ),
+          )
           .toList();
     }
-    return list;
-  }
 
-  Future<void> _handleLogout() async {
-    try {
-      await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
-    }
+    return results;
   }
 
   @override
@@ -128,12 +208,12 @@ class _MedicationManagementScreenState
       nurseName: nurseName,
       houseDescriptions: houseDescriptions,
       fetchHouses: fetchHouses,
-      fetchElderlies: fetchElderlies, // 👈 now correctly implemented
+      fetchElderlies: fetchElderlies, // 👈 fixed with day + house filter
       selectedHouseId: selectedHouseId,
       onHouseSelected: (houseId) {
         setState(() => selectedHouseId = houseId);
       },
-     
+      onBellPressed: _onBellPressed,
     );
   }
 }

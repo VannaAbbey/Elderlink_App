@@ -4,7 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 class VitalsActivityLogsScreen extends StatefulWidget {
-  const VitalsActivityLogsScreen({super.key});
+  final String? houseId;
+  final String? nurseName;
+
+  const VitalsActivityLogsScreen({super.key, this.houseId, this.nurseName});
 
   @override
   State<VitalsActivityLogsScreen> createState() =>
@@ -70,8 +73,10 @@ class _VitalsActivityLogsScreenState extends State<VitalsActivityLogsScreen> {
               children: [
                 // Header
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 16,
+                    horizontal: 16,
+                  ),
                   child: Row(
                     children: [
                       IconButton(
@@ -110,7 +115,9 @@ class _VitalsActivityLogsScreenState extends State<VitalsActivityLogsScreen> {
                       Text(
                         "Date: ${DateFormat.yMMMd().format(selectedDate)}",
                         style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 16),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
                       const Spacer(),
                       IconButton(
@@ -131,21 +138,23 @@ class _VitalsActivityLogsScreenState extends State<VitalsActivityLogsScreen> {
                         .where(
                           "timestamp",
                           isGreaterThanOrEqualTo: DateTime(
-                              selectedDate.year,
-                              selectedDate.month,
-                              selectedDate.day,
-                              0,
-                              0),
+                            selectedDate.year,
+                            selectedDate.month,
+                            selectedDate.day,
+                            0,
+                            0,
+                          ),
                         )
                         .where(
                           "timestamp",
                           isLessThanOrEqualTo: DateTime(
-                              selectedDate.year,
-                              selectedDate.month,
-                              selectedDate.day,
-                              23,
-                              59,
-                              59),
+                            selectedDate.year,
+                            selectedDate.month,
+                            selectedDate.day,
+                            23,
+                            59,
+                            59,
+                          ),
                         )
                         .orderBy("timestamp", descending: true)
                         .snapshots(),
@@ -166,27 +175,34 @@ class _VitalsActivityLogsScreenState extends State<VitalsActivityLogsScreen> {
 
                       return ListView.builder(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 12),
+                          horizontal: 8,
+                          vertical: 12,
+                        ),
                         itemCount: logs.length,
                         itemBuilder: (context, index) {
                           final logData =
                               logs[index].data() as Map<String, dynamic>? ?? {};
                           final timestamp =
                               (logData['timestamp'] as Timestamp?)?.toDate() ??
-                                  DateTime.now();
+                              DateTime.now();
                           final logText = buildLogText(logData);
-                          final actionType =
-                              (logData['action_type'] ?? "").toString();
-                          final formattedTime =
-                              DateFormat.jm().format(timestamp);
+                          final actionType = (logData['action_type'] ?? "")
+                              .toString();
+                          final formattedTime = DateFormat.jm().format(
+                            timestamp,
+                          );
 
                           return Card(
                             color: getCardColor(actionType),
                             margin: const EdgeInsets.symmetric(
-                                vertical: 6.0, horizontal: 8.0),
+                              vertical: 6.0,
+                              horizontal: 8.0,
+                            ),
                             child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(
-                                  vertical: 12, horizontal: 16),
+                                vertical: 12,
+                                horizontal: 16,
+                              ),
                               title: Text(logText),
                               subtitle: Text(
                                 "Elderly ID: ${logData['elderly_id'] ?? 'unknown'}\nDate: ${DateFormat.yMMMd().format(timestamp)}",

@@ -1205,7 +1205,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
       }
 
       final activityData = {
-        'action': action, // 'edit_medication', 'delete_medication'
+        'action': action,
         'nurse_id': nurseId,
         'nurse_name': widget.nurseName,
         'medication_id': medicationId,
