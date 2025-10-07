@@ -11,34 +11,51 @@ class NotificationService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Collection reference for notifications
-  CollectionReference get _notificationsCollection => 
-      _firestore.collection('notifications');
+  // Collection reference for app notifications (new collection)
+  CollectionReference get _appNotificationsCollection => 
+      _firestore.collection('app_notifications');
 
   /// Create a new notification in Firestore with duplicate prevention
   Future<String?> createNotification({
     required String title,
     required String message,
-    required String caregiverId,
+    required String userId,
+    String userType = 'caregiver', // Default to caregiver for backward compatibility
     required NotificationType type,
     String? taskId,
     String? elderlyId,
     Map<String, dynamic>? metadata,
+    String? referenceId,
+    String? referenceType,
+    NotificationPriority priority = NotificationPriority.normal,
+    String? category,
+    bool requiresAction = false,
+    String? actionLabel,
+    String? actionUrl,
+    DateTime? expiresAt,
+    String? groupKey,
   }) async {
     try {
       // Check for recent duplicate notifications (within last 10 seconds)
-      if (taskId != null) {
+      if (taskId != null || referenceId != null) {
         final recentCutoff = DateTime.now().subtract(const Duration(seconds: 10));
-        final existingNotifications = await _notificationsCollection
-            .where('caregiver_id', isEqualTo: caregiverId)
-            .where('task_id', isEqualTo: taskId)
-            .where('type', isEqualTo: type.value)
-            .get();
+        Query query = _appNotificationsCollection
+            .where('user_id', isEqualTo: userId)
+            .where('notification_type', isEqualTo: type.value);
+            
+        if (taskId != null) {
+          query = query.where('task_id', isEqualTo: taskId);
+        }
+        if (referenceId != null) {
+          query = query.where('reference_id', isEqualTo: referenceId);
+        }
+        
+        final existingNotifications = await query.get();
         
         // Check if any recent notification exists
         for (final doc in existingNotifications.docs) {
           final data = doc.data() as Map<String, dynamic>;
-          final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
+          final timestamp = (data['notification_timestamp'] as Timestamp?)?.toDate();
           if (timestamp != null && timestamp.isAfter(recentCutoff)) {
             return doc.id; // Return existing notification ID
           }
@@ -50,24 +67,34 @@ class NotificationService {
         title: title,
         message: message,
         timestamp: DateTime.now(),
-        caregiverId: caregiverId,
+        userId: userId,
+        userType: userType,
         type: type,
         taskId: taskId,
         elderlyId: elderlyId,
         metadata: metadata,
+        referenceId: referenceId,
+        referenceType: referenceType,
+        priority: priority,
+        category: category,
+        requiresAction: requiresAction,
+        actionLabel: actionLabel,
+        actionUrl: actionUrl,
+        expiresAt: expiresAt,
+        groupKey: groupKey,
       );
 
-      final docRef = await _notificationsCollection.add(notification.toFirestore());
+      final docRef = await _appNotificationsCollection.add(notification.toFirestore());
       return docRef.id;
     } catch (e) {
       return null;
     }
   }
 
-  /// Get notifications stream for a specific caregiver
-  Stream<List<NotificationModel>> getNotificationsStream(String caregiverId) {
-    return _notificationsCollection
-        .where('caregiver_id', isEqualTo: caregiverId)
+  /// Get notifications stream for a specific user
+  Stream<List<NotificationModel>> getNotificationsStream(String userId) {
+    return _appNotificationsCollection
+        .where('user_id', isEqualTo: userId)
         .snapshots()
         .map((snapshot) {
       final notifications = snapshot.docs.map((doc) {
@@ -77,22 +104,33 @@ class NotificationService {
         );
       }).toList();
       
+      // Filter out expired notifications
+      final now = DateTime.now();
+      final validNotifications = notifications.where((notification) {
+        return notification.expiresAt == null || notification.expiresAt!.isAfter(now);
+      }).toList();
+      
       // Sort by timestamp in memory to avoid index requirement
-      notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-      return notifications;
+      validNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return validNotifications;
     });
   }
 
   /// Get unread notifications count
-  Stream<int> getUnreadNotificationsCount(String caregiverId) {
-    return _notificationsCollection
-        .where('caregiver_id', isEqualTo: caregiverId)
+  Stream<int> getUnreadNotificationsCount(String userId) {
+    return _appNotificationsCollection
+        .where('user_id', isEqualTo: userId)
         .snapshots()
         .map((snapshot) {
-      // Filter unread notifications in memory to avoid index requirement
+      final now = DateTime.now();
+      // Filter unread and non-expired notifications in memory to avoid index requirement
       return snapshot.docs.where((doc) {
         final data = doc.data() as Map<String, dynamic>;
-        return data['is_read'] == false || data['is_read'] == null;
+        final isRead = data['is_read'] == true;
+        final expiresAt = (data['expires_at'] as Timestamp?)?.toDate();
+        final isExpired = expiresAt != null && expiresAt.isBefore(now);
+        
+        return !isRead && !isExpired;
       }).length;
     });
   }
@@ -100,7 +138,7 @@ class NotificationService {
   /// Mark a notification as read
   Future<bool> markNotificationAsRead(String notificationId) async {
     try {
-      await _notificationsCollection.doc(notificationId).update({
+      await _appNotificationsCollection.doc(notificationId).update({
         'is_read': true,
       });
       return true;
@@ -109,11 +147,11 @@ class NotificationService {
     }
   }
 
-  /// Mark all notifications as read for a caregiver
-  Future<bool> markAllNotificationsAsRead(String caregiverId) async {
+  /// Mark all notifications as read for a user
+  Future<bool> markAllNotificationsAsRead(String userId) async {
     try {
-      final unreadNotifications = await _notificationsCollection
-          .where('caregiver_id', isEqualTo: caregiverId)
+      final unreadNotifications = await _appNotificationsCollection
+          .where('user_id', isEqualTo: userId)
           .where('is_read', isEqualTo: false)
           .get();
 
@@ -132,7 +170,7 @@ class NotificationService {
   /// Delete a notification
   Future<bool> deleteNotification(String notificationId) async {
     try {
-      await _notificationsCollection.doc(notificationId).delete();
+      await _appNotificationsCollection.doc(notificationId).delete();
       return true;
     } catch (e) {
       return false;
@@ -140,12 +178,12 @@ class NotificationService {
   }
 
   /// Delete old notifications (older than specified days)
-  Future<bool> deleteOldNotifications(String caregiverId, {int daysOld = 30}) async {
+  Future<bool> deleteOldNotifications(String userId, {int daysOld = 30}) async {
     try {
       final cutoffDate = DateTime.now().subtract(Duration(days: daysOld));
-      final oldNotifications = await _notificationsCollection
-          .where('caregiver_id', isEqualTo: caregiverId)
-          .where('timestamp', isLessThan: Timestamp.fromDate(cutoffDate))
+      final oldNotifications = await _appNotificationsCollection
+          .where('user_id', isEqualTo: userId)
+          .where('notification_timestamp', isLessThan: Timestamp.fromDate(cutoffDate))
           .get();
 
       final batch = _firestore.batch();
@@ -163,7 +201,8 @@ class NotificationService {
   /// Create task-related notifications with enhanced duplicate prevention
   Future<void> createTaskNotification({
     required String taskId,
-    required String caregiverId,
+    required String userId, // Changed from caregiverId
+    String userType = 'caregiver', // Default to caregiver
     required String elderlyName,
     required String taskDescription,
     required NotificationType type,
@@ -172,7 +211,7 @@ class NotificationService {
     // Check if we should create this notification (deduplication)
     final shouldCreate = NotificationDeduplicationService().shouldCreateNotification(
       taskId: taskId,
-      caregiverId: caregiverId,
+      caregiverId: userId, // Still uses caregiverId internally for backward compatibility
       notificationType: type.value,
       additionalKey: elderlyName,
     );
@@ -219,9 +258,13 @@ class NotificationService {
     await createNotification(
       title: title,
       message: message,
-      caregiverId: caregiverId,
+      userId: userId,
+      userType: userType,
       type: type,
       taskId: taskId,
+      referenceId: taskId,
+      referenceType: 'task',
+      category: 'tasks',
       metadata: {
         'elderly_name': elderlyName,
         'task_description': taskDescription,
@@ -231,22 +274,26 @@ class NotificationService {
     );
   }
 
-  /// Get current user's caregiver ID
-  String? getCurrentCaregiverId() {
+  /// Get current user's ID
+  String? getCurrentUserId() {
     return _auth.currentUser?.uid;
   }
 
   /// Helper method to create shift reminder notifications
   Future<void> createShiftReminder({
-    required String caregiverId,
+    required String userId,
+    String userType = 'caregiver',
     required String shiftTime,
     required String houseName,
   }) async {
     await createNotification(
       title: 'Shift Reminder',
       message: 'Your shift at $houseName starts at $shiftTime',
-      caregiverId: caregiverId,
+      userId: userId,
+      userType: userType,
       type: NotificationType.shiftReminder,
+      referenceType: 'shift',
+      category: 'shifts',
       metadata: {
         'shift_time': shiftTime,
         'house_name': houseName,
@@ -256,12 +303,12 @@ class NotificationService {
 
   /// Get notifications by type
   Stream<List<NotificationModel>> getNotificationsByType(
-    String caregiverId,
+    String userId,
     NotificationType type,
   ) {
-    return _notificationsCollection
-        .where('caregiver_id', isEqualTo: caregiverId)
-        .where('type', isEqualTo: type.value)
+    return _appNotificationsCollection
+        .where('user_id', isEqualTo: userId)
+        .where('notification_type', isEqualTo: type.value)
         .snapshots()
         .map((snapshot) {
       final notifications = snapshot.docs.map((doc) {
@@ -271,20 +318,26 @@ class NotificationService {
         );
       }).toList();
       
+      // Filter out expired notifications
+      final now = DateTime.now();
+      final validNotifications = notifications.where((notification) {
+        return notification.expiresAt == null || notification.expiresAt!.isAfter(now);
+      }).toList();
+      
       // Sort by timestamp in memory to avoid index requirement
-      notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-      return notifications;
+      validNotifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return validNotifications;
     });
   }
 
   /// Get notifications for a specific date range
   Stream<List<NotificationModel>> getNotificationsByDateRange(
-    String caregiverId,
+    String userId,
     DateTime startDate,
     DateTime endDate,
   ) {
-    return _notificationsCollection
-        .where('caregiver_id', isEqualTo: caregiverId)
+    return _appNotificationsCollection
+        .where('user_id', isEqualTo: userId)
         .snapshots()
         .map((snapshot) {
       final notifications = snapshot.docs.map((doc) {
@@ -304,5 +357,102 @@ class NotificationService {
       filtered.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       return filtered;
     });
+  }
+
+  /// Create leave request notifications
+  /// 
+  /// Example usage for caregiver:
+  /// ```dart
+  /// await NotificationService().createLeaveNotification(
+  ///   userId: 'caregiver123',
+  ///   userType: 'caregiver',
+  ///   leaveRequestId: 'leave_abc123',
+  ///   type: NotificationType.leaveApproved,
+  ///   leaveDates: 'Dec 25-26, 2025',
+  ///   leaveType: 'vacation',
+  ///   approverName: 'Admin Sarah',
+  ///   priority: NotificationPriority.high,
+  /// );
+  /// ```
+  /// 
+  /// Example usage for nurse:
+  /// ```dart
+  /// await NotificationService().createLeaveNotification(
+  ///   userId: 'nurse456',
+  ///   userType: 'nurse',
+  ///   leaveRequestId: 'leave_def789',
+  ///   type: NotificationType.leaveApproved,
+  ///   leaveDates: 'Jan 15-16, 2026',
+  ///   leaveType: 'sick_leave',
+  /// );
+  /// ```
+  Future<void> createLeaveNotification({
+    required String userId,
+    String userType = 'caregiver',
+    required String leaveRequestId,
+    required NotificationType type,
+    required String leaveDates,
+    required String leaveType,
+    String? approverName,
+    String? previousStatus,
+    String? newStatus,
+    NotificationPriority priority = NotificationPriority.normal,
+  }) async {
+    String title;
+    String message;
+    
+    switch (type) {
+      case NotificationType.leaveSubmitted:
+        title = 'Leave Request Submitted';
+        message = 'Your $leaveType leave request for $leaveDates has been submitted for approval';
+        break;
+      case NotificationType.leaveApproved:
+        title = 'Leave Request Approved';
+        message = 'Your $leaveType leave for $leaveDates has been approved';
+        if (approverName != null) {
+          message += ' by $approverName';
+        }
+        break;
+      case NotificationType.leaveDenied:
+        title = 'Leave Request Denied';
+        message = 'Your $leaveType leave request for $leaveDates has been denied';
+        if (approverName != null) {
+          message += ' by $approverName';
+        }
+        break;
+      case NotificationType.leaveModified:
+        title = 'Leave Request Modified';
+        message = 'Your $leaveType leave request for $leaveDates has been modified';
+        break;
+      case NotificationType.leaveCancelled:
+        title = 'Leave Request Cancelled';
+        message = 'Your $leaveType leave request for $leaveDates has been cancelled';
+        break;
+      default:
+        title = 'Leave Request Update';
+        message = 'Your leave request for $leaveDates has been updated';
+    }
+
+    await createNotification(
+      title: title,
+      message: message,
+      userId: userId,
+      userType: userType,
+      type: type,
+      referenceId: leaveRequestId,
+      referenceType: 'leave_request',
+      category: 'leave',
+      priority: priority,
+      requiresAction: type == NotificationType.leaveSubmitted,
+      actionLabel: 'View Details',
+      metadata: {
+        'leave_request_id': leaveRequestId,
+        'leave_dates': leaveDates,
+        'leave_type': leaveType,
+        'approver_name': approverName,
+        'previous_status': previousStatus,
+        'new_status': newStatus,
+      },
+    );
   }
 }

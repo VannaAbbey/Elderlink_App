@@ -68,6 +68,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 const PopupMenuItem(value: 'Task Missed', child: Text('Task Missed')),
                 const PopupMenuItem(value: 'Task Updated', child: Text('Task Updated')),
                 const PopupMenuItem(value: 'Task Deleted', child: Text('Task Deleted')),
+                const PopupMenuItem(value: 'Leave Approved', child: Text('Leave Approved')),
+                const PopupMenuItem(value: 'Leave Denied', child: Text('Leave Denied')),
+                const PopupMenuItem(value: 'Shift Reminder', child: Text('Shift Reminder')),
               ],
             ),
           ],
@@ -363,8 +366,26 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return Colors.orange;
       case NotificationType.taskDeleted:
         return Colors.grey;
+      case NotificationType.leaveSubmitted:
+        return Colors.indigo;
+      case NotificationType.leaveApproved:
+        return Colors.green;
+      case NotificationType.leaveDenied:
+        return Colors.red;
+      case NotificationType.leaveModified:
+        return Colors.orange;
+      case NotificationType.leaveCancelled:
+        return Colors.grey;
       case NotificationType.shiftReminder:
         return Colors.purple;
+      case NotificationType.shiftChanged:
+        return Colors.deepPurple;
+      case NotificationType.shiftAssigned:
+        return Colors.blue;
+      case NotificationType.incidentReported:
+        return Colors.redAccent;
+      case NotificationType.systemMaintenance:
+        return Colors.brown;
       case NotificationType.general:
         return Colors.teal;
     }
