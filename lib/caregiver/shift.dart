@@ -669,7 +669,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
         final caregiverId = currentUser.uid;
         final now = DateTime.now();
-        final dayName = _getDayName(now.weekday); // Use existing helper function
 
         // Get caregiver's house assignment
         final houseSnapshot = await FirebaseFirestore.instance
@@ -694,11 +693,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
           return false;
         }
 
-        // Check if today is an assigned day
-        if (!daysAssigned.contains(dayName)) {
-          return false;
-        }
-
         // Check if current time is within shift hours
         final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
         int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
@@ -710,6 +704,26 @@ class _ShiftScreenState extends State<ShiftScreen> {
           startMinute = int.parse(startParts[1]);
           endHour = int.parse(endParts[0]);
           endMinute = int.parse(endParts[1]);
+        }
+
+        // Determine if this is an overnight shift
+        final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
+        
+        // For overnight shifts, determine which day to check based on current time
+        String dayToCheck;
+        if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
+          // Current time is in the "end period" of an overnight shift (e.g., 12:01 AM - 6:00 AM)
+          // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
+          final previousDay = now.subtract(const Duration(days: 1));
+          dayToCheck = _getDayName(previousDay.weekday);
+        } else {
+          // Regular shift or "start period" of overnight shift or after shift ends
+          dayToCheck = _getDayName(now.weekday);
+        }
+
+        // Check if the determined day is an assigned day
+        if (!daysAssigned.contains(dayToCheck)) {
+          return false;
         }
 
         DateTime calculatedShiftStart = DateTime(

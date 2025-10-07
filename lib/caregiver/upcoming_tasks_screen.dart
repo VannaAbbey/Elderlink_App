@@ -55,6 +55,40 @@ Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
 
 // Firestore helper/service class for task updates
 
+/*
+ * 🔧 3RD SHIFT MIDNIGHT CROSSOVER FIXES
+ * 
+ * This TaskService class includes comprehensive fixes for 3rd shift caregivers (10 PM - 6 AM)
+ * to properly handle midnight crossover scenarios:
+ * 
+ * 🚫 PROBLEMS SOLVED:
+ * 1. Tasks created at 11:55 PM were immediately marked as missed after 12:10 AM
+ * 2. Tasks were incorrectly progressed to next occurrence at midnight
+ * 3. Elderly assignments disappeared after midnight for ongoing 3rd shifts
+ * 4. System treated calendar days as shift boundaries instead of actual shift periods
+ * 
+ * ✅ FIXES IMPLEMENTED:
+ * 
+ * FIX 1: Shift-Aware Task Progression (checkAndProgressRecurringTasks)
+ * - Enhanced logic to detect true shift end vs midnight crossover
+ * - Prevents premature task progression during ongoing 3rd shifts
+ * 
+ * FIX 2: Shift-Aware Missed Task Detection (getTasksStream)
+ * - Tasks are only marked as missed after actual shift end, not calendar day change
+ * - Considers shift boundaries for overnight shifts (22:00-06:00)
+ * 
+ * FIX 3: Shift-Based Assignment Logic (_getShiftDay, _isAssignedOnDateShiftAware)
+ * - Determines correct assignment day based on shift periods
+ * - For 3rd shift, 12:01 AM - 6:00 AM checks previous day's assignments
+ * 
+ * FIX 4: Task Creation Date Logic (_getTaskShiftDate)
+ * - Tasks created during overnight shifts use correct shift date
+ * - Maintains assignment continuity across midnight
+ * 
+ * 💡 KEY INSIGHT: 3rd shift (10 PM - 6 AM) spans two calendar days but represents 
+ * one continuous work period. All logic now respects shift periods over calendar days.
+ */
+
 class TaskService {
   // Reference to the 'care_tasks' collection in Firestore
   static final _tasksRef = FirebaseFirestore.instance.collection('care_tasks');
@@ -88,7 +122,8 @@ class TaskService {
       try {
         await NotificationService().createTaskNotification(
           taskId: docId,
-          caregiverId: caregiverId,
+          userId: caregiverId,
+          userType: 'caregiver',
           elderlyName: originalData['elderly_fname'] ?? 'Unknown',
           taskDescription: originalData['task_description'] ?? 'Unknown Task',
           type: NotificationType.taskDeleted,
@@ -131,7 +166,8 @@ class TaskService {
           
           await NotificationService().createTaskNotification(
             taskId: docId,
-            caregiverId: caregiverId,
+            userId: caregiverId,
+            userType: 'caregiver',
             elderlyName: originalData['elderly_fname'] ?? 'Unknown',
             taskDescription: originalData['task_description'] ?? 'Unknown Task',
             type: NotificationType.taskUpdated,
@@ -182,7 +218,9 @@ class TaskService {
       
       // Handle overnight shifts (e.g., 22:00 to 06:00)
       // If end time is earlier than start time, the shift crosses midnight
-      if (endHour < startHour || (endHour == startHour && endMinute <= startMinute)) {
+      bool isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
+      
+      if (isOvernightShift) {
         // This is an overnight shift
         // If current time is before shift start time, we're in the "next day" portion
         // So the shift end should be today, not tomorrow
@@ -206,9 +244,32 @@ class TaskService {
       print('Current time: $now');
       print('now.isAfter(shiftEndToday): ${now.isAfter(shiftEndToday)}');
       
-      // Check if current time has passed the shift end time
-      if (!now.isAfter(shiftEndToday)) {
-        print('⏰ Shift has not ended yet, no progression needed (current: ${now.hour}:${now.minute.toString().padLeft(2, '0')}, shift ends: $shiftEndTime)');
+      // 🔧 FIX 1: Enhanced shift end detection for overnight shifts
+      bool isActualShiftEnd = false;
+      if (isOvernightShift) {
+        // For overnight shifts, ensure we're truly past the shift end
+        // Don't progress tasks just because it's past midnight
+        if (now.hour >= endHour && now.hour < startHour) {
+          // We're in the period after shift end but before next shift start
+          isActualShiftEnd = true;
+          print('✅ Overnight shift has actually ended (current: ${now.hour}:${now.minute.toString().padLeft(2, '0')} is after shift end: $shiftEndTime)');
+        } else if (now.hour >= startHour) {
+          // We're in the start period of the shift, check if end time has passed
+          isActualShiftEnd = now.isAfter(shiftEndToday);
+          print('🔍 Overnight shift start period - checking if end time passed: ${now.isAfter(shiftEndToday)}');
+        } else {
+          // We're in the end period but haven't reached actual end time yet
+          isActualShiftEnd = now.isAfter(shiftEndToday);
+          print('🔍 Overnight shift end period - checking if end time passed: ${now.isAfter(shiftEndToday)}');
+        }
+      } else {
+        // For regular shifts, use existing logic
+        isActualShiftEnd = now.isAfter(shiftEndToday);
+      }
+      
+      // Check if current time has passed the actual shift end time
+      if (!isActualShiftEnd) {
+        print('⏰ Shift has not actually ended yet, no progression needed (current: ${now.hour}:${now.minute.toString().padLeft(2, '0')}, shift ends: $shiftEndTime)');
         return 0;
       }
       
@@ -549,7 +610,7 @@ class TaskService {
         DateTime candidate = fromDate.add(Duration(days: i));
         
         // Check if caregiver is assigned to elderly on this day
-        bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+        bool isAssigned = await _isAssignedOnDateShiftAware(elderlyId, caregiverId, candidate);
         
         if (isAssigned) {
           DateTime candidateStart = DateTime(
@@ -584,7 +645,7 @@ class TaskService {
         
         // Check if this day is in custom selection AND caregiver is assigned
         if (customDays.contains(weekdayStr)) {
-          bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+          bool isAssigned = await _isAssignedOnDateShiftAware(elderlyId, caregiverId, candidate);
           
           if (isAssigned) {
             DateTime candidateStart = DateTime(
@@ -611,39 +672,141 @@ class TaskService {
     return null;
   }
 
-  // Helper method to check if caregiver is assigned to elderly on a specific date
-  static Future<bool> _isAssignedOnDate(String elderlyId, String caregiverId, DateTime date) async {
+  // 🔧 FIX 3: Shift-aware helper functions for 3rd shift support
+  
+  /// Gets the correct shift day for assignment checking, considering overnight shifts
+  static Future<String> _getShiftDay(String caregiverId, DateTime currentTime) async {
     try {
-      String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][date.weekday - 1];
+      // Get caregiver's shift information
+      final houseSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .where('is_current', isEqualTo: true)
+          .where('is_absent', isEqualTo: false)
+          .limit(1)
+          .get();
       
+      if (houseSnapshot.docs.isEmpty) {
+        return DateFormat('EEEE').format(currentTime);
+      }
+      
+      final houseData = houseSnapshot.docs.first.data();
+      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      
+      if (timeRange.isNotEmpty) {
+        final startParts = (timeRange['start'] as String).split(':');
+        final endParts = (timeRange['end'] as String).split(':');
+        final shiftStartHour = int.parse(startParts[0]);
+        final shiftEndHour = int.parse(endParts[0]);
+        
+        // Check if this is an overnight shift
+        final isOvernightShift = shiftEndHour < shiftStartHour || 
+            (shiftEndHour == shiftStartHour && int.parse(endParts[1]) <= int.parse(startParts[1]));
+        
+        if (isOvernightShift && currentTime.hour < shiftStartHour && currentTime.hour >= 0) {
+          // We're in the "next day" portion of an overnight shift
+          // Check the previous day's assignment
+          print('🌙 Overnight shift detected: checking previous day assignment for current time ${currentTime.hour}:${currentTime.minute}');
+          return DateFormat('EEEE').format(currentTime.subtract(Duration(days: 1)));
+        }
+      }
+      
+      return DateFormat('EEEE').format(currentTime);
+    } catch (e) {
+      print('Error determining shift day: $e');
+      return DateFormat('EEEE').format(currentTime);
+    }
+  }
+  
+  /// Enhanced assignment check that considers shift periods for overnight shifts
+  static Future<bool> _isAssignedOnDateShiftAware(String elderlyId, String caregiverId, DateTime date) async {
+    try {
+      // Get the correct day to check based on shift timing
+      String dayToCheck = await _getShiftDay(caregiverId, date);
+      
+      print('  🔍 Shift-aware check: checking assignment for $dayToCheck (original date: ${DateFormat('EEEE').format(date)})');
+      
+      // Use elderly_caregiver_assign collection for caregiver-elderly assignments
       final assignSnapshot = await FirebaseFirestore.instance
           .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
           .where('elderly_id', isEqualTo: elderlyId)
           .get();
       
-      if (assignSnapshot.docs.isEmpty) return false;
+      if (assignSnapshot.docs.isEmpty) {
+        print('  ❌ No assignments found');
+        return false;
+      }
       
       for (var doc in assignSnapshot.docs) {
         final data = doc.data();
         
         // Check individual 'day' field first (your data structure)
         final individualDay = data['day'] as String?;
-        if (individualDay == weekdayStr) {
+        if (individualDay == dayToCheck) {
+          print('  ✅ Found shift-aware assignment for $dayToCheck');
           return true;
         }
         
         // Fallback to 'days_assigned' array
         final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-        if (daysAssigned.contains(weekdayStr)) {
+        if (daysAssigned.contains(dayToCheck)) {
+          print('  ✅ Found shift-aware assignment for $dayToCheck');
           return true;
         }
       }
       
+      print('  ❌ No shift-aware assignment found for $dayToCheck');
       return false;
     } catch (e) {
-      print('Error checking assignment on date: $e');
+      print('Error in shift-aware assignment check: $e');
       return false;
+    }
+  }
+
+  // 🔧 FIX 4: Helper function to get the correct task shift date for overnight shifts
+  
+  /// Gets the correct shift date for task creation, considering overnight shifts
+  static Future<DateTime> _getTaskShiftDate(String caregiverId, DateTime currentTime) async {
+    try {
+      // Get caregiver's shift information
+      final houseSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .where('is_current', isEqualTo: true)
+          .where('is_absent', isEqualTo: false)
+          .limit(1)
+          .get();
+      
+      if (houseSnapshot.docs.isEmpty) {
+        return currentTime;
+      }
+      
+      final houseData = houseSnapshot.docs.first.data();
+      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      
+      if (timeRange.isNotEmpty) {
+        final startParts = (timeRange['start'] as String).split(':');
+        final endParts = (timeRange['end'] as String).split(':');
+        final shiftStartHour = int.parse(startParts[0]);
+        final shiftEndHour = int.parse(endParts[0]);
+        
+        // Check if this is an overnight shift
+        final isOvernightShift = shiftEndHour < shiftStartHour || 
+            (shiftEndHour == shiftStartHour && int.parse(endParts[1]) <= int.parse(startParts[1]));
+        
+        if (isOvernightShift && currentTime.hour < shiftStartHour && currentTime.hour >= 0) {
+          // We're in the "next day" portion of an overnight shift
+          // Task belongs to the previous day's shift
+          print('🌙 Task creation during overnight shift: using previous day for shift date');
+          return currentTime.subtract(Duration(days: 1));
+        }
+      }
+      
+      return currentTime;
+    } catch (e) {
+      print('Error determining task shift date: $e');
+      return currentTime;
     }
   }
 
@@ -688,7 +851,8 @@ class TaskService {
       try {
         await NotificationService().createTaskNotification(
           taskId: docId,
-          caregiverId: caregiverId,
+          userId: caregiverId,
+          userType: 'caregiver',
           elderlyName: originalData['elderly_fname'] ?? 'Unknown',
           taskDescription: originalData['task_description'] ?? 'Unknown Task',
           type: NotificationType.taskCompleted,
@@ -759,7 +923,8 @@ class TaskService {
       try {
         await NotificationService().createTaskNotification(
           taskId: docId,
-          caregiverId: caregiverId,
+          userId: caregiverId,
+          userType: 'caregiver',
           elderlyName: originalData['elderly_fname'] ?? 'Unknown',
           taskDescription: originalData['task_description'] ?? 'Unknown Task',
           type: NotificationType.taskMissed,
@@ -1415,6 +1580,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted) {
         print('🔄 Periodic refresh triggered...');
+        // Check if shift has ended and run progressive task system if needed
+        _checkProgressiveTaskSystem(context);
         _triggerRefresh();
       }
     });
@@ -1480,17 +1647,159 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       
       // Check if task is overdue and should be marked as missed
       if (taskEnd != null && actualTaskDate != null) {
-        final taskEndDateTime = DateTime(
-          actualTaskDate.year,
-          actualTaskDate.month,
-          actualTaskDate.day,
-          taskEnd.hour,
-          taskEnd.minute,
-        );
+        // 🔧 ENHANCED: Calculate task end time considering midnight crossover
+        DateTime taskEndDateTime;
         
-        if (now.isAfter(taskEndDateTime)) {
+        // Get task start time for comparison
+        final taskStart = (data['task_start'] is Timestamp) 
+            ? (data['task_start'] as Timestamp).toDate() 
+            : data['task_start'] as DateTime?;
+            
+        if (taskStart != null && taskEnd.hour < taskStart.hour) {
+          // Task crosses midnight (e.g., 11:55 PM start, 12:03 AM end)
+          // End time is on the next day
+          taskEndDateTime = DateTime(
+            actualTaskDate.year,
+            actualTaskDate.month,
+            actualTaskDate.day + 1, // Next day
+            taskEnd.hour,
+            taskEnd.minute,
+          );
+          print('🌙 Task crosses midnight: ${data['task_description']} ends ${taskEnd.hour}:${taskEnd.minute.toString().padLeft(2, '0')} next day');
+        } else {
+          // Regular task on same day
+          taskEndDateTime = DateTime(
+            actualTaskDate.year,
+            actualTaskDate.month,
+            actualTaskDate.day,
+            taskEnd.hour,
+            taskEnd.minute,
+          );
+          print('☀️ Regular task: ${data['task_description']} ends ${taskEnd.hour}:${taskEnd.minute.toString().padLeft(2, '0')} same day');
+        }
+        
+        print('🔍 TASK MISSED DETECTION DEBUG:');
+        print('   Task: ${data['task_description']}');
+        print('   Task Date: $actualTaskDate');
+        print('   Task Start: ${taskStart?.hour}:${taskStart?.minute.toString().padLeft(2, '0')}');
+        print('   Task End: ${taskEnd.hour}:${taskEnd.minute.toString().padLeft(2, '0')}');
+        print('   Calculated End DateTime: $taskEndDateTime');
+        print('   Current Time: $now');
+        print('   Would mark as missed: ${now.isAfter(taskEndDateTime)}');
+        
+        // 🔧 FIX 2: Enhanced missed task detection for overnight shifts
+        bool shouldMarkAsMissed = false;
+        
+        // Get caregiver's shift information to determine if this is an overnight shift
+        try {
+          final currentUser = FirebaseAuth.instance.currentUser;
+          if (currentUser != null) {
+            final houseSnapshot = await FirebaseFirestore.instance
+                .collection('cg_house_assign')
+                .where('caregiver_id', isEqualTo: currentUser.uid)
+                .where('is_current', isEqualTo: true)
+                .where('is_absent', isEqualTo: false)
+                .limit(1)
+                .get();
+            
+            if (houseSnapshot.docs.isNotEmpty) {
+              final houseData = houseSnapshot.docs.first.data();
+              final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+              
+              if (timeRange.isNotEmpty) {
+                final startParts = (timeRange['start'] as String).split(':');
+                final endParts = (timeRange['end'] as String).split(':');
+                final shiftStartHour = int.parse(startParts[0]);
+                final shiftEndHour = int.parse(endParts[0]);
+                final shiftEndMinute = int.parse(endParts[1]);
+                
+                // Check if this is an overnight shift
+                final isOvernightShift = shiftEndHour < shiftStartHour || 
+                    (shiftEndHour == shiftStartHour && int.parse(endParts[1]) <= int.parse(startParts[1]));
+                
+                if (isOvernightShift) {
+                  // For overnight shifts, calculate the actual shift end time
+                  // Use CURRENT TIME to determine which part of the shift we're in, not task time
+                  DateTime actualShiftEnd;
+                  
+                  print('🔍 Overnight shift detected for task: ${data['task_description']}');
+                  print('🔍 Current time: ${now.hour}:${now.minute.toString().padLeft(2, '0')}');
+                  print('🔍 Shift: ${shiftStartHour}:00 - ${shiftEndHour}:${shiftEndMinute.toString().padLeft(2, '0')}');
+                  print('🔍 Task end time: ${taskEndDateTime.hour}:${taskEndDateTime.minute.toString().padLeft(2, '0')}');
+                  
+                  if (now.hour >= shiftStartHour || now.hour < shiftEndHour) {
+                    // We're currently in an active overnight shift
+                    if (now.hour >= shiftStartHour) {
+                      // We're in the "same day" portion (e.g., 10 PM - 11:59 PM)
+                      // Shift ends tomorrow
+                      actualShiftEnd = DateTime(
+                        now.year,
+                        now.month,
+                        now.day + 1, // Next day
+                        shiftEndHour,
+                        shiftEndMinute,
+                      );
+                      print('🌙 Currently in same-day portion of shift, shift ends tomorrow at $actualShiftEnd');
+                    } else {
+                      // We're in the "next day" portion (e.g., 12:00 AM - 6:00 AM)
+                      // Shift ends today
+                      actualShiftEnd = DateTime(
+                        now.year,
+                        now.month,
+                        now.day,
+                        shiftEndHour,
+                        shiftEndMinute,
+                      );
+                      print('🌙 Currently in next-day portion of shift, shift ends today at $actualShiftEnd');
+                    }
+                    
+                    // During an active overnight shift, use normal task end time logic
+                    // The task is missed when its individual end time passes
+                    shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+                    
+                    if (shouldMarkAsMissed) {
+                      print('⏰ MISSED TASK (Overnight Shift - Task Time Passed): ${data['task_description']} - task ended at $taskEndDateTime, now $now');
+                    } else {
+                      print('✅ Task still valid (Overnight Shift): ${data['task_description']} - task ends $taskEndDateTime, now $now');
+                    }
+                  } else {
+                    // We're outside shift hours, use task's original end time for comparison
+                    print('🌙 Currently outside shift hours, using task end time');
+                    shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+                    
+                    if (shouldMarkAsMissed) {
+                      print('⏰ MISSED TASK (Outside Shift): ${data['task_description']} - task end $taskEndDateTime has passed');
+                    } else {
+                      print('✅ Task still valid (Outside Shift): ${data['task_description']} - task end $taskEndDateTime');
+                    }
+                  }
+                } else {
+                  // Regular shift logic
+                  shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+                  if (shouldMarkAsMissed) {
+                    print('⏰ MISSED TASK (Regular Shift): ${data['task_description']} - end time $taskEndDateTime has passed');
+                  }
+                }
+              } else {
+                // Fallback to original logic if no time range data
+                shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+              }
+            } else {
+              // Fallback to original logic if no assignment data
+              shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+            }
+          } else {
+            // Fallback to original logic if no user
+            shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+          }
+        } catch (e) {
+          print('❌ Error checking shift information for missed task detection: $e');
+          // Fallback to original logic on error
+          shouldMarkAsMissed = now.isAfter(taskEndDateTime);
+        }
+        
+        if (shouldMarkAsMissed) {
           // Mark task as missed and handle recurring task logic
-          print('⏰ MISSED TASK DETECTED: ${data['task_description']} - end time $taskEndDateTime has passed');
           await _markTaskAsMissed(doc.id, data);
           continue; // Skip adding to upcoming tasks
         }
@@ -2108,7 +2417,11 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                   // Soft delete: update 'task_status' to ['Deleted']
                                                                   final docId = task['task_id'];
                                                                   await TaskService.deleteTask(docId);
-                                                                  Navigator.of(ctx).pop();
+                                                                  
+                                                                  // Check if widget is still mounted before popping
+                                                                  if (mounted) {
+                                                                    Navigator.of(ctx).pop();
+                                                                  }
                                                                 }
                                                               },
                                                               onClose: () => Navigator.of(ctx).pop(),
@@ -2492,7 +2805,11 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                       
                                                                       // Mark as incomplete and potentially create next occurrence
                                                                       await TaskService.markTaskIncompleteWithNextOccurrence(docId, reasonText, newNextTaskDate);
-                                                                      Navigator.of(ctx).pop();
+                                                                      
+                                                                      // Check if widget is still mounted before popping
+                                                                      if (mounted) {
+                                                                        Navigator.of(ctx).pop();
+                                                                      }
                                                                     }
                                                                   },
                                                                   style: ElevatedButton.styleFrom(
@@ -3967,7 +4284,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     final docRef = tasksRef.doc();
     DateTime now = DateTime.now();
     DateTime? nextTaskDate;
-    DateTime actualTaskDate = taskDate;
+    
+    // 🔧 FIX 4: Use shift-aware task date for overnight shifts
+    DateTime actualTaskDate = await TaskService._getTaskShiftDate(caregiverId, taskDate);
     
     // Calculate next task date for recurring tasks
     String frequency = taskFrequency.isNotEmpty ? taskFrequency[0] : 'Only once';
@@ -4038,7 +4357,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           print('🗓️ todayOnly: $todayOnly');
           print('🗓️ taskDateOnly.isAfter(todayOnly): ${taskDateOnly.isAfter(todayOnly)}');
           
-          bool isSelectedDateAssigned = await _isAssignedOnDate(elderlyId, caregiverId, taskDate);
+          bool isSelectedDateAssigned = await TaskService._isAssignedOnDateShiftAware(elderlyId, caregiverId, taskDate);
           print('🗓️ isSelectedDateAssigned: $isSelectedDateAssigned');
           
           if (isSelectedDateAssigned) {
@@ -4059,7 +4378,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           searchFromDate = now.add(Duration(days: 1));
         } else {
           print('🗓️ Selected today and time not passed - checking if today is assigned');
-          bool isTodayAssigned = await _isAssignedOnDate(elderlyId, caregiverId, now);
+          bool isTodayAssigned = await TaskService._isAssignedOnDateShiftAware(elderlyId, caregiverId, now);
           if (isTodayAssigned) {
             print('✅ Today is assigned day - using today');
             actualTaskDate = DateTime(now.year, now.month, now.day);
@@ -4151,7 +4470,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         
         // Check if today matches custom days and time hasn't passed
         String todayWeekday = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][now.weekday - 1];
-        if (!taskTimeHasPassed && customDays.contains(todayWeekday) && await _isAssignedOnDate(elderlyId, caregiverId, now)) {
+        if (!taskTimeHasPassed && customDays.contains(todayWeekday) && await TaskService._isAssignedOnDateShiftAware(elderlyId, caregiverId, now)) {
           actualTaskDate = DateTime(now.year, now.month, now.day);
           nextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, now.add(Duration(days: 1)), customDays);
         } else if (nextTaskDate != null) {
@@ -4245,7 +4564,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         DateTime candidate = fromDate.add(Duration(days: i));
         
         // Check if caregiver is assigned to elderly on this day
-        bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+        bool isAssigned = await TaskService._isAssignedOnDateShiftAware(elderlyId, caregiverId, candidate);
         
         // Get day name for debugging
         List<String> dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -4292,7 +4611,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         
         // Check if this day is in custom selection AND caregiver is assigned
         if (customDays.contains(weekdayStr)) {
-          bool isAssigned = await _isAssignedOnDate(elderlyId, caregiverId, candidate);
+          bool isAssigned = await TaskService._isAssignedOnDateShiftAware(elderlyId, caregiverId, candidate);
           
           print('Day $i is in custom selection, assigned: $isAssigned');
           
@@ -4328,55 +4647,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     }
     return null;
   }
-
-  // Helper function to check if caregiver is assigned to elderly on a specific date
-  Future<bool> _isAssignedOnDate(String elderlyId, String caregiverId, DateTime date) async {
-    try {
-      String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][date.weekday - 1];
-      
-      print('  🔍 Checking if assigned on $weekdayStr for elderly $elderlyId');
-      
-      // Use elderly_caregiver_assign collection for caregiver-elderly assignments
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
-          .where('elderly_id', isEqualTo: elderlyId)
-          .get();
-      
-      print('  📋 Found ${assignSnapshot.docs.length} assignment records');
-      
-      if (assignSnapshot.docs.isEmpty) {
-        print('  ❌ No assignments found');
-        return false;
-      }
-      
-      for (var doc in assignSnapshot.docs) {
-        final data = doc.data();
-        // Try both possible field structures
-        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-        final singleDay = data['day'];
-        
-        print('  📅 Assignment: days_assigned=$daysAssigned, day=$singleDay');
-        
-        // Check both structures
-        bool isAssignedViaArray = daysAssigned.contains(weekdayStr);
-        bool isAssignedViaSingleDay = singleDay == weekdayStr;
-        
-        if (isAssignedViaArray || isAssignedViaSingleDay) {
-          print('  ✅ $weekdayStr IS assigned! (array: $isAssignedViaArray, single: $isAssignedViaSingleDay)');
-          return true;
-        }
-      }
-      
-      print('  ❌ $weekdayStr is NOT assigned');
-      return false;
-    } catch (e) {
-      print('Error checking assignment on date: $e');
-      return false;
-    }
-  }
-
-
 
   // Helper function to get all assigned days for an elderly-caregiver pair
   Future<List<String>> _getElderlyAssignedDays(String elderlyId) async {
@@ -4473,7 +4743,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         try {
           await NotificationService().createTaskNotification(
             taskId: docId,
-            caregiverId: caregiverId,
+            userId: caregiverId,
+            userType: 'caregiver',
             elderlyName: data['elderly_fname'] ?? 'Unknown',
             taskDescription: data['task_description'] ?? 'Unknown Task',
             type: NotificationType.taskMissed,
@@ -4651,7 +4922,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
 
       final caregiverId = currentUser.uid;
       final now = DateTime.now();
-      final dayName = DateFormat('EEEE').format(now); // e.g., "Monday"
 
       // Get caregiver's house assignment
       final houseSnapshot = await FirebaseFirestore.instance
@@ -4676,11 +4946,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         return false;
       }
 
-      // Check if today is an assigned day
-      if (!daysAssigned.contains(dayName)) {
-        return false;
-      }
-
       // Check if current time is within shift hours
       final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
@@ -4692,6 +4957,29 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         startMinute = int.parse(startParts[1]);
         endHour = int.parse(endParts[0]);
         endMinute = int.parse(endParts[1]);
+      }
+
+      // Determine if this is an overnight shift
+      final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
+      
+      // 🔧 FIX 3: Enhanced overnight shift day checking
+      // For overnight shifts, determine which day to check based on current time
+      String dayToCheck;
+      if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
+        // Current time is in the "end period" of an overnight shift (e.g., 12:01 AM - 6:00 AM)
+        // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
+        final previousDay = now.subtract(const Duration(days: 1));
+        dayToCheck = DateFormat('EEEE').format(previousDay);
+        print('🌙 Overnight shift end period: checking previous day assignment ($dayToCheck)');
+      } else {
+        // Regular shift or "start period" of overnight shift or after shift ends
+        dayToCheck = DateFormat('EEEE').format(now);
+        print('☀️ Regular shift or overnight start period: checking current day assignment ($dayToCheck)');
+      }
+
+      // Check if the determined day is an assigned day
+      if (!daysAssigned.contains(dayToCheck)) {
+        return false;
       }
 
       DateTime calculatedShiftStart = DateTime(

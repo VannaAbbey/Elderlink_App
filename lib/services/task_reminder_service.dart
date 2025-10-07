@@ -823,7 +823,8 @@ class TaskReminderService {
         try {
           await NotificationService().createTaskNotification(
             taskId: taskId,
-            caregiverId: currentUser.uid,
+            userId: currentUser.uid,
+            userType: 'caregiver',
             elderlyName: elderlyName,
             taskDescription: taskDescription ?? taskTitle,
             type: NotificationType.shiftReminder,
@@ -888,7 +889,8 @@ class TaskReminderService {
         try {
           await NotificationService().createTaskNotification(
             taskId: taskId,
-            caregiverId: currentUser.uid,
+            userId: currentUser.uid,
+            userType: 'caregiver',
             elderlyName: elderlyName,
             taskDescription: taskDescription ?? taskTitle,
             type: NotificationType.taskAssigned,

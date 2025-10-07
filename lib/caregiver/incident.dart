@@ -139,7 +139,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
     if (mounted) setState(() => isLoading = true);
 
     final now = DateTime.now();
-    final dayName = DateFormat('EEEE').format(now);
 
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -192,17 +191,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
         return;
       }
 
-      if (!daysAssigned.contains(dayName)) {
-        if (mounted) {
-          setState(() {
-            elderlyList = [];
-            isOnDuty = false;
-            isLoading = false;
-          });
-        }
-        return;
-      }
-
       final timeRange = Map<String, dynamic>.from(
         houseData['time_range'] ?? {},
       );
@@ -214,6 +202,32 @@ class _IncidentScreenState extends State<IncidentScreen> {
         startMinute = int.parse(startParts[1]);
         endHour = int.parse(endParts[0]);
         endMinute = int.parse(endParts[1]);
+      }
+
+      // Determine if this is an overnight shift
+      final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
+      
+      // For overnight shifts, determine which day to check based on current time
+      String dayToCheck;
+      if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
+        // Current time is in the "end period" of an overnight shift (e.g., 12:01 AM - 6:00 AM)
+        // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
+        final previousDay = now.subtract(const Duration(days: 1));
+        dayToCheck = DateFormat('EEEE').format(previousDay);
+      } else {
+        // Regular shift or "start period" of overnight shift or after shift ends
+        dayToCheck = DateFormat('EEEE').format(now);
+      }
+
+      if (!daysAssigned.contains(dayToCheck)) {
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
       }
 
       DateTime calculatedShiftStart = DateTime(
@@ -259,7 +273,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final assignSnapshot = await _firestore
           .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
-          .where('day', isEqualTo: dayName)
+          .where('day', isEqualTo: dayToCheck)
           .get();
 
       List<Map<String, dynamic>> elderlyDetails = [];
@@ -494,7 +508,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
     final startMinutes = start.hour * 60 + start.minute;
     final endMinutes = end.hour * 60 + end.minute;
 
-    return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+    // Handle overnight shifts (e.g., 22:00 - 06:00)
+    if (endMinutes < startMinutes) {
+      // Overnight shift: current time should be either after start OR before end
+      return nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+    } else {
+      // Regular shift: current time should be between start and end
+      return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+    }
   }
 
   /// ⚠️ Warning Dialog (Out of Shift)

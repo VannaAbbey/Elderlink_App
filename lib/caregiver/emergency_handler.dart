@@ -15,7 +15,6 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   }
 
   final today = DateTime.now();
-  final todayName = _getDayName(today.weekday); // e.g. Monday
   final now = TimeOfDay.fromDateTime(today);
 
   // 🔹 Hanapin assignment ng caregiver
@@ -37,6 +36,25 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   final Map<String, dynamic> timeRange = assign["time_range"];
   final String houseId = assign["house_id"];
 
+  // 🔹 Parse shift times
+  final start = _parseTimeOfDay(timeRange["start"]);
+  final end = _parseTimeOfDay(timeRange["end"]);
+
+  // 🔹 Determine if this is an overnight shift
+  final isOvernightShift = end.hour < start.hour || (end.hour == start.hour && end.minute <= start.minute);
+  
+  // 🔹 For overnight shifts, determine which day to check based on current time
+  String todayName;
+  if (isOvernightShift && today.hour >= 0 && today.hour < end.hour) {
+    // Current time is in the "end period" of an overnight shift (e.g., 12:01 AM - 6:00 AM)
+    // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
+    final previousDay = today.subtract(const Duration(days: 1));
+    todayName = _getDayName(previousDay.weekday);
+  } else {
+    // Regular shift or "start period" of overnight shift or after shift ends
+    todayName = _getDayName(today.weekday);
+  }
+
   // 🔹 Check kung pasok sa schedule today
   if (!daysAssigned.contains(todayName)) {
     // Sort schedule sa natural order ng week
@@ -51,10 +69,6 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     }
     return;
   }
-
-  // 🔹 Check kung pasok sa oras ng shift
-  final start = _parseTimeOfDay(timeRange["start"]);
-  final end = _parseTimeOfDay(timeRange["end"]);
 
   bool inShift;
   if (shift == "3rd") {
