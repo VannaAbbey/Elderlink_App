@@ -1,7 +1,5 @@
-
 import 'package:flutter/material.dart';
-import '../services/shift_handover_service.dart';
-import '../services/task_log_service.dart';
+import '../services/caregiver_shift_log_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -193,8 +191,92 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
   void _loadShiftData() {
     print('🗓️ ShiftLogs: Loading shift data for date: ${_formatDate(selectedDate)}');
     setState(() {
-      shiftDataFuture = ShiftHandoverService.getPreviousShiftDataForDate(selectedDate);
+      shiftDataFuture = _getShiftDataFromUnifiedService(selectedDate);
     });
+  }
+
+  /// Get shift data using the new unified CaregiverShiftLogService
+  Future<Map<String, dynamic>?> _getShiftDataFromUnifiedService(DateTime targetDate) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        print('ShiftLogs: No authenticated user found');
+        return null;
+      }
+
+      // First, get the current caregiver's house assignment
+      final currentCaregiverAssignQuery = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+
+      if (currentCaregiverAssignQuery.docs.isEmpty) {
+        print('❌ ShiftLogs: No house assignment found for current caregiver');
+        return null;
+      }
+
+      final currentHouseId = currentCaregiverAssignQuery.docs.first.data()['house_id'];
+      print('🏠 ShiftLogs: Current caregiver house: $currentHouseId');
+
+      // Get all caregivers assigned to the same house
+      final houseCaregiverQuery = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('house_id', isEqualTo: currentHouseId)
+          .get();
+
+      final houseCaregiversIds = houseCaregiverQuery.docs
+          .map((doc) => doc.data()['caregiver_id'] as String)
+          .toList();
+
+      print('🏠 ShiftLogs: Found ${houseCaregiversIds.length} caregivers in house $currentHouseId');
+
+      // Get shift logs for the selected date using the unified service
+      final shiftLogsStream = CaregiverShiftLogService.getShiftLogsForDate(targetDate);
+      final allShiftLogs = await shiftLogsStream.first;
+
+      // Filter logs to only include those from caregivers in the same house
+      final houseShiftLogs = allShiftLogs.where((log) {
+        final logCaregiverId = log['caregiver_id'] as String?;
+        final isFromSameHouse = houseCaregiversIds.contains(logCaregiverId);
+        
+        if (!isFromSameHouse && logCaregiverId != null) {
+          print('� ShiftLogs: Filtering out log from caregiver $logCaregiverId (not in house $currentHouseId)');
+        } else if (isFromSameHouse) {
+          print('✅ ShiftLogs: Including log from caregiver $logCaregiverId (in house $currentHouseId)');
+        }
+        
+        return isFromSameHouse;
+      }).toList();
+
+      print('🔍 ShiftLogs: Found ${allShiftLogs.length} total shift logs, ${houseShiftLogs.length} from house $currentHouseId for ${_formatDate(targetDate)}');
+      
+      if (houseShiftLogs.isEmpty) {
+        print('⚠️ ShiftLogs: No shift logs found for house $currentHouseId on date: ${_formatDate(targetDate)}');
+        return null;
+      }
+
+      // Get unique caregiver count from the filtered logs
+      final uniqueCaregivers = houseShiftLogs
+          .map((log) => log['caregiver_id'] as String?)
+          .where((id) => id != null)
+          .toSet()
+          .length;
+
+      // Create a simplified shift data structure that matches what the UI expects
+      return {
+        'shift_info': {
+          'total_caregivers': uniqueCaregivers,
+          'shift_date': _formatDate(targetDate),
+          'house_id': currentHouseId,
+        },
+        'task_logs': houseShiftLogs, // This now includes all types from the same house only
+        'additional_log_content': '', // Can add this later if needed
+      };
+    } catch (e) {
+      print('❌ ShiftLogs: Error getting shift data: $e');
+      return null;
+    }
   }
 
 
@@ -234,13 +316,13 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
     return formatted;
   }
 
-  // Helper method to filter task logs based on selected caregiver
-  List<dynamic> _filterTaskLogs(List<dynamic> taskLogs) {
+  // Helper method to filter shift logs based on selected caregiver
+  List<dynamic> _filterShiftLogs(List<dynamic> shiftLogs) {
     if (selectedCaregiverFilter == 'All Caregivers') {
-      return taskLogs;
+      return shiftLogs;
     }
     
-    return taskLogs.where((log) {
+    return shiftLogs.where((log) {
       final sourceCaregiverName = log['source_caregiver_name'] as String?;
       final caregiverName = sourceCaregiverName ?? log['caregiver_fname'] ?? 'Unknown';
       return caregiverName == selectedCaregiverFilter;
@@ -546,12 +628,10 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                         );
                       }
 
-                      final shiftInfo = previousShiftData['shift_info'] as Map<String, dynamic>;
-                      final allTaskLogs = previousShiftData['task_logs'] as List<dynamic>;
-                      final taskLogs = _filterTaskLogs(allTaskLogs); // Apply filter
-                      final additionalLogContent = previousShiftData['additional_log_content'] as String;
-
-                      return Column(
+                                      final shiftInfo = previousShiftData['shift_info'] as Map<String, dynamic>;
+                                      final allShiftLogs = previousShiftData['task_logs'] as List<dynamic>; // This will include all shift logs (tasks, emergency alerts, incident reports)
+                                      final shiftLogs = _filterShiftLogs(allShiftLogs); // Apply filter
+                                      final additionalLogContent = previousShiftData['additional_log_content'] as String;                      return Column(
                         children: [
                           // Previous Shift Header Card (fixed to show previous shift caregivers)
                           FutureBuilder<Map<String, dynamic>>(
@@ -651,8 +731,8 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                                   children: [
                                                     Text(
                                                       selectedCaregiverFilter == 'All Caregivers'
-                                                          ? '${taskLogs.length}'
-                                                          : '${taskLogs.length}/${allTaskLogs.length}',
+                                                          ? '${shiftLogs.length}'
+                                                          : '${shiftLogs.length}/${allShiftLogs.length}',
                                                       style: const TextStyle(
                                                         fontSize: 20,
                                                         fontWeight: FontWeight.bold,
@@ -661,7 +741,7 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                                     ),
                                                     Text(
                                                       selectedCaregiverFilter == 'All Caregivers'
-                                                          ? 'Tasks'
+                                                          ? 'Activities'
                                                           : 'Filtered',
                                                       style: const TextStyle(
                                                         fontSize: 12,
@@ -701,9 +781,9 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                           child: Text(
                                             selectedCaregiverFilter == 'All Caregivers'
                                                 ? ((shiftInfo['total_caregivers'] as int? ?? 1) > 1 
-                                                    ? 'Collective Task Activities:'
-                                                    : 'Task Activities:')
-                                                : 'Task Activities - $selectedCaregiverFilter:',
+                                                    ? 'Collective Logged Activities:'
+                                                    : 'Logged Activities:')
+                                                : 'Logged Activities - $selectedCaregiverFilter:',
                                             style: const TextStyle(
                                               fontSize: 16,
                                               fontWeight: FontWeight.bold,
@@ -733,9 +813,9 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                     const SizedBox(height: 8),
                                     const Divider(thickness: 1, color: Color(0xFF00588e)),
                                     const SizedBox(height: 12),
-                                    if (taskLogs.isEmpty)
+                                    if (shiftLogs.isEmpty)
                                       const Text(
-                                        'No task activities recorded.',
+                                        'No logged activities recorded.',
                                         style: TextStyle(
                                           fontSize: 16,
                                           fontStyle: FontStyle.italic,
@@ -743,54 +823,66 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                         ),
                                       )
                                     else
-                                      ...taskLogs.asMap().entries.map((entry) {
+                                      ...shiftLogs.asMap().entries.map((entry) {
                                         final index = entry.key;
                                         final log = entry.value as Map<String, dynamic>;
                                         
-                                        final completionTime = TaskLogService.formatCompletionTime(
+                                        final completionTime = CaregiverShiftLogService.formatCompletionTime(
                                           log['completion_time'] as Timestamp?,
                                         );
                                         
-                                        // Fix caregiver name display logic to prevent duplication and resolve "Caregiver 28" issue
-                                        String caregiverName = '';
-                                        if (log['source_caregiver_name'] != null && (log['source_caregiver_name'] as String).isNotEmpty) {
-                                          caregiverName = log['source_caregiver_name'] as String;
-                                        } else if (log['caregiver_fname'] != null && (log['caregiver_fname'] as String).isNotEmpty) {
-                                          caregiverName = log['caregiver_fname'] as String;
-                                        } else {
-                                          caregiverName = 'Unknown';
-                                        }
-                                        
-                                        // If the caregiver name looks generic (like "Caregiver 28"), clean it up
-                                        if (caregiverName.startsWith('Caregiver') && RegExp(r'Caregiver\s*\d+').hasMatch(caregiverName)) {
-                                          // Extract just the number part and use it as a more readable fallback
-                                          final match = RegExp(r'(\d+)').firstMatch(caregiverName);
-                                          if (match != null) {
-                                            caregiverName = 'CG${match.group(1)}'; // Convert "Caregiver 28" to "CG28"
-                                          } else {
-                                            caregiverName = 'Caregiver'; // Fallback to generic name
-                                          }
-                                        }
-                                        
-                                        // Create custom message to avoid duplication from TaskLogService
-                                        final elderlyName = log['elderly_fname'] ?? '';
-                                        final taskDesc = log['task_description'] ?? '';
-                                        final status = log['status'] ?? '';
+                                        // Check log type to determine how to display
+                                        final logType = log['log_type'] as String? ?? 'task'; // Default to task for backward compatibility
                                         
                                         String logMessage;
-                                        if (status.toLowerCase() == 'completed') {
-                                          logMessage = 'Caregiver $caregiverName completed the task "$taskDesc" for $elderlyName';
-                                        } else if (status.toLowerCase() == 'missed') {
-                                          logMessage = 'Caregiver $caregiverName missed the task "$taskDesc" for $elderlyName';
-                                        } else if (status.toLowerCase() == "didn't complete" || status.toLowerCase() == 'incomplete') {
-                                          logMessage = "Caregiver $caregiverName did not complete the task \"$taskDesc\" for $elderlyName";
-                                        } else {
-                                          logMessage = 'Caregiver $caregiverName $status the task "$taskDesc" for $elderlyName';
-                                        }
+                                        String? reason;
                                         
-                                        final reason = log['reason']?.toString().isNotEmpty == true 
-                                            ? 'Reason: ${log['reason']}'
-                                            : null;
+                                        if (logType == 'emergency_alert' || logType == 'incident_report') {
+                                          // Use the unified service for emergency alerts and incident reports
+                                          logMessage = CaregiverShiftLogService.formatLogMessage(log);
+                                          reason = CaregiverShiftLogService.getLogDescription(log);
+                                        } else {
+                                          // Handle task logs (existing logic)
+                                          // Fix caregiver name display logic to prevent duplication and resolve "Caregiver 28" issue
+                                          String caregiverName = '';
+                                          if (log['source_caregiver_name'] != null && (log['source_caregiver_name'] as String).isNotEmpty) {
+                                            caregiverName = log['source_caregiver_name'] as String;
+                                          } else if (log['caregiver_fname'] != null && (log['caregiver_fname'] as String).isNotEmpty) {
+                                            caregiverName = log['caregiver_fname'] as String;
+                                          } else {
+                                            caregiverName = 'Unknown';
+                                          }
+                                          
+                                          // If the caregiver name looks generic (like "Caregiver 28"), clean it up
+                                          if (caregiverName.startsWith('Caregiver') && RegExp(r'Caregiver\s*\d+').hasMatch(caregiverName)) {
+                                            // Extract just the number part and use it as a more readable fallback
+                                            final match = RegExp(r'(\d+)').firstMatch(caregiverName);
+                                            if (match != null) {
+                                              caregiverName = 'CG${match.group(1)}'; // Convert "Caregiver 28" to "CG28"
+                                            } else {
+                                              caregiverName = 'Caregiver'; // Fallback to generic name
+                                            }
+                                          }
+                                          
+                                          // Create custom message to avoid duplication from CaregiverShiftLogService
+                                          final elderlyName = log['elderly_fname'] ?? '';
+                                          final taskDesc = log['task_description'] ?? '';
+                                          final status = log['task_status'] ?? ''; // Changed from 'status' to 'task_status'
+                                          
+                                          if (status.toLowerCase() == 'completed') {
+                                            logMessage = 'Caregiver $caregiverName completed the task "$taskDesc" for $elderlyName';
+                                          } else if (status.toLowerCase() == 'missed') {
+                                            logMessage = 'Caregiver $caregiverName missed the task "$taskDesc" for $elderlyName';
+                                          } else if (status.toLowerCase() == "didn't complete" || status.toLowerCase() == 'incomplete') {
+                                            logMessage = "Caregiver $caregiverName did not complete the task \"$taskDesc\" for $elderlyName";
+                                          } else {
+                                            logMessage = 'Caregiver $caregiverName $status the task "$taskDesc" for $elderlyName';
+                                          }
+                                          
+                                          reason = log['inc_reason']?.toString().isNotEmpty == true // Changed from 'reason' to 'inc_reason'
+                                              ? 'Reason: ${log['inc_reason']}' // Changed from 'reason' to 'inc_reason'
+                                              : null;
+                                        }
                                         
                                         return Column(
                                           children: [
@@ -800,7 +892,7 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                                               reason: reason,
                                               isCollectiveHandover: log['source_caregiver_name'] != null && (log['source_caregiver_name'] as String).isNotEmpty,
                                             ),
-                                            if (index < taskLogs.length - 1) 
+                                            if (index < shiftLogs.length - 1) 
                                               const SizedBox(height: 10),
                                           ],
                                         );

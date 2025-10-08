@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'caregiver_sidebar.dart';
 import '../widgets/notification_icon_button.dart';
+import '../services/caregiver_shift_log_service.dart';
 
 // Helper function to show error modal
 void _showErrorModal(BuildContext context, String message) {
@@ -1457,6 +1458,20 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               'user_id_cg': caregiverId,
                                                                               'user_id_nu': nurseIdsToSend, // ✅ array of all nurses
                                                                             });
+
+                                                                            // ✅ Also save to unified shift logs collection
+                                                                            try {
+                                                                              await CaregiverShiftLogService.createIncidentReportLog(
+                                                                                caregiverId: caregiverId,
+                                                                                incidentType: selectedIncidentType ?? 'Unknown',
+                                                                                description: reportController.text.trim(),
+                                                                                caregiverFname: caregiverName?.split(' ').first,
+                                                                              );
+                                                                              print('✅ Incident report logged to shift logs successfully');
+                                                                            } catch (e) {
+                                                                              print('❌ Error logging incident report to shift logs: $e');
+                                                                              // Don't fail the entire operation if logging fails
+                                                                            }
                                                                           }
 
                                                                           // Final safety check before cleanup

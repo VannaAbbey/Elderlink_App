@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 import 'emergency_modal.dart'; // <-- UI layout ng modal
+import '../services/caregiver_shift_log_service.dart'; // <-- New unified logging service
 
 /// Main entry para sa Emergency button
 Future<void> openEmergencyIfAllowed(BuildContext context) async {
@@ -158,6 +159,20 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     "user_id_cg": user.uid,
     "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
   });
+
+  // ✅ Also save to unified shift logs collection
+  try {
+    await CaregiverShiftLogService.createEmergencyAlertLog(
+      caregiverId: user.uid,
+      emergencyType: result["emergencyType"],
+      description: result["description"],
+      caregiverFname: result["caregiverName"].split(' ').first, // Extract first name
+    );
+    print('✅ Emergency alert logged to shift logs successfully');
+  } catch (e) {
+    print('❌ Error logging emergency alert to shift logs: $e');
+    // Don't fail the entire operation if logging fails
+  }
 
   if (context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(

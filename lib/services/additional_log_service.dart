@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class AdditionalLogService {
-  static const String collectionName = 'additional_logs';
+  static const String collectionName = 'cg_additional_logs';
   
   /// Creates or updates an additional log for the current day
   static Future<void> saveAdditionalLog(String content) async {

@@ -112,7 +112,6 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
       'task_description': taskDescription,
       'task_date': actualTaskDate,
       'next_taskdate': nextTaskDate,
-      'nextuser_id': '',
       'inc_reason': '',
       'created_at': FieldValue.serverTimestamp(),
       'task_status': ['Upcoming'],

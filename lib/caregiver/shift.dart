@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart' as app_auth;
 import 'shift_logs.dart';
-import '../services/task_log_service.dart';
+import '../services/caregiver_shift_log_service.dart';
 import '../services/additional_log_service.dart';
 import '../widgets/notification_icon_button.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -223,16 +223,16 @@ class _ShiftScreenState extends State<ShiftScreen> {
   bool isSidebarOpen = false;
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
 
-  /// Gets task logs for the current authenticated caregiver only
-  Stream<List<Map<String, dynamic>>> _getCurrentCaregiverTaskLogs(DateTime date) {
+  /// Gets shift logs (tasks, emergency alerts, incident reports) for the current authenticated caregiver only
+  Stream<List<Map<String, dynamic>>> _getCurrentCaregiverShiftLogs(DateTime date) {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       // Return empty stream if no user is authenticated
       return Stream.value([]);
     }
     
-    print('🔍 Getting task logs for current caregiver: ${user.uid} on date: $date');
-    return TaskLogService.getTaskLogsForCaregiverAndDate(user.uid, date);
+    print('🔍 Getting shift logs for current caregiver: ${user.uid} on date: $date');
+    return CaregiverShiftLogService.getShiftLogsForCaregiverAndDate(user.uid, date);
   }
 
   /// Gets additional logs for the current authenticated caregiver only
@@ -331,7 +331,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                                     ),
                                                   ),
                                                   Text(
-                                                    'Task Logs for Selected Date',
+                                                    'Shift Logs for Selected Date',
                                                     style: const TextStyle(
                                                       fontSize: 12,
                                                       color: Color(0xFF00588e),
@@ -355,7 +355,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                       Expanded(
                                         child: SingleChildScrollView(
                                           child: StreamBuilder<List<Map<String, dynamic>>>(
-                                            stream: _getCurrentCaregiverTaskLogs(selectedDate),
+                                            stream: _getCurrentCaregiverShiftLogs(selectedDate),
                                             builder: (context, snapshot) {
                                               if (snapshot.connectionState == ConnectionState.waiting) {
                                                 return const Center(
@@ -368,18 +368,18 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                               if (snapshot.hasError) {
                                                 return Center(
                                                   child: Text(
-                                                    'Error loading task logs: ${snapshot.error}',
+                                                    'Error loading shift logs: ${snapshot.error}',
                                                     style: const TextStyle(color: Colors.red),
                                                   ),
                                                 );
                                               }
                                               
-                                              final taskLogs = snapshot.data ?? [];
+                                              final shiftLogs = snapshot.data ?? [];
                                               
-                                              if (taskLogs.isEmpty) {
+                                              if (shiftLogs.isEmpty) {
                                                 return const Center(
                                                   child: Text(
-                                                    'No tasks to be recorded.',
+                                                    'No shift logs to be recorded.',
                                                     style: TextStyle(
                                                       fontSize: 16,
                                                       fontStyle: FontStyle.italic,
@@ -391,33 +391,26 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                               
                                               return Column(
                                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: taskLogs.asMap().entries.map((entry) {
+                                                children: shiftLogs.asMap().entries.map((entry) {
                                                   final index = entry.key;
                                                   final log = entry.value;
                                                   
-                                                  final completionTime = TaskLogService.formatCompletionTime(
+                                                  final completionTime = CaregiverShiftLogService.formatCompletionTime(
                                                     log['completion_time'] as Timestamp?,
                                                   );
                                                   
-                                                  final logMessage = TaskLogService.formatLogMessage(
-                                                    caregiverFname: log['caregiver_fname'] ?? '',
-                                                    elderlyFname: log['elderly_fname'] ?? '',
-                                                    taskDescription: log['task_description'] ?? '',
-                                                    status: log['status'] ?? '',
-                                                  );
+                                                  final logMessage = CaregiverShiftLogService.formatLogMessage(log);
                                                   
-                                                  final reason = log['reason']?.toString().isNotEmpty == true 
-                                                      ? 'Reason: ${log['reason']}'
-                                                      : null;
+                                                  final description = CaregiverShiftLogService.getLogDescription(log);
                                                   
                                                   return Column(
                                                     children: [
                                                       _taskSummaryRow(
                                                         time: completionTime,
                                                         text: logMessage,
-                                                        reason: reason,
+                                                        reason: description,
                                                       ),
-                                                      if (index < taskLogs.length - 1) 
+                                                      if (index < shiftLogs.length - 1) 
                                                         const SizedBox(height: 10),
                                                     ],
                                                   );

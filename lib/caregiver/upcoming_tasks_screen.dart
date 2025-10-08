@@ -6,7 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import '../services/task_reminder_service.dart';
-import '../services/task_log_service.dart';
+import '../services/caregiver_shift_log_service.dart';
 import '../services/notification_service.dart';
 import '../models/notification_model.dart';
 
@@ -483,7 +483,6 @@ class TaskService {
                     'next_taskdate': newNextTaskDate,
                     'task_status': ['Upcoming'], // Reset all tasks to Upcoming
                     'inc_reason': '', // Clear any incomplete reason
-                    'nextuser_id': '', // Clear any next user assignment
                     'last_progressed_at': FieldValue.serverTimestamp(),
                     'updated_at': FieldValue.serverTimestamp(),
                   });
@@ -832,7 +831,7 @@ class TaskService {
     if (caregiverId != null) {
       try {
         final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
-        await TaskLogService.createTaskLog(
+        await CaregiverShiftLogService.createTaskLog(
           taskId: docId,
           caregiverId: caregiverId,
           elderlyId: originalData['elderly_id'] ?? '',
@@ -903,7 +902,7 @@ class TaskService {
     if (caregiverId != null && originalData != null) {
       try {
         final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
-        await TaskLogService.createTaskLog(
+        await CaregiverShiftLogService.createTaskLog(
           taskId: docId,
           caregiverId: caregiverId,
           elderlyId: originalData['elderly_id'] ?? '',
@@ -967,7 +966,7 @@ class TaskService {
     if (caregiverId != null) {
       try {
         final taskDate = (originalData['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
-        await TaskLogService.createTaskLog(
+        await CaregiverShiftLogService.createTaskLog(
           taskId: docId,
           caregiverId: caregiverId,
           elderlyId: originalData['elderly_id'] ?? '',
@@ -4505,7 +4504,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       'task_description': taskDescription,
       'task_date': actualTaskDate,
       'next_taskdate': nextTaskDate,
-      'nextuser_id': '',
       'inc_reason': '',
       'created_at': FieldValue.serverTimestamp(),
       'task_status': ['Upcoming'],
@@ -4724,7 +4722,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       if (caregiverId != null) {
         try {
           final taskDate = (data['task_date'] as Timestamp?)?.toDate() ?? DateTime.now();
-          await TaskLogService.createTaskLog(
+          await CaregiverShiftLogService.createTaskLog(
             taskId: docId,
             caregiverId: caregiverId,
             elderlyId: data['elderly_id'] ?? '',
