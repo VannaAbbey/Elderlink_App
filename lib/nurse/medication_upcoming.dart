@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
+import 'notification_service.dart';
 
 class UpcomingMedicationsTab extends StatefulWidget {
   final String houseId;
@@ -207,15 +208,113 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       print('Medication saved successfully');
 
-      // Refresh the medications list
-      await _loadUpcomingMedications();
+      // Create corresponding medical_tasks immediately so Home shows them
+      // and schedule notifications. Also force-refresh the medications list
+      // cache so the Upcoming tab shows the newly created medication.
+      await _createTasksForMedication(docRef.id, medicationData);
+      await _loadUpcomingMedications(forceRefresh: true);
     } catch (e) {
       print('Error saving medication: $e');
       rethrow;
     }
   }
 
+  Future<void> _createTasksForMedication(
+    String medicationId,
+    Map<String, dynamic> medicationData,
+  ) async {
+    try {
+      final now = DateTime.now();
+      final intakeTimes = List<String>.from(
+        medicationData['intake_times'] ?? [],
+      );
+      final takeStatuses = List<Map<String, dynamic>>.from(
+        medicationData['take_statuses'] ?? [],
+      );
+
+      for (int t = 0; t < intakeTimes.length; t++) {
+        final scheduled = intakeTimes[t];
+        final parts = scheduled.split(':');
+        if (parts.length != 2) continue;
+        final hour = int.tryParse(parts[0]) ?? 0;
+        final minute = int.tryParse(parts[1]) ?? 0;
+
+        final taskStart = DateTime(now.year, now.month, now.day, hour, minute);
+
+        // Skip past takes (keep behavior consistent with Home generator)
+        if (taskStart.isBefore(now)) continue;
+
+        // Only create task if take status is pending
+        final status =
+            (t < takeStatuses.length && takeStatuses[t]['status'] != null)
+            ? takeStatuses[t]['status'] as String
+            : 'pending';
+        if (status != 'pending') continue;
+
+        // Avoid duplicates: check existing medical_tasks
+        final existing = await _firestore
+            .collection('medical_tasks')
+            .where('task_source', isEqualTo: 'medication')
+            .where('medication_id', isEqualTo: medicationId)
+            .where('take_index', isEqualTo: t)
+            .where('task_start', isEqualTo: Timestamp.fromDate(taskStart))
+            .get();
+        if (existing.docs.isNotEmpty) continue;
+
+        final elderlyId = medicationData['elderly_id'] as String?;
+        final elderlyDoc = elderlyId != null
+            ? await _firestore.collection('elderly').doc(elderlyId).get()
+            : null;
+        String elderlyName = 'Unknown';
+        if (elderlyDoc != null && elderlyDoc.exists) {
+          final ed = elderlyDoc.data() as Map<String, dynamic>;
+          elderlyName =
+              '${ed['elderly_fname'] ?? ''} ${ed['elderly_lname'] ?? ''}'
+                  .trim();
+          if (elderlyName.isEmpty) elderlyName = 'Unknown';
+        }
+
+        final medName = medicationData['medication_name'] ?? 'Medication';
+        final dosage = medicationData['dosage'] ?? '';
+
+        final taskTitle =
+            '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+        final taskDesc =
+            'Medication scheduled for $elderlyName at ${scheduled}';
+
+        await _firestore.collection('medical_tasks').add({
+          'task_title': taskTitle,
+          'task_description': taskDesc,
+          'task_category': 'Medication',
+          'task_start': taskStart,
+          'task_end_date': null,
+          'task_frequency': 'Once',
+          'task_status': 'Pending',
+          'task_source': 'medication',
+          'medication_id': medicationId,
+          'take_index': t,
+          'elderly_id': elderlyId,
+          'created_at': FieldValue.serverTimestamp(),
+        });
+
+        // schedule notification 5 minutes before
+        final notifyTime = taskStart.subtract(Duration(minutes: 5));
+        if (notifyTime.isAfter(DateTime.now())) {
+          NotificationService.scheduleTaskNotification(
+            id: ('${medicationId}_$t').hashCode,
+            title: 'Medication Reminder',
+            body: '$medName for $elderlyName in 5 minutes',
+            dateTime: notifyTime,
+          );
+        }
+      }
+    } catch (e) {
+      print('Error creating tasks for medication: $e');
+    }
+  }
+
   Future<void> _loadAssignedElderly() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _elderlyList = [];
@@ -235,6 +334,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final nameParts = widget.nurseName?.split(' ') ?? [];
       if (nameParts.length < 2) {
         print('Invalid nurse name format: ${widget.nurseName}');
+        if (!mounted) return;
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -254,6 +354,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       if (userQuery.docs.isEmpty) {
         print('No nurse found with name: $firstName $lastName');
+        if (!mounted) return;
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -279,6 +380,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       if (shiftQuery.docs.isEmpty) {
         print('Nurse is not assigned to this shift on this day');
         print('Query returned no results for nurse_shift_assign');
+        if (!mounted) return;
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -313,6 +415,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       if (nurseElderlyQuery.docs.isEmpty) {
         print('No assignments found for the current day and shift');
+        if (!mounted) return;
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -333,6 +436,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       print('Found ${elderlyIds.length} elderly IDs: $elderlyIds');
 
       if (elderlyIds.isEmpty) {
+        if (!mounted) return;
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -393,16 +497,19 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       // Sort alphabetically by name
       newElderlyList.sort((a, b) => a['name']!.compareTo(b['name']!));
 
+      if (!mounted) return;
       setState(() {
         _elderlyList = newElderlyList;
         _isLoading = false;
       });
     } catch (e) {
       print('Error loading assigned elderly: $e');
-      setState(() {
-        _elderlyList = [];
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _elderlyList = [];
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -420,29 +527,34 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           cached != null &&
           cacheTime != null &&
           DateTime.now().difference(cacheTime) < _cacheDuration) {
-        setState(() {
-          _upcomingMedications = List<Map<String, dynamic>>.from(cached);
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _upcomingMedications = List<Map<String, dynamic>>.from(cached);
+            _isLoading = false;
+          });
+        }
 
         // Schedule a background refresh after cache TTL to keep things fresh
-        Future.delayed(
-          _cacheDuration,
-          () => _loadUpcomingMedications(forceRefresh: true),
-        );
+        Future.delayed(_cacheDuration, () {
+          if (mounted) _loadUpcomingMedications(forceRefresh: true);
+        });
         return;
       }
 
-      setState(() {
-        _isLoading = true;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+        });
+      }
 
       final nurseId = await _getNurseId();
       if (nurseId == null) {
-        setState(() {
-          _upcomingMedications = [];
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _upcomingMedications = [];
+            _isLoading = false;
+          });
+        }
         return;
       }
 
@@ -469,10 +581,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final medicationsQuery = results[1] as QuerySnapshot;
 
       if (nurseElderlyQuery.docs.isEmpty) {
-        setState(() {
-          _upcomingMedications = [];
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _upcomingMedications = [];
+            _isLoading = false;
+          });
+        }
         return;
       }
 
@@ -483,10 +597,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       );
 
       if (assignedElderlyIds.isEmpty) {
-        setState(() {
-          _upcomingMedications = [];
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _upcomingMedications = [];
+            _isLoading = false;
+          });
+        }
         return;
       }
 
@@ -549,10 +665,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       _medsCache[cacheKey] = List<Map<String, dynamic>>.from(medications);
       _medsCacheTime[cacheKey] = DateTime.now();
 
-      setState(() {
-        _upcomingMedications = medications;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _upcomingMedications = medications;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       print('Error loading upcoming medications: $e');
       setState(() {
@@ -1477,6 +1595,94 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                 onPressed: () async {
                   try {
+                    // Determine the index of the take being removed (0-based)
+                    final int removedIndex = takeNumber - 1;
+
+                    // Cancel & delete any medical_tasks associated with this medication
+                    try {
+                      final existingTasks = await _firestore
+                          .collection('medical_tasks')
+                          .where('medication_id', isEqualTo: medicationId)
+                          .get();
+
+                      // Compute scheduled DateTime for the removed take (if available)
+                      DateTime? removedScheduledDate;
+                      try {
+                        final intakeTimesList = List<String>.from(
+                          medicationData['intake_times'] ?? [],
+                        );
+                        if (removedIndex >= 0 &&
+                            removedIndex < intakeTimesList.length) {
+                          final parts = intakeTimesList[removedIndex].split(
+                            ':',
+                          );
+                          if (parts.length == 2) {
+                            final hour = int.tryParse(parts[0]) ?? 0;
+                            final minute = int.tryParse(parts[1]) ?? 0;
+                            final now = DateTime.now();
+                            removedScheduledDate = DateTime(
+                              now.year,
+                              now.month,
+                              now.day,
+                              hour,
+                              minute,
+                            );
+                          }
+                        }
+                      } catch (_) {}
+
+                      for (final t in existingTasks.docs) {
+                        final data = t.data();
+                        final ti = data['take_index'] as int?;
+
+                        bool shouldDelete = false;
+
+                        // Delete if take_index matches removed index
+                        if (ti != null && ti == removedIndex)
+                          shouldDelete = true;
+
+                        // Delete if task_start matches the removed scheduled time
+                        try {
+                          if (!shouldDelete &&
+                              removedScheduledDate != null &&
+                              data['task_start'] != null) {
+                            final taskStart = (data['task_start'] as Timestamp)
+                                .toDate();
+                            if (taskStart.year == removedScheduledDate.year &&
+                                taskStart.month == removedScheduledDate.month &&
+                                taskStart.day == removedScheduledDate.day &&
+                                taskStart.hour == removedScheduledDate.hour &&
+                                taskStart.minute ==
+                                    removedScheduledDate.minute) {
+                              shouldDelete = true;
+                            }
+                          }
+                        } catch (_) {}
+
+                        if (shouldDelete) {
+                          try {
+                            // cancel deterministic notification id
+                            if (ti != null) {
+                              final notifyId = ('${medicationId}_$ti').hashCode;
+                              NotificationService.cancelNotification(notifyId);
+                            }
+                            // also attempt to cancel by document id hash as a fallback
+                            final fallbackId = t.id.hashCode;
+                            NotificationService.cancelNotification(fallbackId);
+                          } catch (e) {
+                            print(
+                              'Error cancelling notification for task ${t.id}: $e',
+                            );
+                          }
+                          await t.reference.delete();
+                        }
+                      }
+                    } catch (e) {
+                      print(
+                        'Error removing medical_tasks for removed take: $e',
+                      );
+                    }
+
                     // Remove the specific take from take_statuses
                     takeStatuses.removeWhere(
                       (take) => take['take_number'] == takeNumber,
@@ -1486,16 +1692,24 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                     List<String> intakeTimes = List<String>.from(
                       medicationData['intake_times'] ?? [],
                     );
-                    if (takeNumber <= intakeTimes.length) {
-                      intakeTimes.removeAt(
-                        takeNumber - 1,
-                      ); // takeNumber is 1-based, array is 0-based
+                    if (removedIndex >= 0 &&
+                        removedIndex < intakeTimes.length) {
+                      intakeTimes.removeAt(removedIndex);
+                    }
+
+                    // Re-index remaining take_numbers to maintain consistency
+                    for (int i = 0; i < takeStatuses.length; i++) {
+                      takeStatuses[i]['take_number'] = i + 1;
+                      // keep scheduled_time aligned if intakeTimes available
+                      if (i < intakeTimes.length) {
+                        takeStatuses[i]['scheduled_time'] = intakeTimes[i];
+                      }
                     }
 
                     // Update number_of_intakes
                     int newIntakeCount = takeStatuses.length;
 
-                    // Update the medication document
+                    // Update the medication document with new arrays
                     await _firestore
                         .collection('medications')
                         .doc(medicationId)
@@ -1505,8 +1719,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                           'number_of_intakes': newIntakeCount,
                           'updated_at': FieldValue.serverTimestamp(),
                         });
-
-                    // Using unified activity logs only - no separate collections to clean up
 
                     // Log the deletion activity
                     await _logMedicationActivity(
@@ -1520,8 +1732,139 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                       },
                     );
 
+                    // If there are no remaining takes, delete the medication entirely
+                    if (takeStatuses.isEmpty) {
+                      try {
+                        // Delete any medical_tasks for this medication and cancel notifications
+                        final orphanTasks = await _firestore
+                            .collection('medical_tasks')
+                            .where('medication_id', isEqualTo: medicationId)
+                            .get();
+                        for (final t in orphanTasks.docs) {
+                          final d = t.data();
+                          final ti = d['take_index'] as int?;
+                          if (ti != null) {
+                            final notifyId = ('${medicationId}_$ti').hashCode;
+                            NotificationService.cancelNotification(notifyId);
+                          }
+                          await t.reference.delete();
+                        }
+
+                        // Delete medication document
+                        await _firestore
+                            .collection('medications')
+                            .doc(medicationId)
+                            .delete();
+
+                        // Clear cached meds for this house
+                        try {
+                          final keys = _medsCache.keys.toList();
+                          for (final k in keys) {
+                            if (k.startsWith('${widget.houseId}|')) {
+                              _medsCache.remove(k);
+                              _medsCacheTime.remove(k);
+                            }
+                          }
+                        } catch (e) {
+                          print(
+                            'Error clearing meds cache after deleting medication $medicationId: $e',
+                          );
+                        }
+
+                        // Update in-memory UI
+                        if (mounted) {
+                          setState(() {
+                            _upcomingMedications.removeWhere(
+                              (m) => m['id'] == medicationId,
+                            );
+                          });
+                        }
+
+                        Navigator.of(dialogContext).pop();
+                        await _loadUpcomingMedications(forceRefresh: true);
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Medication deleted as last take was removed',
+                            ),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                        return;
+                      } catch (e) {
+                        print(
+                          'Error deleting medication after last take removal: $e',
+                        );
+                        // proceed to continue with fallback cleanup below
+                      }
+                    }
+
+                    // After updating the doc, delete any remaining tasks (to avoid index mismatch)
+                    try {
+                      final allTasks = await _firestore
+                          .collection('medical_tasks')
+                          .where('medication_id', isEqualTo: medicationId)
+                          .get();
+
+                      for (final t in allTasks.docs) {
+                        final data = t.data();
+                        final ti = data['take_index'] as int?;
+                        if (ti != null) {
+                          final notifyId = ('${medicationId}_$ti').hashCode;
+                          NotificationService.cancelNotification(notifyId);
+                        }
+                        await t.reference.delete();
+                      }
+                    } catch (e) {
+                      print(
+                        'Error clearing remaining medical_tasks after take deletion: $e',
+                      );
+                    }
+
+                    // Recreate medical_tasks for remaining pending takes using updated medication doc
+                    try {
+                      final updatedDoc = await _firestore
+                          .collection('medications')
+                          .doc(medicationId)
+                          .get();
+                      if (updatedDoc.exists) {
+                        final updatedData =
+                            updatedDoc.data() as Map<String, dynamic>;
+                        await _createTasksForMedication(
+                          medicationId,
+                          updatedData,
+                        );
+                      }
+                    } catch (e) {
+                      print('Error recreating tasks after take deletion: $e');
+                    }
+
+                    // Optimistically update UI in memory
+                    if (mounted) {
+                      setState(() {
+                        // find medication in memory and update it
+                        final idx = _upcomingMedications.indexWhere(
+                          (m) => m['id'] == medicationId,
+                        );
+                        if (idx != -1) {
+                          if (takeStatuses.isEmpty) {
+                            _upcomingMedications.removeAt(idx);
+                          } else {
+                            _upcomingMedications[idx]['take_statuses'] =
+                                takeStatuses;
+                            _upcomingMedications[idx]['intake_times'] =
+                                intakeTimes;
+                            _upcomingMedications[idx]['number_of_intakes'] =
+                                newIntakeCount;
+                          }
+                        }
+                      });
+                    }
+
                     Navigator.of(dialogContext).pop();
-                    await _loadUpcomingMedications();
+                    // Force refresh from server to ensure UI and cache are consistent
+                    await _loadUpcomingMedications(forceRefresh: true);
 
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -1592,24 +1935,68 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                     oldData: medicationData,
                   );
 
-                  // Delete associated completed intake records
-                  final completedIntakes = await _firestore
-                      .collection('completed_medication_intakes')
-                      .where('medication_id', isEqualTo: medicationId)
-                      .get();
+                  // Delete any medical_tasks created from this medication
+                  try {
+                    // Query any task that references this medication id (broader match)
+                    final tasks = await _firestore
+                        .collection('medical_tasks')
+                        .where('medication_id', isEqualTo: medicationId)
+                        .get();
 
-                  for (final doc in completedIntakes.docs) {
-                    await doc.reference.delete();
+                    for (final t in tasks.docs) {
+                      final data = t.data();
+                      // Try cancel by deterministic id if take_index exists
+                      final takeIndex = data['take_index'];
+                      if (takeIndex != null) {
+                        final notifyId =
+                            ('${medicationId}_$takeIndex').hashCode;
+                        NotificationService.cancelNotification(notifyId);
+                      }
+                      // Also attempt to cancel any possible notification ids based on medication intakes
+                      try {
+                        final numIntakes =
+                            (medicationData['number_of_intakes'] as int?) ?? 0;
+                        for (int i = 0; i < numIntakes; i++) {
+                          final notifyId = ('${medicationId}_$i').hashCode;
+                          NotificationService.cancelNotification(notifyId);
+                        }
+                      } catch (_) {}
+
+                      await t.reference.delete();
+                    }
+                  } catch (e) {
+                    print(
+                      'Error deleting medical_tasks for medication $medicationId: $e',
+                    );
                   }
 
-                  // Delete associated missed intake records
-                  final missedIntakes = await _firestore
-                      .collection('missed_medication_intakes')
-                      .where('medication_id', isEqualTo: medicationId)
-                      .get();
+                  // Delete associated completed/missed intake records (legacy collections)
+                  try {
+                    final completedIntakes = await _firestore
+                        .collection('completed_medication_intakes')
+                        .where('medication_id', isEqualTo: medicationId)
+                        .get();
+                    for (final doc in completedIntakes.docs) {
+                      await doc.reference.delete();
+                    }
+                  } catch (e) {
+                    print(
+                      'Error deleting completed intakes for $medicationId: $e',
+                    );
+                  }
 
-                  for (final doc in missedIntakes.docs) {
-                    await doc.reference.delete();
+                  try {
+                    final missedIntakes = await _firestore
+                        .collection('missed_medication_intakes')
+                        .where('medication_id', isEqualTo: medicationId)
+                        .get();
+                    for (final doc in missedIntakes.docs) {
+                      await doc.reference.delete();
+                    }
+                  } catch (e) {
+                    print(
+                      'Error deleting missed intakes for $medicationId: $e',
+                    );
                   }
 
                   // Delete the medication itself
@@ -1618,8 +2005,33 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                       .doc(medicationId)
                       .delete();
 
+                  // Remove any cached upcoming medications for this house
+                  try {
+                    final keys = _medsCache.keys.toList();
+                    for (final k in keys) {
+                      if (k.startsWith('${widget.houseId}|')) {
+                        _medsCache.remove(k);
+                        _medsCacheTime.remove(k);
+                      }
+                    }
+                  } catch (e) {
+                    print(
+                      'Error clearing meds cache for house ${widget.houseId}: $e',
+                    );
+                  }
+
+                  // Optimistically remove from in-memory list so UI updates instantly
+                  if (mounted) {
+                    setState(() {
+                      _upcomingMedications.removeWhere(
+                        (m) => m['id'] == medicationId,
+                      );
+                    });
+                  }
+
                   Navigator.of(dialogContext).pop();
-                  await _loadUpcomingMedications();
+                  // Force refresh to bypass any stale cache so UI updates immediately
+                  await _loadUpcomingMedications(forceRefresh: true);
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('Medication deleted successfully')),
@@ -2014,12 +2426,45 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       }
 
       // Update the document
+      // Determine overall medication status: if all takes complete -> completed,
+      // if all takes missed -> missed, else remain upcoming.
+      String overallStatus = 'upcoming';
+      final statuses = takeStatuses.map((t) => t['status'] as String).toList();
+      if (statuses.isNotEmpty && statuses.every((s) => s == 'complete')) {
+        overallStatus = 'completed';
+      } else if (statuses.isNotEmpty && statuses.every((s) => s == 'missed')) {
+        overallStatus = 'missed';
+      }
+
       await _firestore.collection('medications').doc(medicationId).update({
         'take_statuses': takeStatuses,
+        'status': overallStatus,
       });
 
-      // Refresh the UI
-      await _loadUpcomingMedications();
+      // If this take was marked complete or missed, remove any pending
+      // medical_tasks created for this medication take so Home/upcoming no
+      // longer shows it.
+      if (newStatus == 'complete' || newStatus == 'missed') {
+        try {
+          final tasksQuery = await _firestore
+              .collection('medical_tasks')
+              .where('task_source', isEqualTo: 'medication')
+              .where('medication_id', isEqualTo: medicationId)
+              .where('take_index', isEqualTo: takeNumber - 1)
+              .get();
+
+          for (final tdoc in tasksQuery.docs) {
+            await tdoc.reference.delete();
+          }
+        } catch (e) {
+          print(
+            'Error removing medical_tasks for medication $medicationId: $e',
+          );
+        }
+      }
+
+      // Refresh the UI and force refresh cache to reflect the changes
+      await _loadUpcomingMedications(forceRefresh: true);
 
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(

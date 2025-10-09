@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../providers/auth_provider.dart';
 import 'elderly_list.dart';
@@ -39,6 +40,199 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     super.initState();
     _loadHouses();
     NotificationService.init(); // initialize notification service
+    // After first frame we can access context safely and generate medication tasks
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _generateMedicationTasksForToday();
+    });
+  }
+
+  String _getCurrentShift() {
+    final currentHour = DateTime.now().hour;
+    if (currentHour >= 6 && currentHour < 14) return "1st";
+    if (currentHour >= 14 && currentHour < 22) return "2nd";
+    return "3rd";
+  }
+
+  String _getCurrentDay() {
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    if (currentHour >= 0 && currentHour < 6) {
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('EEEE').format(previousDay);
+    }
+    return DateFormat('EEEE').format(now);
+  }
+
+  Future<String?> _getNurseIdFromAuth() async {
+    try {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final first = auth.userFirstName;
+      final last = auth.userLastName;
+      if (first.isEmpty || last.isEmpty) return null;
+
+      final q = await _firestore
+          .collection('users')
+          .where('user_fname', isEqualTo: first)
+          .where('user_lname', isEqualTo: last)
+          .where('user_type', isEqualTo: 'nurse')
+          .get();
+      if (q.docs.isEmpty) return null;
+      return q.docs.first.id;
+    } catch (e) {
+      debugPrint('Error getting nurse id: $e');
+      return null;
+    }
+  }
+
+  // Generate medical_tasks entries for today's medication schedule for this nurse
+  Future<void> _generateMedicationTasksForToday() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) return;
+
+      final currentShift = _getCurrentShift();
+      final currentDay = _getCurrentDay();
+
+      // Get nurse_elderly_assign for this nurse for today's shift/day
+      final assignQuery = await _firestore
+          .collection('nurse_elderly_assign')
+          .where('nurse_id', isEqualTo: nurseId)
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('day', isEqualTo: currentDay)
+          .get();
+      if (assignQuery.docs.isEmpty) return;
+
+      // Collect all elderly IDs across assignments
+      final Set<String> elderlyIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        final ids = List<String>.from(data['elderly_ids'] ?? []);
+        elderlyIds.addAll(ids);
+      }
+      if (elderlyIds.isEmpty) return;
+
+      // Fetch elderly names in chunks
+      final Map<String, String> elderlyNames = {};
+      final elderlyList = elderlyIds.toList();
+      for (var i = 0; i < elderlyList.length; i += 30) {
+        final end = (i + 30 < elderlyList.length) ? i + 30 : elderlyList.length;
+        final chunk = elderlyList.sublist(i, end);
+        final q = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+        for (final ed in q.docs) {
+          final edata = ed.data();
+          final name =
+              '${edata['elderly_fname'] ?? ''} ${edata['elderly_lname'] ?? ''}'
+                  .trim();
+          elderlyNames[ed.id] = name.isNotEmpty ? name : 'Unknown';
+        }
+      }
+
+      // Query medications for these elderly in chunks and create tasks for pending takes
+      final now = DateTime.now();
+      for (var i = 0; i < elderlyList.length; i += 30) {
+        final end = (i + 30 < elderlyList.length) ? i + 30 : elderlyList.length;
+        final chunk = elderlyList.sublist(i, end);
+
+        final medsQuery = await _firestore
+            .collection('medications')
+            .where('elderly_id', whereIn: chunk)
+            .where('status', isEqualTo: 'upcoming')
+            .where('shift', isEqualTo: currentShift)
+            .get();
+
+        for (final mdoc in medsQuery.docs) {
+          final mdata = mdoc.data();
+          final medicationId = mdoc.id;
+          final medName = mdata['medication_name'] ?? 'Medication';
+          final dosage = mdata['dosage'] ?? '';
+          final elderlyId = mdata['elderly_id'] as String?;
+          if (elderlyId == null) continue;
+          final elderlyName = elderlyNames[elderlyId] ?? 'Unknown';
+
+          final intakeTimes = List<String>.from(mdata['intake_times'] ?? []);
+          final takeStatuses = List<Map<String, dynamic>>.from(
+            mdata['take_statuses'] ?? [],
+          );
+
+          for (int t = 0; t < intakeTimes.length; t++) {
+            final scheduled = intakeTimes[t];
+            // scheduled expected as 'HH:mm'
+            final parts = scheduled.split(':');
+            if (parts.length != 2) continue;
+            final hour = int.tryParse(parts[0]) ?? 0;
+            final minute = int.tryParse(parts[1]) ?? 0;
+
+            // build today's DateTime for the scheduled time
+            final taskStart = DateTime(
+              now.year,
+              now.month,
+              now.day,
+              hour,
+              minute,
+            );
+
+            // skip past takes
+            if (taskStart.isBefore(now)) continue;
+
+            // only create task if status is pending
+            final status =
+                (t < takeStatuses.length && takeStatuses[t]['status'] != null)
+                ? takeStatuses[t]['status'] as String
+                : 'pending';
+            if (status != 'pending') continue;
+
+            // avoid duplicates: check for existing medical_tasks with same medication_id and take index and same start
+            final existing = await _firestore
+                .collection('medical_tasks')
+                .where('task_source', isEqualTo: 'medication')
+                .where('medication_id', isEqualTo: medicationId)
+                .where('take_index', isEqualTo: t)
+                .where('task_start', isEqualTo: Timestamp.fromDate(taskStart))
+                .get();
+            if (existing.docs.isNotEmpty) continue;
+
+            // create task
+            final taskTitle =
+                '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+            final taskDesc =
+                'Medication scheduled for $elderlyName at ${scheduled}';
+
+            await _firestore.collection('medical_tasks').add({
+              'task_title': taskTitle,
+              'task_description': taskDesc,
+              'task_category': 'Medication',
+              'task_start': taskStart,
+              'task_end_date': null,
+              'task_frequency': 'Once',
+              'task_status': 'Pending',
+              // metadata to avoid duplicates and allow tracing
+              'task_source': 'medication',
+              'medication_id': medicationId,
+              'take_index': t,
+              'elderly_id': elderlyId,
+              'created_at': FieldValue.serverTimestamp(),
+            });
+
+            // schedule notification 5 minutes before
+            final notifyTime = taskStart.subtract(Duration(minutes: 5));
+            if (notifyTime.isAfter(DateTime.now())) {
+              NotificationService.scheduleTaskNotification(
+                id: ('${medicationId}_$t').hashCode,
+                title: 'Medication Reminder',
+                body: '$medName for $elderlyName in 5 minutes',
+                dateTime: notifyTime,
+              );
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error generating medication tasks: $e');
+    }
   }
 
   Future<void> _loadHouses() async {
@@ -328,6 +522,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     description,
                     formattedTime,
                     bgColor,
+                    taskId: taskId,
                   );
                 },
               );
@@ -382,53 +577,85 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Task Title
-                    TextField(
+                    // Task Title (combo box with editable custom option)
+                    DropdownButtonFormField<String>(
+                      value: taskTitle.isEmpty ? 'Vitals' : taskTitle,
                       decoration: const InputDecoration(
                         labelText: 'Task Title',
                         border: OutlineInputBorder(),
                       ),
-                      onChanged: (value) => taskTitle = value,
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Task Description
-                    TextField(
-                      decoration: const InputDecoration(
-                        labelText: 'Task Description',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (value) => taskDescription = value,
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Task Category
-                    DropdownButtonFormField<String>(
-                      value: taskCategory,
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        border: OutlineInputBorder(),
-                      ),
                       items: const [
-                        DropdownMenuItem(
-                          value: 'Vitals',
-                          child: Text('Vitals'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Medication',
-                          child: Text('Medication'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Assessment',
-                          child: Text('Assessment'),
-                        ),
+                        DropdownMenuItem(value: 'Vitals', child: Text('Vitals')),
+                        DropdownMenuItem(value: 'Medication', child: Text('Medication')),
+                        DropdownMenuItem(value: 'Assessment', child: Text('Assessment')),
                         DropdownMenuItem(value: 'Other', child: Text('Other')),
+                        DropdownMenuItem(value: 'Custom', child: Text('Custom')),
                       ],
                       onChanged: (value) {
-                        if (value != null) setState(() => taskCategory = value);
+                        if (value != null) {
+                          setState(() {
+                            taskTitle = value;
+                          });
+                        }
                       },
                     ),
+                    const SizedBox(height: 8),
+                    // If custom selected, allow typing an exact title
+                    if (taskTitle == 'Custom')
+                      TextField(
+                        decoration: const InputDecoration(
+                          labelText: 'Custom Task Title',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (value) => taskTitle = value,
+                      ),
                     const SizedBox(height: 12),
+                    const SizedBox(height: 12),
+
+                    // Task Description (predefined choices per type, with custom fallback)
+                    Builder(builder: (context) {
+                      final Map<String, List<String>> descOptions = {
+                        'Vitals': ['BP/HR', 'Temperature', 'Respiration', 'Other'],
+                        'Medication': ['Give Medication', 'Prepare Medication', 'Other'],
+                        'Assessment': ['Cognitive', 'Mobility', 'Other'],
+                        'Other': ['Other'],
+                        'Custom': ['Other'],
+                      };
+                      final options = descOptions[taskTitle] ?? ['Other'];
+                      final initial = options.contains(taskDescription) && taskDescription.isNotEmpty
+                          ? taskDescription
+                          : options.first;
+
+                      return Column(
+                        children: [
+                          DropdownButtonFormField<String>(
+                            value: initial,
+                            decoration: const InputDecoration(
+                              labelText: 'Task Description',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: options
+                                .map((o) => DropdownMenuItem(value: o, child: Text(o)))
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null) setState(() => taskDescription = value);
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          if (taskDescription == 'Other')
+                            TextField(
+                              decoration: const InputDecoration(
+                                labelText: 'Custom Description',
+                                border: OutlineInputBorder(),
+                              ),
+                              onChanged: (value) => taskDescription = value,
+                            ),
+                        ],
+                      );
+                    }),
+                    const SizedBox(height: 12),
+
+                    // Note: removed separate Category field; category will be derived from Task Title
 
                     // Task Time
                     TextField(
@@ -454,54 +681,22 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Frequency
+                    // Repeat Interval
                     DropdownButtonFormField<String>(
                       value: taskFrequency,
                       decoration: const InputDecoration(
-                        labelText: 'Frequency',
+                        labelText: 'Repeat Interval',
                         border: OutlineInputBorder(),
                       ),
                       items: const [
                         DropdownMenuItem(value: 'Once', child: Text('Once')),
-                        DropdownMenuItem(value: 'Daily', child: Text('Daily')),
+                        DropdownMenuItem(value: 'Everyday', child: Text('Everyday')),
                       ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() => taskFrequency = value);
-                        }
+                        if (value != null) setState(() => taskFrequency = value);
                       },
                     ),
                     const SizedBox(height: 12),
-
-                    // Optional End Date if repeating
-                    if (taskFrequency != 'Once')
-                      TextField(
-                        readOnly: true,
-                        controller: TextEditingController(
-                          text: taskEndDate != null
-                              ? taskEndDate!.toLocal().toString().split(' ')[0]
-                              : '',
-                        ),
-                        decoration: const InputDecoration(
-                          labelText: 'End Date',
-                          border: OutlineInputBorder(),
-                          suffixIcon: Icon(
-                            Icons.calendar_today,
-                            color: Color(0xFF00588E),
-                          ),
-                        ),
-                        onTap: () async {
-                          DateTime? pickedDate = await showDatePicker(
-                            context: context,
-                            initialDate: taskEndDate ?? DateTime.now(),
-                            firstDate: DateTime.now(),
-                            lastDate: DateTime(2100),
-                          );
-                          if (pickedDate != null) {
-                            setState(() => taskEndDate = pickedDate);
-                          }
-                        },
-                      ),
                     const SizedBox(height: 20),
 
                     // Buttons
@@ -710,8 +905,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     String title,
     String description,
     String time,
-    Color bgColor,
-  ) {
+    Color bgColor, {
+    String? taskId,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -750,6 +946,54 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             ),
           ),
           Text(time, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(width: 8),
+          if (taskId != null)
+            IconButton(
+              icon: const Icon(Icons.delete, color: Colors.red),
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Delete Task'),
+                    content: const Text('Are you sure you want to delete this task?'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  try {
+                    // Attempt to read the task doc to see if it has medication metadata
+                    final doc = await FirebaseFirestore.instance.collection('medical_tasks').doc(taskId).get();
+                    final data = doc.data();
+                    if (data != null) {
+                      // If this task was generated from a medication, cancel the deterministic notification id too
+                      final medId = data['medication_id'] as String?;
+                      final takeIndex = data['take_index'];
+                      if (medId != null && takeIndex != null) {
+                        try {
+                          NotificationService.cancelNotification(('${medId}_$takeIndex').hashCode);
+                        } catch (e) {
+                          debugPrint('Error cancelling deterministic notification for $medId:$takeIndex -> $e');
+                        }
+                      }
+                    }
+
+                    await FirebaseFirestore.instance.collection('medical_tasks').doc(taskId).delete();
+                  } catch (e) {
+                    debugPrint('Error deleting task $taskId: $e');
+                  }
+
+                  // Always attempt to cancel the doc-based notification id as well
+                  try {
+                    NotificationService.cancelNotification(taskId.hashCode);
+                  } catch (e) {
+                    debugPrint('Error cancelling notification for $taskId: $e');
+                  }
+                }
+              },
+            ),
         ],
       ),
     );

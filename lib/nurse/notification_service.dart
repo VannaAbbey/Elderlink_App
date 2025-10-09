@@ -7,14 +7,13 @@ class NotificationService {
 
   static Future<void> init() async {
     tz.initializeTimeZones();
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings();
 
     await _notifications.initialize(
-      const InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
-      ),
+      const InitializationSettings(android: androidSettings, iOS: iosSettings),
     );
   }
 
@@ -43,5 +42,14 @@ class NotificationService {
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
     );
+  }
+
+  static Future<void> cancelNotification(int id) async {
+    try {
+      await _notifications.cancel(id);
+    } catch (e) {
+      // Ignore cancellation errors but log for debugging
+      print('Error cancelling notification $id: $e');
+    }
   }
 }
