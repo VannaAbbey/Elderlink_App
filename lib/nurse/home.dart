@@ -35,6 +35,41 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   final Map<String, bool> _shownTaskDialogs =
       {}; // track which tasks have been shown
 
+  // Common task description options keyed by task title
+  final Map<String, List<String>> _commonTaskDescriptions = {
+    'Vitals': [
+      'Do the vitals of all elderly',
+      'Check BP/HR for all elderly',
+      'Record temperature for all elderly',
+      'Check respiration for all elderly',
+      'Spot-check random elderly vitals',
+      'Other',
+    ],
+    'Medication': [
+      'Administer morning medications',
+      'Prepare medications for distribution',
+      'Verify medication list for each elderly',
+      'Check medication stock',
+      'Other',
+    ],
+    'Assessment': [
+      'Cognitive assessment (MMSE)',
+      'Mobility/ambulation check for all elderly',
+      'ADL (Activities of Daily Living) assessment',
+      'Pain assessment for residents',
+      'Other',
+    ],
+    // Add a helpful example option for generic/other tasks
+    'Other': [
+      'Do the vitals of all elderly',
+      'Get the vitals of all elderly',
+      'Do a headcount of residents',
+      'Check all room doors are secured',
+      'Other',
+    ],
+    'Custom': ['Other'],
+  };
+
   @override
   void initState() {
     super.initState();
@@ -627,23 +662,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     // Task Description (predefined choices per type, with custom fallback)
                     Builder(
                       builder: (context) {
-                        final Map<String, List<String>> descOptions = {
-                          'Vitals': [
-                            'BP/HR',
-                            'Temperature',
-                            'Respiration',
-                            'Other',
-                          ],
-                          'Medication': [
-                            'Give Medication',
-                            'Prepare Medication',
-                            'Other',
-                          ],
-                          'Assessment': ['Cognitive', 'Mobility', 'Other'],
-                          'Other': ['Other'],
-                          'Custom': ['Other'],
-                        };
-                        final options = descOptions[taskTitle] ?? ['Other'];
+                        final options =
+                            _commonTaskDescriptions[taskTitle] ?? ['Other'];
                         final initial =
                             options.contains(taskDescription) &&
                                 taskDescription.isNotEmpty
@@ -688,6 +708,27 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
                     // Note: removed separate Category field; category will be derived from Task Title
 
+                    // Repeat Interval
+                    DropdownButtonFormField<String>(
+                      value: taskFrequency,
+                      decoration: const InputDecoration(
+                        labelText: 'Repeat Interval',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'Once', child: Text('Once')),
+                        DropdownMenuItem(
+                          value: 'Everyday',
+                          child: Text('Everyday'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null)
+                          setState(() => taskFrequency = value);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+
                     // Task Time
                     TextField(
                       readOnly: true,
@@ -712,26 +753,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Repeat Interval
-                    DropdownButtonFormField<String>(
-                      value: taskFrequency,
-                      decoration: const InputDecoration(
-                        labelText: 'Repeat Interval',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: 'Once', child: Text('Once')),
-                        DropdownMenuItem(
-                          value: 'Everyday',
-                          child: Text('Everyday'),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null)
-                          setState(() => taskFrequency = value);
-                      },
-                    ),
-                    const SizedBox(height: 12),
                     const SizedBox(height: 20),
 
                     // Buttons
@@ -973,9 +994,24 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
+                // Title: keep single line and ellipsize if too long
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                // Description: allow wrapping to next rows (max 3 lines) then ellipsize
                 Text(
                   description,
                   style: const TextStyle(fontSize: 14, color: Colors.black87),
+                  softWrap: true,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
