@@ -486,9 +486,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           }
         }
       } else {
-        print(
-          '⏭️ EXISTING assignment found for elderly: $elderlyId, skipping creation',
-        );
+        print('⏭️ EXISTING assignment found for elderly: $elderlyId, skipping creation');
       }
     }
 

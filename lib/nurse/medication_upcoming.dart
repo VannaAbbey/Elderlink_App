@@ -17,8 +17,14 @@ class UpcomingMedicationsTab extends StatefulWidget {
   State<UpcomingMedicationsTab> createState() => _UpcomingMedicationsTabState();
 }
 
-class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
+class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
+    with AutomaticKeepAliveClientMixin<UpcomingMedicationsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  // In-memory cache to speed up UI when switching houses/tabs.
+  // Keyed by: houseId|nurseName|shift|day to avoid cross-shift staleness.
+  static final Map<String, List<Map<String, dynamic>>> _medsCache = {};
+  static final Map<String, DateTime> _medsCacheTime = {};
+  static const Duration _cacheDuration = Duration(minutes: 5);
   List<Map<String, String>> _elderlyList = [];
   String? _selectedElderly;
   bool _isLoading = false;
@@ -28,9 +34,20 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
   @override
   void initState() {
     super.initState();
+    // Prewarm nurse id and load data (uses cache if available) to make
+    // the first frame appear faster when switching tabs/houses.
+    _prewarm();
+    _startMissedMedicationTimer();
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+
+  Future<void> _prewarm() async {
+    // Kick off assigned elderly and medications loading in background.
+    // We intentionally don't await both sequentially to reduce perceived wait.
     _loadAssignedElderly();
     _loadUpcomingMedications();
-    _startMissedMedicationTimer();
   }
 
   @override
@@ -389,16 +406,48 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
     }
   }
 
-  Future<void> _loadUpcomingMedications() async {
+  Future<void> _loadUpcomingMedications({bool forceRefresh = false}) async {
+    final currentDay = _getCurrentDay();
+    final currentShift = _getCurrentShift();
+    final cacheKey =
+        '${widget.houseId}|${widget.nurseName ?? ''}|$currentShift|$currentDay';
+
     try {
+      // If cached and not forced to refresh, return cached data immediately
+      final cached = _medsCache[cacheKey];
+      final cacheTime = _medsCacheTime[cacheKey];
+      if (!forceRefresh &&
+          cached != null &&
+          cacheTime != null &&
+          DateTime.now().difference(cacheTime) < _cacheDuration) {
+        setState(() {
+          _upcomingMedications = List<Map<String, dynamic>>.from(cached);
+          _isLoading = false;
+        });
+
+        // Schedule a background refresh after cache TTL to keep things fresh
+        Future.delayed(
+          _cacheDuration,
+          () => _loadUpcomingMedications(forceRefresh: true),
+        );
+        return;
+      }
+
+      setState(() {
+        _isLoading = true;
+      });
+
       final nurseId = await _getNurseId();
-      if (nurseId == null) return;
+      if (nurseId == null) {
+        setState(() {
+          _upcomingMedications = [];
+          _isLoading = false;
+        });
+        return;
+      }
 
-      final currentDay = _getCurrentDay();
-      final currentShift = _getCurrentShift();
-
-      // Get nurse's assigned elderly for current day and shift
-      final nurseElderlyQuery = await _firestore
+      // Fetch nurse assignment and medications in parallel to reduce latency.
+      final nurseAssignFuture = _firestore
           .collection('nurse_elderly_assign')
           .where('nurse_id', isEqualTo: nurseId)
           .where('is_current', isEqualTo: true)
@@ -407,75 +456,109 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
           .where('day', isEqualTo: currentDay)
           .get();
 
-      if (nurseElderlyQuery.docs.isEmpty) {
-        setState(() {
-          _upcomingMedications = [];
-        });
-        return;
-      }
-
-      // Get assigned elderly IDs for this nurse
-      final assignedElderlyIds = List<String>.from(
-        nurseElderlyQuery.docs.first.data()['elderly_ids'] ?? [],
-      );
-
-      if (assignedElderlyIds.isEmpty) {
-        setState(() {
-          _upcomingMedications = [];
-        });
-        return;
-      }
-
-      // Load medications for assigned elderly
-      final medicationsQuery = await _firestore
+      // Limit to current shift/day and upcoming status to reduce transferred data
+      final medicationsFuture = _firestore
           .collection('medications')
           .where('house_id', isEqualTo: widget.houseId)
           .where('status', isEqualTo: 'upcoming')
           .get();
 
-      final medications = <Map<String, dynamic>>[];
+      final results = await Future.wait([nurseAssignFuture, medicationsFuture]);
+
+      final nurseElderlyQuery = results[0] as QuerySnapshot;
+      final medicationsQuery = results[1] as QuerySnapshot;
+
+      if (nurseElderlyQuery.docs.isEmpty) {
+        setState(() {
+          _upcomingMedications = [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final assignData =
+          nurseElderlyQuery.docs.first.data() as Map<String, dynamic>?;
+      final assignedElderlyIds = List<String>.from(
+        assignData?['elderly_ids'] ?? [],
+      );
+
+      if (assignedElderlyIds.isEmpty) {
+        setState(() {
+          _upcomingMedications = [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // Filter meds by assigned elderly, shift and working day, but don't fetch
+      // elderly doc per-med; instead collect unique elderly IDs and fetch once in chunks.
+      final medsToInclude = <Map<String, dynamic>>[];
+      final elderlyIdsNeeded = <String>{};
 
       for (final doc in medicationsQuery.docs) {
-        final data = doc.data();
-        final elderlyId = data['elderly_id'] as String;
+        final data = doc.data() as Map<String, dynamic>;
+        final elderlyId = data['elderly_id'] as String?;
+        if (elderlyId == null) continue;
 
-        // Only include medications for elderly assigned to this nurse
         if (!assignedElderlyIds.contains(elderlyId)) continue;
 
-        // Filter by shift and working days in code
         final medicationShift = data['shift'] as String?;
         final workingDays = data['working_days'] as List?;
 
-        // Only include medications for current shift and current day
         if (medicationShift == currentShift &&
             workingDays != null &&
             workingDays.contains(currentDay)) {
-          // Get elderly name
-          final elderlyDoc = await _firestore
-              .collection('elderly')
-              .doc(elderlyId)
-              .get();
-
-          if (elderlyDoc.exists) {
-            final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
-            final elderlyName =
-                '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
-                    .trim();
-
-            medications.add({
-              'id': doc.id,
-              'elderly_name': elderlyName,
-              ...data,
-            });
-          }
+          medsToInclude.add({'id': doc.id, ...data});
+          elderlyIdsNeeded.add(elderlyId);
         }
       }
 
+      // Fetch elderly docs in chunks of 30 to build a lookup map
+      final Map<String, String> elderlyNames = {};
+      final elderlyIdList = elderlyIdsNeeded.toList();
+      for (var i = 0; i < elderlyIdList.length; i += 30) {
+        final end = (i + 30 < elderlyIdList.length)
+            ? i + 30
+            : elderlyIdList.length;
+        final chunk = elderlyIdList.sublist(i, end);
+        final elderlyQuery = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+
+        for (final ed in elderlyQuery.docs) {
+          final edata = ed.data();
+          final name =
+              '${edata['elderly_fname'] ?? ''} ${edata['elderly_lname'] ?? ''}'
+                  .trim();
+          elderlyNames[ed.id] = name.isNotEmpty ? name : 'Unknown';
+        }
+      }
+
+      final medications = <Map<String, dynamic>>[];
+      for (final m in medsToInclude) {
+        final elderlyId = m['elderly_id'] as String;
+        medications.add({
+          'id': m['id'],
+          'elderly_name': elderlyNames[elderlyId] ?? 'Unknown',
+          ...m,
+        });
+      }
+
+      // Update cache and state
+      _medsCache[cacheKey] = List<Map<String, dynamic>>.from(medications);
+      _medsCacheTime[cacheKey] = DateTime.now();
+
       setState(() {
         _upcomingMedications = medications;
+        _isLoading = false;
       });
     } catch (e) {
       print('Error loading upcoming medications: $e');
+      setState(() {
+        _upcomingMedications = [];
+        _isLoading = false;
+      });
     }
   }
 
@@ -1964,6 +2047,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Stack(
       children: [
         if (_isLoading)
