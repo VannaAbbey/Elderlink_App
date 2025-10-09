@@ -1723,7 +1723,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                   
                   print('🔍 Overnight shift detected for task: ${data['task_description']}');
                   print('🔍 Current time: ${now.hour}:${now.minute.toString().padLeft(2, '0')}');
-                  print('🔍 Shift: ${shiftStartHour}:00 - ${shiftEndHour}:${shiftEndMinute.toString().padLeft(2, '0')}');
+                  print('🔍 Shift: $shiftStartHour:00 - $shiftEndHour:${shiftEndMinute.toString().padLeft(2, '0')}');
                   print('🔍 Task end time: ${taskEndDateTime.hour}:${taskEndDateTime.minute.toString().padLeft(2, '0')}');
                   
                   if (now.hour >= shiftStartHour || now.hour < shiftEndHour) {

@@ -22,19 +22,43 @@ class AdditionalLogService {
       print('AdditionalLogService: Document ID: $documentId');
       print('AdditionalLogService: Content length: ${content.length}');
 
+      // Get caregiver's first name from users collection
+      String caregiverFname = 'Unknown';
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        
+        if (userDoc.exists) {
+          final userData = userDoc.data() as Map<String, dynamic>;
+          // Check multiple possible field names for first name
+          caregiverFname = userData['user_fname'] ?? 
+                          userData['fname'] ?? 
+                          userData['first_name'] ?? 
+                          userData['firstName'] ?? 
+                          'Unknown';
+        }
+        print('AdditionalLogService: Retrieved caregiver name: $caregiverFname');
+      } catch (e) {
+        print('AdditionalLogService: Error getting caregiver name: $e');
+        // Continue with 'Unknown' as fallback
+      }
+
       await FirebaseFirestore.instance
           .collection(collectionName)
           .doc(documentId)
           .set({
         'caregiver_id': user.uid,
         'caregiver_email': user.email ?? '',
+        'caregiver_fname': caregiverFname,
         'date_string': dateString,
         'content': content,
         'created_at': FieldValue.serverTimestamp(),
         'updated_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      print('AdditionalLogService: Additional log saved successfully');
+      print('AdditionalLogService: Additional log saved successfully with caregiver name: $caregiverFname');
     } catch (e) {
       print('AdditionalLogService: Error saving additional log: $e');
       rethrow;

@@ -17,6 +17,7 @@ class ShiftScreen extends StatefulWidget {
 
 class _ShiftScreenState extends State<ShiftScreen> {
   DateTime selectedDate = DateTime.now();
+  final ScrollController _additionalLogsScrollController = ScrollController();
 
   void _showAdditionalLogModal(BuildContext context) async {
     // Load existing content for today's log
@@ -50,24 +51,37 @@ class _ShiftScreenState extends State<ShiftScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const SizedBox(width: 30),
                         Expanded(
-                          child: Center(
-                            child: Text(
-                              'Additional Log',
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF22688E),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 16.0),
+                              child: Text(
+                                'Additional Log',
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF22688E),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
-                          onPressed: () => Navigator.of(ctx).pop(),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 25, color: Colors.red),
+                              onPressed: () {
+                                _showClearConfirmationDialog(ctx, controller);
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 25, color: Color(0xFF22688E)),
+                              onPressed: () => Navigator.of(ctx).pop(),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -193,6 +207,119 @@ class _ShiftScreenState extends State<ShiftScreen> {
     );
   }
 
+  void _showClearConfirmationDialog(BuildContext parentContext, TextEditingController controller) {
+    bool confirmClear = false;
+    
+    showDialog(
+      context: parentContext,
+      barrierDismissible: false,
+      builder: (BuildContext ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Text(
+                'Clear Additional Log',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF22688E),
+                ),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Are you sure that you want to clear all the additional log that you\'ve written so far?',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        value: confirmClear,
+                        activeColor: const Color(0xFF22688E),
+                        onChanged: (value) {
+                          setState(() {
+                            confirmClear = value ?? false;
+                          });
+                        },
+                      ),
+                      const Expanded(
+                        child: Text(
+                          'I confirm that I want to clear the additional log.',
+                          style: TextStyle(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: confirmClear
+                      ? () async {
+                          try {
+                            // Clear the text field
+                            controller.clear();
+                            
+                            // Soft delete the additional log from database
+                            await AdditionalLogService.deleteAdditionalLog(DateTime.now());
+                            
+                            Navigator.of(ctx).pop(); // Close confirmation dialog
+                            
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Additional log cleared successfully!'),
+                                backgroundColor: Color(0xFF22688E),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error clearing log: $e'),
+                                backgroundColor: Colors.red,
+                                duration: const Duration(seconds: 3),
+                              ),
+                            );
+                          }
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: confirmClear ? Colors.red : Colors.grey,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    'Clear',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -222,6 +349,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
   bool isSidebarOpen = false;
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
+
+  @override
+  void dispose() {
+    _additionalLogsScrollController.dispose();
+    super.dispose();
+  }
 
   /// Gets shift logs (tasks, emergency alerts, incident reports) for the current authenticated caregiver only
   Stream<List<Map<String, dynamic>>> _getCurrentCaregiverShiftLogs(DateTime date) {
@@ -428,7 +561,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                             // SizedBox for Additional Logs Section:
                             SizedBox(
                               width: double.infinity,
-                              height: 200,
+                              height: 150,
                               child: Card(
                                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
                                 color: const Color(0xFFB3E0E8),
@@ -477,22 +610,35 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                             final additionalLogContent = snapshot.data ?? '';
                                             
                                             if (additionalLogContent.isEmpty) {
-                                              return const Text(
-                                                'No additional notes for this date.',
-                                                style: TextStyle(
-                                                  fontSize: 16,
-                                                  color: Colors.grey,
-                                                  fontStyle: FontStyle.italic,
+                                              return const Center(
+                                                child: Text(
+                                                  'No additional notes for this date.',
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    color: Colors.grey,
+                                                    fontStyle: FontStyle.italic,
+                                                  ),
                                                 ),
                                               );
-                                            }
-                                            
-                                            return SingleChildScrollView(
-                                              child: Text(
-                                                additionalLogContent,
-                                                style: const TextStyle(
-                                                  fontSize: 16,
-                                                  fontStyle: FontStyle.italic,
+                                            }                                            
+                                            return Directionality(
+                                              textDirection: TextDirection.ltr,
+                                              child: Scrollbar(
+                                                controller: _additionalLogsScrollController,
+                                                child: SingleChildScrollView(
+                                                  controller: _additionalLogsScrollController,
+                                                  scrollDirection: Axis.vertical,
+                                                  child: Align(
+                                                    alignment: Alignment.topLeft,
+                                                    child: Text(
+                                                      additionalLogContent,
+                                                      textDirection: TextDirection.ltr,
+                                                      style: const TextStyle(
+                                                        fontSize: 16,
+                                                        fontStyle: FontStyle.italic,
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
                                             );
