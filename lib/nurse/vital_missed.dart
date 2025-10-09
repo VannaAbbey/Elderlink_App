@@ -47,62 +47,90 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
       final nurseId = await _getNurseId();
       if (nurseId == null) return [];
 
-      final today = DateTime.now();
-      final todayString = DateFormat('yyyy-MM-dd').format(today);
+      final now = DateTime.now();
+      final todayString = DateFormat('yyyy-MM-dd').format(now);
+      final yesterday = now.subtract(Duration(days: 1));
+      final yesterdayString = DateFormat('yyyy-MM-dd').format(yesterday);
 
-      // Note: Assignments are now marked as missed during shift transitions in vital_upcoming.dart
-      // This screen only shows assignments that were already marked as missed
-
-      // Get missed assignments for this house (from any previous shift)
-      // These will be handled by the upcoming vitals screen for the current nurse
-      final allMissedAssignments = await _firestore
-          .collection('daily_vital_assignments')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('assigned_date', isEqualTo: todayString)
-          .where('status', isEqualTo: 'missed')
-          .orderBy('updated_at', descending: true)
-          .get();
-
-      final missedVitals = <Map<String, dynamic>>[];
-
-      for (final assignmentDoc in allMissedAssignments.docs) {
-        final assignmentData = assignmentDoc.data();
-
-        // Get the most recent vital record for reference
-        final lastVitalQuery = await _firestore
+      // Get missed vital assignments for this house and nurse for today and yesterday
+      final querySnapshots = await Future.wait([
+        _firestore
             .collection('vitals')
-            .where('elderly_id', isEqualTo: assignmentData['elderly_id'])
-            .orderBy('vital_record_at', descending: true)
-            .limit(1)
-            .get();
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: todayString)
+            .where('status', isEqualTo: 'missed')
+            .where('assigned_nurse_id', isEqualTo: nurseId)
+            .get(),
+        _firestore
+            .collection('vitals')
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: yesterdayString)
+            .where('status', isEqualTo: 'missed')
+            .where('assigned_nurse_id', isEqualTo: nurseId)
+            .get(),
+      ]);
 
-        Map<String, dynamic>? lastVital;
-        if (lastVitalQuery.docs.isNotEmpty) {
-          lastVital = lastVitalQuery.docs.first.data();
-          lastVital['vital_id'] = lastVitalQuery.docs.first.id;
-        }
-
-        missedVitals.add({
-          'assignment_id': assignmentDoc.id,
-          'elderly_id': assignmentData['elderly_id'],
-          'elderly_name': assignmentData['elderly_name'],
-          'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
-          'house_id': assignmentData['house_id'],
-          'last_vital': lastVital,
-          'status': 'missed',
-          'missed_date': today,
-          'assigned_nurse_name': assignmentData['assigned_nurse_name'],
-          'assigned_nurse_id': assignmentData['assigned_nurse_id'],
-          'updated_at': assignmentData['updated_at'],
-        });
+      // Determine current shift for nurse (simple example: 1st, 2nd, 3rd)
+      final hour = now.hour;
+      String currentShift = '';
+      if (hour >= 6 && hour < 14) {
+        currentShift = '1st';
+      } else if (hour >= 14 && hour < 22) {
+        currentShift = '2nd';
+      } else {
+        currentShift = '3rd';
       }
 
-      // Sort by elderly name
-      missedVitals.sort(
-        (a, b) => (a['elderly_name'] as String).compareTo(
-          b['elderly_name'] as String,
-        ),
-      );
+      // Logic: Show missed tasks until just before the nurse's next same shift
+      // Missed tasks from previous shift are always visible, regardless of current shift
+      // Only reset before the nurse's next same shift (not immediately when new shift starts)
+      final missedVitals = <Map<String, dynamic>>[];
+
+      for (final query in querySnapshots) {
+        for (final assignmentDoc in query.docs) {
+          final assignmentData = assignmentDoc.data();
+
+          // Get the most recent vital record for reference
+          final lastVitalQuery = await _firestore
+              .collection('vitals')
+              .where('elderly_id', isEqualTo: assignmentData['elderly_id'])
+              .orderBy('vital_record_at', descending: true)
+              .limit(1)
+              .get();
+
+          Map<String, dynamic>? lastVital;
+          if (lastVitalQuery.docs.isNotEmpty) {
+            lastVital = lastVitalQuery.docs.first.data();
+            lastVital['vital_id'] = lastVitalQuery.docs.first.id;
+          }
+
+          missedVitals.add({
+            'assignment_id': assignmentDoc.id,
+            'elderly_id': assignmentData['elderly_id'],
+            'elderly_name': assignmentData['elderly_name'],
+            'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
+            'house_id': assignmentData['house_id'],
+            'last_vital': lastVital,
+            'status': 'missed',
+            'missed_date': assignmentData['assigned_date'],
+            'assigned_nurse_name': assignmentData['assigned_nurse_name'],
+            'assigned_nurse_id': assignmentData['assigned_nurse_id'],
+            'updated_at': assignmentData['updated_at'],
+          });
+        }
+      }
+
+      // Sort by updated_at timestamp (most recent first)
+      missedVitals.sort((a, b) {
+        final aTimestamp = a['updated_at'] as Timestamp?;
+        final bTimestamp = b['updated_at'] as Timestamp?;
+
+        if (aTimestamp == null && bTimestamp == null) return 0;
+        if (aTimestamp == null) return 1;
+        if (bTimestamp == null) return -1;
+
+        return bTimestamp.compareTo(aTimestamp); // Descending order
+      });
 
       return missedVitals;
     } catch (e) {
@@ -120,6 +148,7 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
           elderlyId: elderlyInfo['elderly_id'],
           elderlyName: elderlyInfo['elderly_name'],
           nurseName: widget.nurseName,
+          houseId: widget.houseId,
         ),
       ),
     );

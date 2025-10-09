@@ -481,7 +481,7 @@ class _MedicationActivityLogsScreenState
                           value: elderly['id'],
                           child: Text(elderly['name']!),
                         );
-                      }).toList(),
+                      }),
                     ],
                     onChanged: (String? value) {
                       setState(() {

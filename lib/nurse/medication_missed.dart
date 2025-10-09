@@ -19,13 +19,6 @@ class MissedMedicationsTab extends StatefulWidget {
 class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  String _getCurrentShift() {
-    final currentHour = DateTime.now().hour;
-    if (currentHour >= 6 && currentHour < 14) return "1st";
-    if (currentHour >= 14 && currentHour < 22) return "2nd";
-    return "3rd";
-  }
-
   String _getCurrentDay() {
     return DateFormat('EEEE').format(DateTime.now());
   }
@@ -58,90 +51,66 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
       if (nurseId == null) return [];
 
       final currentDay = _getCurrentDay();
-      final currentShift = _getCurrentShift();
 
-      // Get nurse's assigned elderly for current day and shift
+      // Get nurse's assigned elderly for current day (ALL shifts)
       final nurseElderlyQuery = await _firestore
           .collection('nurse_elderly_assign')
           .where('nurse_id', isEqualTo: nurseId)
           .where('is_current', isEqualTo: true)
           .where('house_ids', arrayContains: widget.houseId)
-          .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();
 
       if (nurseElderlyQuery.docs.isEmpty) return [];
 
-      // Get assigned elderly IDs for this nurse
-      final assignedElderlyIds = List<String>.from(
-        nurseElderlyQuery.docs.first.data()['elderly_ids'] ?? [],
-      );
+      // Get assigned elderly IDs from ALL shifts for this nurse today
+      final assignedElderlyIds = <String>[];
+      for (final doc in nurseElderlyQuery.docs) {
+        final elderlyIds = List<String>.from(doc.data()['elderly_ids'] ?? []);
+        assignedElderlyIds.addAll(elderlyIds);
+      }
 
-      if (assignedElderlyIds.isEmpty) return [];
+      // Remove duplicates
+      final uniqueElderlyIds = assignedElderlyIds.toSet().toList();
 
-      // Get medications for assigned elderly
-      final medicationsQuery = await _firestore
-          .collection('medications')
+      if (uniqueElderlyIds.isEmpty) return [];
+
+      // Get missed medications from activity logs
+      final missedLogsQuery = await _firestore
+          .collection('medication_activity_logs')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('status', isEqualTo: 'upcoming')
+          .where('action', isEqualTo: 'miss_take')
           .get();
 
       final missedMedications = <Map<String, dynamic>>[];
 
-      for (final medicationDoc in medicationsQuery.docs) {
-        final medicationData = medicationDoc.data();
-        final elderlyId = medicationData['elderly_id'] as String;
+      for (final logDoc in missedLogsQuery.docs) {
+        final logData = logDoc.data();
+        final elderlyId = logData['elderly_id'] as String;
 
         // Only include medications for elderly assigned to this nurse
-        if (!assignedElderlyIds.contains(elderlyId)) continue;
+        if (!uniqueElderlyIds.contains(elderlyId)) continue;
 
-        // Filter by shift and working days
-        final medicationShift = medicationData['shift'] as String?;
-        final workingDays = medicationData['working_days'] as List?;
+        // Filter by current day only (all shifts)
+        final logDay = logData['day'] as String?;
 
-        // Only include medications for current shift and current day
-        if (medicationShift == currentShift &&
-            workingDays != null &&
-            workingDays.contains(currentDay)) {
-          final takeStatuses =
-              medicationData['take_statuses'] as List<dynamic>? ?? [];
-
-          // Get elderly name
-          final elderlyDoc = await _firestore
-              .collection('elderly')
-              .doc(elderlyId)
-              .get();
-
-          String elderlyName = 'Unknown';
-          if (elderlyDoc.exists) {
-            final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
-            elderlyName =
-                '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
-                    .trim();
-          }
-
-          for (final take in takeStatuses) {
-            final takeData = take as Map<String, dynamic>;
-            final status = takeData['status'] as String;
-
-            if (status == 'missed') {
-              missedMedications.add({
-                'id': medicationDoc.id,
-                'elderly_id': elderlyId,
-                'elderly_name': elderlyName,
-                'medication_name': medicationData['medication_name'],
-                'dosage': medicationData['dosage'],
-                'take_number': takeData['take_number'],
-                'scheduled_time': takeData['scheduled_time'],
-                'repeat_interval': medicationData['repeat_interval'],
-                'created_at': medicationData['created_at'],
-                'created_nurse_name': medicationData['created_nurse_name'],
-                'house_id': medicationData['house_id'],
-                'shift': medicationData['shift'],
-                'missed_at': takeData['missed_at'], // If available
-              });
-            }
-          }
+        // Include logs for current day (any shift where you were assigned)
+        if (logDay == currentDay) {
+          missedMedications.add({
+            'id': logData['medication_id'],
+            'elderly_id': elderlyId,
+            'elderly_name': logData['elderly_name'],
+            'medication_name': logData['medication_name'],
+            'dosage': logData['dosage'],
+            'take_number': logData['take_number'],
+            'scheduled_time': logData['scheduled_time'],
+            'repeat_interval': logData['repeat_interval'],
+            'created_at': logData['timestamp'],
+            'created_nurse_name': logData['nurse_name'],
+            'house_id': logData['house_id'],
+            'shift': logData['shift'],
+            'missed_at': logData['timestamp'], // When it was marked as missed
+          });
         }
       }
 
@@ -177,9 +146,9 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
-          .collection('medications')
+          .collection('medication_activity_logs')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('status', isEqualTo: 'upcoming')
+          .where('action', isEqualTo: 'miss_take')
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -302,7 +271,7 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
                                     ),
                                     SizedBox(height: 4),
                                     Text(
-                                      'Scheduled Time: ${medication['scheduled_time']}',
+                                      'Scheduled Time: ${medication['scheduled_time'] ?? 'Not specified'}',
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: Colors.grey[700],

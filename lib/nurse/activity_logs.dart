@@ -2,23 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
-class MedicationActivityLogsScreen extends StatefulWidget {
+class ActivityLogsScreen extends StatefulWidget {
   final String houseId;
   final String? nurseName;
 
-  const MedicationActivityLogsScreen({
+  const ActivityLogsScreen({
     super.key,
     required this.houseId,
     required this.nurseName,
   });
 
   @override
-  State<MedicationActivityLogsScreen> createState() =>
-      _MedicationActivityLogsScreenState();
+  State<ActivityLogsScreen> createState() => _ActivityLogsScreenState();
 }
 
-class _MedicationActivityLogsScreenState
-    extends State<MedicationActivityLogsScreen>
+class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     with SingleTickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
@@ -90,7 +88,6 @@ class _MedicationActivityLogsScreenState
 
   Future<void> _loadAssignedElderly() async {
     try {
-      final currentShift = _getCurrentShift();
       final currentDay = _getCurrentDay();
 
       // Get nurse ID
@@ -111,33 +108,37 @@ class _MedicationActivityLogsScreenState
 
       final nurseId = userQuery.docs.first.id;
 
-      // Get nurse's assigned elderly for current day and shift
+      // Get nurse's assigned elderly for current day (ALL shifts)
       final nurseElderlyQuery = await _firestore
           .collection('nurse_elderly_assign')
           .where('nurse_id', isEqualTo: nurseId)
           .where('is_current', isEqualTo: true)
           .where('house_ids', arrayContains: widget.houseId)
-          .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();
 
       if (nurseElderlyQuery.docs.isEmpty) return;
 
-      // Get assigned elderly IDs for this nurse
-      final assignedElderlyIds = List<String>.from(
-        nurseElderlyQuery.docs.first.data()['elderly_ids'] ?? [],
-      );
+      // Get assigned elderly IDs from ALL shifts for this nurse today
+      final assignedElderlyIds = <String>[];
+      for (final doc in nurseElderlyQuery.docs) {
+        final elderlyIds = List<String>.from(doc.data()['elderly_ids'] ?? []);
+        assignedElderlyIds.addAll(elderlyIds);
+      }
 
-      if (assignedElderlyIds.isEmpty) return;
+      // Remove duplicates
+      final uniqueElderlyIds = assignedElderlyIds.toSet().toList();
+
+      if (uniqueElderlyIds.isEmpty) return;
 
       // Process elderly IDs in chunks of 30
       final allElderly = <DocumentSnapshot>[];
 
-      for (var i = 0; i < assignedElderlyIds.length; i += 30) {
-        final end = (i + 30 < assignedElderlyIds.length)
+      for (var i = 0; i < uniqueElderlyIds.length; i += 30) {
+        final end = (i + 30 < uniqueElderlyIds.length)
             ? i + 30
-            : assignedElderlyIds.length;
-        final chunk = assignedElderlyIds.sublist(i, end);
+            : uniqueElderlyIds.length;
+        final chunk = uniqueElderlyIds.sublist(i, end);
 
         final elderlyDetailsQuery = await _firestore
             .collection('elderly')
@@ -287,6 +288,7 @@ class _MedicationActivityLogsScreenState
     }
   }
 
+  // Load vital recordings from vital_activity_logs collection
   Future<void> _loadVitalsLogs() async {
     setState(() {
       _isVitalsLoading = true;
@@ -302,7 +304,7 @@ class _MedicationActivityLogsScreenState
         return;
       }
 
-      // Create date range for the selected date
+      // Create date range for filtering
       final startOfDay = DateTime(
         _selectedDateVitals.year,
         _selectedDateVitals.month,
@@ -317,97 +319,74 @@ class _MedicationActivityLogsScreenState
         59,
       );
 
-      // Get missed vital assignments (these represent missed vitals from previous shifts)
-      Query query;
+      // Query with house_id filter - apply elderly filter if selected
+      Query query = _firestore
+          .collection('vital_activity_logs')
+          .where('house_id', isEqualTo: widget.houseId);
+
+      // Apply elderly filter if selected
       if (_selectedElderlyVitals != null &&
           _selectedElderlyVitals!.isNotEmpty) {
-        query = _firestore
-            .collection('daily_vital_assignments')
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('elderly_id', isEqualTo: _selectedElderlyVitals)
-            .where('status', isEqualTo: 'missed')
-            .limit(100);
-      } else {
-        query = _firestore
-            .collection('daily_vital_assignments')
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('status', isEqualTo: 'missed')
-            .limit(100);
+        query = query.where('elderly_id', isEqualTo: _selectedElderlyVitals);
       }
 
       final querySnapshot = await query.get();
       final activities = <Map<String, dynamic>>[];
 
       for (final doc in querySnapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        final updatedAt = data['updated_at'] as Timestamp?;
+        final data = doc.data() as Map<String, dynamic>?;
+        if (data == null) continue; // Skip if data is null
 
-        // Filter by date on client side
-        if (updatedAt != null) {
-          final activityDate = updatedAt.toDate();
+        // Filter activities by selected date
+        final timestamp = data['timestamp'] as Timestamp?;
+        if (timestamp != null) {
+          final activityDate = timestamp.toDate();
           if (activityDate.isBefore(startOfDay) ||
               activityDate.isAfter(endOfDay)) {
-            continue;
+            continue; // Skip activities not on selected date
           }
         }
 
-        // Get elderly details
-        String elderlyName = 'Unknown';
-        String elderlyTitle = 'Lola';
+        // Get elderly gender for proper title (Lola/Lolo)
+        String elderlyTitle = 'Lola'; // Default to female
         try {
-          final elderlyDoc = await _firestore
-              .collection('elderly')
-              .doc(data['elderly_id'])
-              .get();
-
-          if (elderlyDoc.exists) {
-            final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
-            final firstName = elderlyData['elderly_fname'] ?? '';
-            final lastName = elderlyData['elderly_lname'] ?? '';
-            elderlyName = '$firstName $lastName'.trim();
-            final gender = elderlyData['elderly_gender'] as String?;
-            elderlyTitle = (gender?.toLowerCase() == 'male') ? 'Lolo' : 'Lola';
-          }
-        } catch (e) {
-          print('Error getting elderly details: $e');
-        }
-
-        // Get original nurse name who missed the vital
-        String nurseName = 'Unknown Nurse';
-        try {
-          final originalNurseId =
-              data['original_assigned_nurse_id'] ?? data['assigned_nurse_id'];
-          if (originalNurseId != null) {
-            final nurseDoc = await _firestore
-                .collection('users')
-                .doc(originalNurseId)
+          final elderlyId = data['elderly_id'] as String?;
+          if (elderlyId != null) {
+            final elderlyDoc = await _firestore
+                .collection('elderly')
+                .doc(elderlyId)
                 .get();
 
-            if (nurseDoc.exists) {
-              final nurseData = nurseDoc.data() as Map<String, dynamic>;
-              final firstName = nurseData['user_fname'] ?? '';
-              final lastName = nurseData['user_lname'] ?? '';
-              nurseName = '$firstName $lastName'.trim();
+            if (elderlyDoc.exists) {
+              final elderlyData = elderlyDoc.data();
+              if (elderlyData != null) {
+                final gender = elderlyData['elderly_gender'] as String?;
+                elderlyTitle = (gender?.toLowerCase() == 'male')
+                    ? 'Lolo'
+                    : 'Lola';
+              }
             }
           }
         } catch (e) {
-          print('Error getting nurse details: $e');
+          print('Error getting elderly gender: $e');
         }
 
+        // Add activity with enhanced data
         activities.add({
           'id': doc.id,
-          'elderly_name': elderlyName,
           'elderly_title': elderlyTitle,
-          'nurse_name': nurseName,
-          'shift': data['shift'] ?? 'Unknown',
-          'assigned_date': data['assigned_date'] ?? 'Unknown',
-          'timestamp': updatedAt,
-          'action': 'missed_vital',
-          ...data,
+          'action_type': data['action_type'] ?? 'vital_completed',
+          'elderly_name': data['elderly_name'] ?? 'Unknown',
+          'nurse_name': data['nurse_name'] ?? widget.nurseName,
+          'timestamp': data['timestamp'],
+          'shift': data['shift'] ?? _getCurrentShift(),
+          'new_values': data['new_values'] ?? {},
+          'remarks': data['remarks'] ?? '',
+          ...data, // Spread data
         });
       }
 
-      // Sort activities by timestamp
+      // Sort activities by timestamp (newest first)
       activities.sort((a, b) {
         final aTimestamp = a['timestamp'] as Timestamp?;
         final bTimestamp = b['timestamp'] as Timestamp?;
@@ -416,7 +395,9 @@ class _MedicationActivityLogsScreenState
         if (aTimestamp == null) return 1;
         if (bTimestamp == null) return -1;
 
-        return bTimestamp.compareTo(aTimestamp);
+        return bTimestamp.compareTo(
+          aTimestamp,
+        ); // Descending order (newest first)
       });
 
       setState(() {
@@ -432,17 +413,33 @@ class _MedicationActivityLogsScreenState
     }
   }
 
-  String _formatActivityMessage(Map<String, dynamic> activity) {
+  String _formatMedicationActivityMessage(Map<String, dynamic> activity) {
     final action = activity['action'] as String;
     final nurseName = activity['nurse_name'] as String;
     final elderlyName = activity['elderly_name'] as String;
     final elderlyTitle = activity['elderly_title'] as String;
     final medicationName = activity['medication_name'] as String;
     final takeOrdinal = activity['take_ordinal'] as String?;
+    final takeNumber = activity['take_number'] as int?;
 
     switch (action) {
+      case 'create_medication':
+        return 'Nurse $nurseName added new medication "$medicationName" for $elderlyTitle $elderlyName';
+
+      case 'complete_take':
+        final takeText = takeNumber != null
+            ? _getOrdinalFromNumber(takeNumber)
+            : (takeOrdinal ?? '1st');
+        return 'Nurse $nurseName completed the $takeText take of "$medicationName" for $elderlyTitle $elderlyName';
+
+      case 'miss_take':
+        final takeText = takeNumber != null
+            ? _getOrdinalFromNumber(takeNumber)
+            : (takeOrdinal ?? '1st');
+        return 'Nurse $nurseName marked the $takeText take of "$medicationName" as MISSED for $elderlyTitle $elderlyName';
+
       case 'edit_medication':
-        return 'Nurse $nurseName edited the medication details of $elderlyTitle $elderlyName';
+        return 'Nurse $nurseName edited the medication details of "$medicationName" for $elderlyTitle $elderlyName';
 
       case 'delete_medication':
         return 'Nurse $nurseName deleted the medication "$medicationName" of $elderlyTitle $elderlyName';
@@ -459,39 +456,154 @@ class _MedicationActivityLogsScreenState
         return 'Nurse $nurseName changed the status of "$medicationName" ${takeOrdinal != null ? "($takeOrdinal take)" : ""} for $elderlyTitle $elderlyName from ${oldStatus?.toUpperCase() ?? "UNKNOWN"} to ${newStatus?.toUpperCase() ?? "UNKNOWN"}';
 
       default:
-        return 'Nurse $nurseName performed $action on medication for $elderlyTitle $elderlyName';
+        return 'Nurse $nurseName performed $action on medication "$medicationName" for $elderlyTitle $elderlyName';
     }
   }
 
-  Color _getActionColor(String action) {
+  // 🔧 NEW: Format vital activity messages with better action descriptions
+  String _formatVitalActivityMessage(Map<String, dynamic> activity) {
+    final actionType = activity['action_type'] as String? ?? 'vital_recorded';
+    final nurseName = activity['nurse_name'] as String? ?? 'Unknown Nurse';
+    final elderlyName = activity['elderly_name'] as String? ?? 'Unknown';
+    final elderlyTitle = activity['elderly_title'] as String? ?? 'Lola';
+    final newValues = activity['new_values'] as Map<String, dynamic>? ?? {};
+
+    switch (actionType.toLowerCase()) {
+      case 'vital_recorded':
+      case 'vital_completed':
+      case 'vitals_completed':
+        if (newValues.isNotEmpty) {
+          final vitals = <String>[];
+          if (newValues['blood_pressure'] != null) {
+            vitals.add('BP: ${newValues['blood_pressure']}');
+          }
+          if (newValues['pulse_rate'] != null) {
+            vitals.add('Pulse: ${newValues['pulse_rate']}');
+          }
+          if (newValues['oxygen_saturation'] != null) {
+            vitals.add('O2: ${newValues['oxygen_saturation']}%');
+          }
+          if (newValues['temperature'] != null) {
+            vitals.add('Temp: ${newValues['temperature']}°C');
+          }
+          if (newValues['respiratory_rate'] != null) {
+            vitals.add('RR: ${newValues['respiratory_rate']}');
+          }
+
+          final vitalsList = vitals.isNotEmpty ? vitals.join(', ') : 'vitals';
+          return 'Nurse $nurseName completed vital signs ($vitalsList) for $elderlyTitle $elderlyName';
+        }
+        return 'Nurse $nurseName completed vital signs for $elderlyTitle $elderlyName';
+
+      case 'vital_verified':
+        return 'Nurse $nurseName verified the vitals of $elderlyTitle $elderlyName';
+
+      case 'vital_updated':
+        return 'Nurse $nurseName updated the vitals of $elderlyTitle $elderlyName';
+
+      case 'vital_missed':
+      case 'missed':
+        return 'Nurse $nurseName marked vitals as MISSED for $elderlyTitle $elderlyName';
+
+      default:
+        // For backward compatibility, treat any other type as completed
+        return 'Nurse $nurseName completed vital signs for $elderlyTitle $elderlyName';
+    }
+  }
+
+  String _getOrdinalFromNumber(int number) {
+    if (number >= 11 && number <= 13) {
+      return '${number}th';
+    }
+    switch (number % 10) {
+      case 1:
+        return '${number}st';
+      case 2:
+        return '${number}nd';
+      case 3:
+        return '${number}rd';
+      default:
+        return '${number}th';
+    }
+  }
+
+  Color _getMedicationActionColor(String action) {
     switch (action) {
-      case 'edit_medication':
+      case 'create_medication':
+      case 'add_medication':
+        return Colors.green;
+      case 'complete_take':
         return Colors.blue;
+      case 'miss_take':
+        return Colors.orange;
+      case 'edit_medication':
+        return Colors.purple;
       case 'delete_medication':
       case 'delete_individual_take':
         return Colors.red;
-      case 'add_medication':
-        return Colors.green;
       case 'status_change':
-        return Colors.orange;
+        return Colors.teal;
       default:
         return Colors.grey;
     }
   }
 
-  IconData _getActionIcon(String action) {
+  // 🔧 NEW: Get color for vital actions
+  Color _getVitalActionColor(String actionType) {
+    switch (actionType.toLowerCase()) {
+      case 'vital_recorded':
+      case 'vital_completed':
+      case 'vitals_completed':
+        return Colors.green;
+      case 'vital_verified':
+        return Colors.blue;
+      case 'vital_updated':
+        return Colors.orange;
+      case 'vital_missed':
+      case 'missed':
+        return Colors.red;
+      default:
+        return Colors.green; // Default to green for completed vitals
+    }
+  }
+
+  IconData _getMedicationActionIcon(String action) {
     switch (action) {
+      case 'create_medication':
+      case 'add_medication':
+        return Icons.add_circle;
+      case 'complete_take':
+        return Icons.check_circle;
+      case 'miss_take':
+        return Icons.cancel;
       case 'edit_medication':
         return Icons.edit;
       case 'delete_medication':
       case 'delete_individual_take':
         return Icons.delete;
-      case 'add_medication':
-        return Icons.add_circle;
       case 'status_change':
         return Icons.update;
       default:
         return Icons.info;
+    }
+  }
+
+  // 🔧 NEW: Get icon for vital actions
+  IconData _getVitalActionIcon(String actionType) {
+    switch (actionType.toLowerCase()) {
+      case 'vital_recorded':
+      case 'vital_completed':
+      case 'vitals_completed':
+        return Icons.check_circle;
+      case 'vital_verified':
+        return Icons.verified;
+      case 'vital_updated':
+        return Icons.edit;
+      case 'vital_missed':
+      case 'missed':
+        return Icons.cancel;
+      default:
+        return Icons.favorite; // Default to heart for vital signs
     }
   }
 
@@ -527,11 +639,11 @@ class _MedicationActivityLogsScreenState
     }
   }
 
-  Widget _buildActivityCard(Map<String, dynamic> activity) {
+  Widget _buildMedicationActivityCard(Map<String, dynamic> activity) {
     final action = activity['action'] as String;
-    final actionColor = _getActionColor(action);
-    final actionIcon = _getActionIcon(action);
-    final message = _formatActivityMessage(activity);
+    final actionColor = _getMedicationActionColor(action);
+    final actionIcon = _getMedicationActionIcon(action);
+    final message = _formatMedicationActivityMessage(activity);
     final timestamp = _formatTimestamp(activity['timestamp']);
 
     return Card(
@@ -546,7 +658,7 @@ class _MedicationActivityLogsScreenState
             Container(
               padding: EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: actionColor.withOpacity(0.1),
+                color: actionColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(actionIcon, color: actionColor, size: 20),
@@ -577,15 +689,25 @@ class _MedicationActivityLogsScreenState
 
                   // Medication name (if available)
                   if (activity['medication_name'] != null &&
-                      action != 'delete_medication')
+                      activity['medication_name'].toString().isNotEmpty)
                     Padding(
                       padding: EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Medication: ${activity['medication_name']}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[700],
-                          fontStyle: FontStyle.italic,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: actionColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          activity['medication_name'],
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: actionColor,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
                     ),
@@ -593,6 +715,180 @@ class _MedicationActivityLogsScreenState
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // 🔧 NEW: Build vital activity card
+  Widget _buildVitalActivityCard(Map<String, dynamic> activity) {
+    final actionType = activity['action_type'] as String? ?? 'vital_recorded';
+    final actionColor = _getVitalActionColor(actionType);
+    final actionIcon = _getVitalActionIcon(actionType);
+    final message = _formatVitalActivityMessage(activity);
+    final timestamp = _formatTimestamp(activity['timestamp']);
+    final newValues = activity['new_values'] as Map<String, dynamic>? ?? {};
+
+    return Card(
+      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      elevation: 2,
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Action Icon
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: actionColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(actionIcon, color: actionColor, size: 20),
+            ),
+            SizedBox(width: 12),
+
+            // Activity Details
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Activity Message
+                  Text(
+                    message,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+
+                  // Timestamp and Shift
+                  Row(
+                    children: [
+                      Text(
+                        timestamp,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      if (activity['shift'] != null) ...[
+                        SizedBox(width: 8),
+                        Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '${activity['shift']} shift',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.blue[700],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+
+                  // Vital Signs Details (if available)
+                  if (newValues.isNotEmpty) ...[
+                    SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        if (newValues['blood_pressure'] != null)
+                          _buildVitalChip(
+                            'BP',
+                            newValues['blood_pressure'].toString(),
+                            Colors.red,
+                          ),
+                        if (newValues['pulse_rate'] != null)
+                          _buildVitalChip(
+                            'Pulse',
+                            '${newValues['pulse_rate']} bpm',
+                            Colors.blue,
+                          ),
+                        if (newValues['oxygen_saturation'] != null)
+                          _buildVitalChip(
+                            'O2',
+                            '${newValues['oxygen_saturation']}%',
+                            Colors.green,
+                          ),
+                        if (newValues['temperature'] != null)
+                          _buildVitalChip(
+                            'Temp',
+                            '${newValues['temperature']}°C',
+                            Colors.orange,
+                          ),
+                        if (newValues['respiratory_rate'] != null)
+                          _buildVitalChip(
+                            'RR',
+                            '${newValues['respiratory_rate']}',
+                            Colors.purple,
+                          ),
+                      ],
+                    ),
+                  ],
+
+                  // Remarks (if available)
+                  if (activity['remarks'] != null &&
+                      activity['remarks'].toString().isNotEmpty) ...[
+                    SizedBox(height: 6),
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.note, size: 14, color: Colors.grey[600]),
+                          SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              activity['remarks'].toString(),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[700],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 🔧 NEW: Build vital sign chips
+  Widget _buildVitalChip(String label, String value, Color color) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(
+          fontSize: 10,
+          color: color,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );
@@ -614,11 +910,11 @@ class _MedicationActivityLogsScreenState
           tabs: [
             Tab(
               icon: Icon(Icons.medication, color: Colors.white),
-              text: 'Medication',
+              text: 'Medications',
             ),
             Tab(
               icon: Icon(Icons.favorite, color: Colors.white),
-              text: 'Vitals',
+              text: 'Vital Signs',
             ),
           ],
           indicatorColor: Colors.white,
@@ -677,7 +973,7 @@ class _MedicationActivityLogsScreenState
                         value: elderly['id'],
                         child: Text(elderly['name']!),
                       );
-                    }).toList(),
+                    }),
                   ],
                   onChanged: (String? value) {
                     setState(() {
@@ -694,47 +990,28 @@ class _MedicationActivityLogsScreenState
                 children: [
                   Expanded(
                     child: Text(
-                      'Selected Date:',
+                      'Date: ${DateFormat('MMM dd, yyyy').format(_selectedDateMed)}',
                       style: TextStyle(
-                        fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.black87,
+                        fontSize: 16,
                       ),
                     ),
                   ),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      DateFormat('MMM dd, yyyy').format(_selectedDateMed),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
+                      'Total: ${_medicationLogs.length} activities',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                   ),
                   InkWell(
                     onTap: () async {
-                      final DateTime? picked = await showDatePicker(
+                      final picked = await showDatePicker(
                         context: context,
                         initialDate: _selectedDateMed,
-                        firstDate: DateTime.now().subtract(Duration(days: 365)),
+                        firstDate: DateTime(2023),
                         lastDate: DateTime.now(),
-                        builder: (context, child) {
-                          return Theme(
-                            data: Theme.of(context).copyWith(
-                              colorScheme: ColorScheme.light(
-                                primary: Color(0xFF00588E),
-                                onPrimary: Colors.white,
-                                surface: Colors.white,
-                                onSurface: Colors.black,
-                              ),
-                            ),
-                            child: child!,
-                          );
-                        },
                       );
-
                       if (picked != null && picked != _selectedDateMed) {
                         setState(() {
                           _selectedDateMed = picked;
@@ -743,15 +1020,15 @@ class _MedicationActivityLogsScreenState
                       }
                     },
                     child: Container(
-                      padding: EdgeInsets.all(12),
+                      padding: EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Color(0xFF00588E).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
+                        color: Color(0xFF00588E),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Icon(
                         Icons.calendar_today,
-                        size: 24,
-                        color: Color(0xFF00588E),
+                        color: Colors.white,
+                        size: 20,
                       ),
                     ),
                   ),
@@ -773,21 +1050,19 @@ class _MedicationActivityLogsScreenState
                       Icon(Icons.medication, size: 64, color: Colors.grey[400]),
                       SizedBox(height: 16),
                       Text(
-                        'No medication activities found',
+                        'No medication activities',
                         style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                       ),
                       SizedBox(height: 8),
                       Text(
-                        _selectedElderlyMed != null
-                            ? 'No activities found for the selected elderly on ${DateFormat('MMM dd, yyyy').format(_selectedDateMed)}'
-                            : 'No medication activities found on ${DateFormat('MMM dd, yyyy').format(_selectedDateMed)}',
+                        'No medication activities found for the selected date and filters.',
                         style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                         textAlign: TextAlign.center,
                       ),
                       SizedBox(height: 8),
                       Text(
-                        'Try selecting a different date or elderly',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                        'Try selecting a different date or clearing filters.',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                         textAlign: TextAlign.center,
                       ),
                     ],
@@ -799,7 +1074,9 @@ class _MedicationActivityLogsScreenState
                     padding: EdgeInsets.symmetric(vertical: 8),
                     itemCount: _medicationLogs.length,
                     itemBuilder: (context, index) {
-                      return _buildActivityCard(_medicationLogs[index]);
+                      return _buildMedicationActivityCard(
+                        _medicationLogs[index],
+                      );
                     },
                   ),
                 ),
@@ -847,7 +1124,7 @@ class _MedicationActivityLogsScreenState
                         value: elderly['id'],
                         child: Text(elderly['name']!),
                       );
-                    }).toList(),
+                    }),
                   ],
                   onChanged: (String? value) {
                     setState(() {
@@ -864,47 +1141,28 @@ class _MedicationActivityLogsScreenState
                 children: [
                   Expanded(
                     child: Text(
-                      'Selected Date:',
+                      'Date: ${DateFormat('MMM dd, yyyy').format(_selectedDateVitals)}',
                       style: TextStyle(
-                        fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.black87,
+                        fontSize: 16,
                       ),
                     ),
                   ),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      DateFormat('MMM dd, yyyy').format(_selectedDateVitals),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
+                      'Total: ${_vitalsLogs.length} activities',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                   ),
                   InkWell(
                     onTap: () async {
-                      final DateTime? picked = await showDatePicker(
+                      final picked = await showDatePicker(
                         context: context,
                         initialDate: _selectedDateVitals,
-                        firstDate: DateTime.now().subtract(Duration(days: 365)),
+                        firstDate: DateTime(2023),
                         lastDate: DateTime.now(),
-                        builder: (context, child) {
-                          return Theme(
-                            data: Theme.of(context).copyWith(
-                              colorScheme: ColorScheme.light(
-                                primary: Color(0xFF00588E),
-                                onPrimary: Colors.white,
-                                surface: Colors.white,
-                                onSurface: Colors.black,
-                              ),
-                            ),
-                            child: child!,
-                          );
-                        },
                       );
-
                       if (picked != null && picked != _selectedDateVitals) {
                         setState(() {
                           _selectedDateVitals = picked;
@@ -913,15 +1171,15 @@ class _MedicationActivityLogsScreenState
                       }
                     },
                     child: Container(
-                      padding: EdgeInsets.all(12),
+                      padding: EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Color(0xFF00588E).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
+                        color: Color(0xFF00588E),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Icon(
                         Icons.calendar_today,
-                        size: 24,
-                        color: Color(0xFF00588E),
+                        color: Colors.white,
+                        size: 20,
                       ),
                     ),
                   ),
@@ -943,21 +1201,13 @@ class _MedicationActivityLogsScreenState
                       Icon(Icons.favorite, size: 64, color: Colors.grey[400]),
                       SizedBox(height: 16),
                       Text(
-                        'No vitals activities found',
+                        'No vital sign activities',
                         style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                       ),
                       SizedBox(height: 8),
                       Text(
-                        _selectedElderlyVitals != null
-                            ? 'No missed vitals found for the selected elderly on ${DateFormat('MMM dd, yyyy').format(_selectedDateVitals)}'
-                            : 'No missed vitals found on ${DateFormat('MMM dd, yyyy').format(_selectedDateVitals)}',
+                        'No vital sign recordings found for the selected date and filters.',
                         style: TextStyle(fontSize: 14, color: Colors.grey[500]),
-                        textAlign: TextAlign.center,
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Try selecting a different date or elderly',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                         textAlign: TextAlign.center,
                       ),
                     ],
@@ -969,82 +1219,12 @@ class _MedicationActivityLogsScreenState
                     padding: EdgeInsets.symmetric(vertical: 8),
                     itemCount: _vitalsLogs.length,
                     itemBuilder: (context, index) {
-                      return _buildVitalsActivityCard(_vitalsLogs[index]);
+                      return _buildVitalActivityCard(_vitalsLogs[index]);
                     },
                   ),
                 ),
         ),
       ],
-    );
-  }
-
-  Widget _buildVitalsActivityCard(Map<String, dynamic> activity) {
-    final timestamp = _formatTimestamp(activity['timestamp']);
-    final elderlyName = activity['elderly_name'] ?? 'Unknown';
-    final elderlyTitle = activity['elderly_title'] ?? 'Lola';
-    final nurseName = activity['nurse_name'] ?? 'Unknown Nurse';
-    final shift = activity['shift'] ?? 'Unknown';
-    final assignedDate = activity['assigned_date'] ?? 'Unknown';
-
-    return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      elevation: 2,
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Icon
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(Icons.favorite_border, color: Colors.red, size: 20),
-            ),
-            SizedBox(width: 12),
-
-            // Content
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Action description
-                  Text(
-                    'Nurse $nurseName missed vital signs for $elderlyTitle $elderlyName',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-
-                  // Timestamp
-                  Text(
-                    timestamp,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-
-                  // Shift and date info
-                  Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Shift: $shift • Date: $assignedDate',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[700],
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

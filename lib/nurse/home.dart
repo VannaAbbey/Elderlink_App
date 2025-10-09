@@ -12,7 +12,7 @@ import 'incident_report.dart';
 import 'edit_profile.dart';
 import 'leave_form.dart';
 import 'notification_service.dart';
-import 'medication_activity_logs.dart';
+import 'activity_logs.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -190,18 +190,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => MedicationActivityLogsScreen(
+                builder: (context) => ActivityLogsScreen(
                   houseId: 'H001', // Default house
                   nurseName:
-                      Provider.of<AuthProvider>(
-                        context,
-                        listen: false,
-                      ).userFirstName +
-                      ' ' +
-                      Provider.of<AuthProvider>(
-                        context,
-                        listen: false,
-                      ).userLastName,
+                      '${Provider.of<AuthProvider>(context, listen: false).userFirstName} ${Provider.of<AuthProvider>(context, listen: false).userLastName}',
                 ),
               ),
             );
@@ -474,8 +466,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         DropdownMenuItem(value: 'Daily', child: Text('Daily')),
                       ],
                       onChanged: (value) {
-                        if (value != null)
+                        if (value != null) {
                           setState(() => taskFrequency = value);
+                        }
                       },
                     ),
                     const SizedBox(height: 12),
@@ -504,8 +497,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             firstDate: DateTime.now(),
                             lastDate: DateTime(2100),
                           );
-                          if (pickedDate != null)
+                          if (pickedDate != null) {
                             setState(() => taskEndDate = pickedDate);
+                          }
                         },
                       ),
                     const SizedBox(height: 20),
@@ -725,7 +719,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         color: bgColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 6),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
         ],
       ),
       child: Row(
@@ -763,8 +757,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   // ---------------------- HOUSES SECTION ----------------------
   Widget _housesSection() {
-    if (_isLoadingHouses)
+    if (_isLoadingHouses) {
       return const Center(child: CircularProgressIndicator());
+    }
     if (_houses.isEmpty) return const Text("No houses available.");
 
     List<String> houseImages = [

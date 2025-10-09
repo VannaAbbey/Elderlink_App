@@ -122,10 +122,12 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
       for (var doc in snapshot.docs) {
         final data = doc.data();
         if (data['house_id'] != null) houseIds.add(data['house_id'].toString());
-        if (data['elderly_id'] != null)
+        if (data['elderly_id'] != null) {
           elderlyIds.add(data['elderly_id'].toString());
-        if (data['user_id_cg'] != null)
+        }
+        if (data['user_id_cg'] != null) {
           caregiverIds.add(data['user_id_cg'].toString());
+        }
       }
 
       // Batch fetch all data concurrently

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'medication_management_layout.dart';
-import 'medication_activity_logs.dart';
+import 'activity_logs.dart';
 
 /// =============================
 /// Medication Management Screen
@@ -64,7 +64,7 @@ class _MedicationManagementScreenState
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => MedicationActivityLogsScreen(
+        builder: (context) => ActivityLogsScreen(
           houseId: selectedHouseId ?? 'H001', // Use selected house or default
           nurseName: nurseName,
         ),

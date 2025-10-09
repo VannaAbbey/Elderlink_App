@@ -258,9 +258,9 @@ void main() async {
 }
 
 class MyApp extends StatelessWidget {
-  MyApp({super.key});
+  const MyApp({super.key});
 
-  DateTime? _lastIncidentTime; // store latest notified incident
+  static DateTime? _lastIncidentTime; // store latest notified incident
 
   void _listenForEmergencies() {
     try {
@@ -310,8 +310,8 @@ class MyApp extends StatelessWidget {
               if (timestampRaw == null) continue;
 
               // skip if already notified
-              if (_lastIncidentTime != null &&
-                  !timestampRaw.isAfter(_lastIncidentTime!)) {
+              if (MyApp._lastIncidentTime != null &&
+                  !timestampRaw.isAfter(MyApp._lastIncidentTime!)) {
                 continue;
               }
 
@@ -342,9 +342,9 @@ class MyApp extends StatelessWidget {
                 );
 
                 // update last notified timestamp
-                if (_lastIncidentTime == null ||
-                    timestampRaw.isAfter(_lastIncidentTime!)) {
-                  _lastIncidentTime = timestampRaw;
+                if (MyApp._lastIncidentTime == null ||
+                    timestampRaw.isAfter(MyApp._lastIncidentTime!)) {
+                  MyApp._lastIncidentTime = timestampRaw;
                 }
               }
             }

@@ -58,8 +58,9 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
 
         return StreamBuilder<QuerySnapshot>(
           stream: _firestore
-              .collection('completed_medication_intakes')
+              .collection('medication_activity_logs')
               .where('house_id', isEqualTo: widget.houseId)
+              .where('action', isEqualTo: 'complete_take')
               .snapshots(),
           builder: (context, snapshot) {
             if (snapshot.hasError) {
@@ -72,35 +73,34 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
             }
 
             // Filter by nurse ID in code and sort by completion date
-            final allIntakes = snapshot.data?.docs ?? [];
-            print('Total completed intakes in DB: ${allIntakes.length}');
+            final allLogs = snapshot.data?.docs ?? [];
+            print('Total completed medication logs in DB: ${allLogs.length}');
 
-            final completedIntakes =
-                allIntakes.where((doc) {
+            final completedLogs =
+                allLogs.where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
-                  final isCompletedByCurrentNurse =
-                      data['completed_by'] == nurseId;
+                  final isCompletedByCurrentNurse = data['nurse_id'] == nurseId;
                   if (isCompletedByCurrentNurse) {
                     print(
-                      'Found completed intake: ${data['medication_name']} - ${data['take_name']} for ${data['elderly_name']}',
+                      'Found completed medication: ${data['medication_name']} for ${data['elderly_name']}',
                     );
                   }
                   return isCompletedByCurrentNurse;
                 }).toList()..sort((a, b) {
                   final aData = a.data() as Map<String, dynamic>;
                   final bData = b.data() as Map<String, dynamic>;
-                  final aTime = (aData['completed_at'] as Timestamp).toDate();
-                  final bTime = (bData['completed_at'] as Timestamp).toDate();
+                  final aTime = (aData['timestamp'] as Timestamp).toDate();
+                  final bTime = (bData['timestamp'] as Timestamp).toDate();
                   return bTime.compareTo(
                     aTime,
                   ); // Descending order (newest first)
                 });
 
             print(
-              'Filtered completed intakes for this nurse: ${completedIntakes.length}',
+              'Filtered completed medications for this nurse: ${completedLogs.length}',
             );
 
-            if (completedIntakes.isEmpty) {
+            if (completedLogs.isEmpty) {
               return Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -122,13 +122,11 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
 
             return ListView.builder(
               padding: EdgeInsets.symmetric(vertical: 8),
-              itemCount: completedIntakes.length,
+              itemCount: completedLogs.length,
               itemBuilder: (context, index) {
-                final intake =
-                    completedIntakes[index].data() as Map<String, dynamic>;
-                final completedAt = (intake['completed_at'] as Timestamp)
-                    .toDate();
-                final takeOrdinal = _getOrdinal(intake['take_number'] as int);
+                final log = completedLogs[index].data() as Map<String, dynamic>;
+                final completedAt = (log['timestamp'] as Timestamp).toDate();
+                final takeOrdinal = _getOrdinal(log['take_number'] as int);
 
                 return Card(
                   margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -144,7 +142,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                             SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                intake['elderly_name'] ?? 'Unknown',
+                                log['elderly_name'] ?? 'Unknown',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
@@ -163,7 +161,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                             SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '${intake['medication_name']} - ${intake['dosage']}',
+                                '${log['medication_name']} - ${log['dosage']}',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -206,7 +204,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                     ),
                                     SizedBox(height: 4),
                                     Text(
-                                      'Scheduled Time: ${intake['scheduled_time']}',
+                                      'Scheduled Time: ${log['scheduled_time'] ?? 'Not specified'}',
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: Colors.grey[700],
@@ -227,6 +225,19 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                             ],
                           ),
                         ),
+
+                        // Created timestamp (smaller and at bottom)
+                        if (log['timestamp'] != null)
+                          Padding(
+                            padding: EdgeInsets.only(top: 12),
+                            child: Text(
+                              'Created: ${DateFormat('MMM dd, yyyy HH:mm').format((log['timestamp'] as Timestamp).toDate())}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[500],
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),

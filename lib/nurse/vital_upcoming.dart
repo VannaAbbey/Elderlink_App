@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'vital_update_screen.dart';
+import 'follow_up_vitals_selection.dart';
 
 class UpcomingVitalsTab extends StatefulWidget {
   final String houseId;
@@ -20,12 +21,93 @@ class UpcomingVitalsTab extends StatefulWidget {
 class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isLoading = false;
+  List<Map<String, dynamic>>? _upcomingVitals;
+  // Simple in-memory cache per houseId
+  static final Map<String, List<Map<String, dynamic>>> _houseVitalsCache = {};
+  static final Map<String, DateTime> _houseVitalsCacheTime = {};
+  static const Duration cacheDuration = Duration(seconds: 30); // Cache for 30s
 
   String _getCurrentShift() {
     final currentHour = DateTime.now().hour;
     if (currentHour >= 6 && currentHour < 14) return "1st";
     if (currentHour >= 14 && currentHour < 22) return "2nd";
     return "3rd";
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUpcomingVitals();
+  }
+
+  Future<void> _loadUpcomingVitals() async {
+    final cacheKey = widget.houseId + (widget.nurseName ?? "");
+    final now = DateTime.now();
+    bool cacheValid = false;
+
+    // Always set loading to true at the start, so spinner is shown until data is ready
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    if (_houseVitalsCache.containsKey(cacheKey) &&
+        _houseVitalsCacheTime.containsKey(cacheKey)) {
+      final cacheTime = _houseVitalsCacheTime[cacheKey]!;
+      if (now.difference(cacheTime) < cacheDuration) {
+        cacheValid = true;
+      }
+    }
+
+    if (cacheValid) {
+      if (mounted) {
+        setState(() {
+          _upcomingVitals = _houseVitalsCache[cacheKey]!;
+          _isLoading = false;
+        });
+      }
+      // Only refresh assignments in background if cache is expired
+      Future.delayed(cacheDuration, () {
+        if (mounted) {
+          _getUpcomingVitals().then((vitals) {
+            _houseVitalsCache[cacheKey] = vitals;
+            _houseVitalsCacheTime[cacheKey] = DateTime.now();
+            if (mounted) {
+              setState(() {
+                _upcomingVitals = vitals;
+              });
+            }
+          });
+        }
+      });
+      return;
+    }
+
+    // Only run assignment creation/cleanup if cache is missing or expired
+    try {
+      final vitals = await _getUpcomingVitals();
+      _houseVitalsCache[cacheKey] = vitals;
+      _houseVitalsCacheTime[cacheKey] = DateTime.now();
+      if (mounted) {
+        setState(() {
+          _upcomingVitals = vitals;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading upcoming vitals: $e');
+      if (mounted) {
+        setState(() {
+          _upcomingVitals = [];
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshVitals() async {
+    await _loadUpcomingVitals();
   }
 
   String _getCurrentDay() {
@@ -82,9 +164,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
 
     print('🔄 Checking shift transition: $previousShift → $currentShift');
 
-    // Get all pending assignments from previous shift for this house
+    // Get all pending vital assignments from previous shift for this house
     final previousShiftAssignments = await _firestore
-        .collection('daily_vital_assignments')
+        .collection('vitals')
         .where('house_id', isEqualTo: widget.houseId)
         .where('assigned_date', isEqualTo: today)
         .where('shift', isEqualTo: previousShift)
@@ -123,14 +205,17 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
           });
 
           // Log the missed action for the previous nurse
-          await _firestore.collection('vitals_activity_logs').add({
-            'assignment_id': doc.id,
+          await _firestore.collection('vital_activity_logs').add({
+            'vital_assignment_id': doc.id,
             'elderly_id': data['elderly_id'],
             'elderly_name': data['elderly_name'],
             'nurse_id': data['assigned_nurse_id'],
             'nurse_name': data['assigned_nurse_name'],
             'action_type': 'missed',
-            'action_timestamp': FieldValue.serverTimestamp(),
+            'house_id':
+                data['house_id'], // Add house_id for activity logs filtering
+            'timestamp':
+                FieldValue.serverTimestamp(), // Use timestamp instead of action_timestamp for consistency
             'reason': 'Shift ended - transferred to next nurse',
             'previous_shift': previousShift,
             'current_shift': currentShift,
@@ -138,14 +223,14 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
             'transferred_to_nurse_name': widget.nurseName,
           });
 
-          // Create a new pending assignment for the current nurse
+          // Create a new pending vital assignment for the current nurse
           print(
             '🏗️ Creating inherited assignment with nurse name: ${data['assigned_nurse_name']}',
           );
-          await _firestore.collection('daily_vital_assignments').add({
+          await _firestore.collection('vitals').add({
+            // Assignment fields
             'elderly_id': data['elderly_id'],
             'elderly_name': data['elderly_name'],
-            'elderly_profilePic': data['elderly_profilePic'] ?? '',
             'assigned_nurse_id': currentNurseId,
             'assigned_nurse_name': widget.nurseName,
             'house_id': widget.houseId,
@@ -153,10 +238,26 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
             'shift': currentShift,
             'status': 'pending',
             'created_at': FieldValue.serverTimestamp(),
-            'updated_at': FieldValue.serverTimestamp(),
+
+            // Inheritance tracking
             'inherited_from_shift': previousShift,
             'inherited_from_nurse_id': data['assigned_nurse_id'],
             'inherited_from_nurse_name': data['assigned_nurse_name'],
+
+            // 🔧 ULTRA CLEAN: Only essential vital fields (no redundancy)
+            'blood_pressure': null,
+            'pulse_rate': null,
+            'oxygen_saturation': null,
+            'temperature': null,
+            'respiratory_rate': null,
+            'vital_remarks': null,
+
+            // ✅ Single completion timestamp (null until completed)
+            'completed_at': null,
+
+            // ✅ Minimal tracking (null until updated)
+            'updated_by_nurse_id': null,
+            'updated_by_nurse_name': null,
           });
 
           print(
@@ -182,9 +283,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
     print('🧹 Cleaning up incorrect assignments...');
     print('🧹 Valid elderly IDs for this nurse: $validElderlyIds');
 
-    // Get all assignments for this nurse, today, and current shift
+    // Get all vital assignments for this nurse, today, and current shift
     final incorrectAssignments = await _firestore
-        .collection('daily_vital_assignments')
+        .collection('vitals')
         .where('assigned_nurse_id', isEqualTo: nurseId)
         .where('assigned_date', isEqualTo: today)
         .where('shift', isEqualTo: currentShift)
@@ -266,9 +367,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
     print('🏗️ Elderly IDs count: ${elderlyIds.length}');
 
     for (final elderlyId in elderlyIds) {
-      // Check if assignment already exists for today - simplified check
+      // Check if vital assignment already exists for today - simplified check
       final existingQuery = await _firestore
-          .collection('daily_vital_assignments')
+          .collection('vitals')
           .where('elderly_id', isEqualTo: elderlyId)
           .where('assigned_date', isEqualTo: today)
           .where('shift', isEqualTo: currentShift)
@@ -298,20 +399,34 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
                 '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
                     .trim();
 
-            // Create daily assignment with CORRECT house_id from elderly data
-            await _firestore.collection('daily_vital_assignments').add({
+            // 🔧 ULTRA CLEAN: Create assignment with only essential fields
+            await _firestore.collection('vitals').add({
+              // 🔧 ASSIGNMENT FIELDS (required)
               'elderly_id': elderlyId,
               'elderly_name': elderlyName,
-              'elderly_profilePic': elderlyData['elderly_profilePic'] ?? '',
+              'assigned_nurse_id': nurseId,
+              'assigned_nurse_name': widget.nurseName ?? 'Unknown',
               'house_id':
                   elderlyData['house_id'], // Use ACTUAL house_id from elderly data
-              'assigned_nurse_id': nurseId,
-              'assigned_nurse_name': widget.nurseName,
-              'status': 'pending', // pending, completed, missed
-              'assigned_date': today,
               'shift': currentShift,
+              'assigned_date': today,
+              'status': 'pending',
               'created_at': FieldValue.serverTimestamp(),
-              'updated_at': FieldValue.serverTimestamp(),
+
+              // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
+              'blood_pressure': null,
+              'pulse_rate': null,
+              'oxygen_saturation': null,
+              'temperature': null,
+              'respiratory_rate': null,
+              'vital_remarks': null,
+
+              // ✅ Single completion timestamp (null until completed)
+              'completed_at': null,
+
+              // ✅ Minimal tracking (null until updated)
+              'updated_by_nurse_id': null,
+              'updated_by_nurse_name': null,
             });
             print(
               '✅ CREATED daily vital assignment for elderly: $elderlyName (House: ${elderlyData['house_id']})',
@@ -330,364 +445,214 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
     }
   }
 
+  /// ⚡ OPTIMIZED: Cached nurse data to avoid repeated lookups
+  String? _cachedNurseId;
+  DateTime? _lastCacheTime;
+
+  Future<String?> _getCachedNurseId() async {
+    // Cache for 5 minutes to avoid repeated user lookups
+    if (_cachedNurseId != null &&
+        _lastCacheTime != null &&
+        DateTime.now().difference(_lastCacheTime!).inMinutes < 5) {
+      return _cachedNurseId;
+    }
+
+    final nameParts = widget.nurseName?.split(' ') ?? [];
+    if (nameParts.length < 2) {
+      print('Invalid nurse name format: ${widget.nurseName}');
+      return null;
+    }
+
+    final firstName = nameParts[0];
+    final lastName = nameParts[1];
+
+    final userQuery = await _firestore
+        .collection('users')
+        .where('user_fname', isEqualTo: firstName)
+        .where('user_lname', isEqualTo: lastName)
+        .where('user_type', isEqualTo: 'nurse')
+        .get();
+
+    if (userQuery.docs.isEmpty) {
+      print('No nurse found with name: $firstName $lastName');
+      return null;
+    }
+
+    _cachedNurseId = userQuery.docs.first.id;
+    _lastCacheTime = DateTime.now();
+    return _cachedNurseId;
+  }
+
   Future<List<Map<String, dynamic>>> _getUpcomingVitals() async {
     try {
       final currentShift = _getCurrentShift();
       final currentDay = _getCurrentDay();
-
-      print(
-        'Fetching for nurse: ${widget.nurseName}, shift: $currentShift, day: $currentDay',
-      );
-      print('🏠 CURRENT TAB: Filtering for house: "${widget.houseId}"');
-
-      // First get the nurse's ID from users collection
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) {
-        print('Invalid nurse name format: ${widget.nurseName}');
-        return [];
-      }
-
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        print('No nurse found with name: $firstName $lastName');
-        return [];
-      }
-
-      final nurseId = userQuery.docs.first.id;
-      print('Found nurse ID: $nurseId');
-
-      // Handle shift transition - only mark as missed if different nurse is taking over
-      await _handleShiftTransition(nurseId);
-
-      // First check if nurse is assigned to work this shift on this day
-      print('Checking shift assignment for nurseId: $nurseId');
-      print('Looking for - Shift: $currentShift, Day: $currentDay');
-
-      final shiftQuery = await _firestore
-          .collection('nurse_shift_assign')
-          .where('nurse_id', isEqualTo: nurseId)
-          .where('is_current', isEqualTo: true)
-          .where('shift', isEqualTo: currentShift)
-          .where('days_assigned', arrayContains: currentDay)
-          .get();
-
-      if (shiftQuery.docs.isEmpty) {
-        print('Nurse is not assigned to this shift on this day');
-        return [];
-      }
-
-      print('Found shift assignment: ${shiftQuery.docs.first.data()}');
-
-      // Get nurse's assigned elderly for current day and shift for THIS HOUSE
-      final nurseElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
-          .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
-          .where('shift', isEqualTo: currentShift)
-          .where('day', isEqualTo: currentDay)
-          .get();
-
-      print(
-        'Found ${nurseElderlyQuery.docs.length} matching nurse assignments for house ${widget.houseId}',
-      );
-
-      if (nurseElderlyQuery.docs.isEmpty) {
-        print(
-          'No assignments found for the current day and shift in house ${widget.houseId}',
-        );
-        return [];
-      }
-
-      // Get the assignment document
-      final assignmentDoc = nurseElderlyQuery.docs.first;
-      final data = assignmentDoc.data();
-      print('Assignment data for house ${widget.houseId}: $data');
-
-      // Get ALL elderly IDs assigned to this nurse
-      final allElderlyIds = List<String>.from(data['elderly_ids'] ?? []);
-      print('All elderly IDs assigned to nurse: $allElderlyIds');
-
-      // Filter to get ONLY elderly that belong to THIS HOUSE
-      final elderlyIdsForThisHouse = <String>[];
-
-      for (final elderlyId in allElderlyIds) {
-        final elderlyDoc = await _firestore
-            .collection('elderly')
-            .doc(elderlyId)
-            .get();
-
-        if (elderlyDoc.exists) {
-          final elderlyData = elderlyDoc.data()!;
-          final elderlyHouseId = elderlyData['house_id'];
-          final elderlyName =
-              '${elderlyData['elderly_fname']} ${elderlyData['elderly_lname']}';
-
-          if (elderlyHouseId == widget.houseId &&
-              elderlyData['elderly_status'] == 'Alive') {
-            elderlyIdsForThisHouse.add(elderlyId);
-            print(
-              '✅ Including elderly: $elderlyName (belongs to house ${widget.houseId})',
-            );
-          } else {
-            print(
-              '❌ Excluding elderly: $elderlyName (belongs to house $elderlyHouseId, not ${widget.houseId})',
-            );
-          }
-        }
-      }
-
-      print(
-        'Found ${elderlyIdsForThisHouse.length} elderly IDs that belong to house ${widget.houseId}: $elderlyIdsForThisHouse',
-      );
-
-      if (elderlyIdsForThisHouse.isEmpty) {
-        print('No elderly found for house ${widget.houseId}');
-        return [];
-      }
-
-      // Clean up any incorrect assignments first (now that we have valid elderly IDs)
-      await _cleanupIncorrectAssignments(nurseId, elderlyIdsForThisHouse);
-
-      // Create daily vital assignments for elderly in THIS HOUSE ONLY
-      print(
-        '🚀 About to call _createDailyVitalAssignments with nurseId: $nurseId and ${elderlyIdsForThisHouse.length} elderly',
-      );
-      await _createDailyVitalAssignments(nurseId, elderlyIdsForThisHouse);
-      print('✅ Finished calling _createDailyVitalAssignments');
-
       final today = _getTodayDateString();
 
-      // Get pending daily vital assignments for today - ONLY for this house
-      print('Querying daily_vital_assignments with:');
-      print('- assigned_nurse_id: $nurseId');
-      print('- house_id: ${widget.houseId}');
-      print('- assigned_date: $today');
-      print('- shift: $currentShift');
-      print('- status: pending');
-
-      // Debug: Check ALL assignments first
-      final nurseAssignmentsQuery = await _firestore
-          .collection('daily_vital_assignments')
-          .where('assigned_nurse_id', isEqualTo: nurseId)
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .get();
-
-      print('🔍 DEBUG: All assignments for nurse:');
-      for (final doc in nurseAssignmentsQuery.docs) {
-        final data = doc.data();
-        print(
-          '   - ${data['elderly_name']} → House: ${data['house_id']} (Expected: ${widget.houseId})',
-        );
-        print(
-          '     → Status: ${data['status']}, Date: ${data['assigned_date']}, Shift: ${data['shift']}',
-        );
-      }
-
-      // Get only pending assignments for current nurse (including inherited ones that were created as new pending assignments)
-      final currentNurseAssignments = await _firestore
-          .collection('daily_vital_assignments')
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('assigned_nurse_id', isEqualTo: nurseId)
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
       print(
-        '🔍 Found ${currentNurseAssignments.docs.length} pending assignments for current nurse',
+        '⚡ OPTIMIZED: Fetching for nurse: ${widget.nurseName}, shift: $currentShift, day: $currentDay',
+      );
+      print('🏠 House: "${widget.houseId}"');
+
+      // ⚡ OPTIMIZATION 1: Use cached nurse ID
+      final nurseId = await _getCachedNurseId();
+      if (nurseId == null) return [];
+
+      print('✅ Nurse ID: $nurseId');
+
+      // 🔧 FIXED: Always ensure assignments exist first before querying
+      print('🔄 Ensuring all assignments are created before fetching...');
+
+      // First handle shift transition to create inherited assignments
+      await _handleShiftTransition(nurseId);
+
+      // Then ensure all regular assignments are created
+      await _ensureAllAssignmentsExist(
+        nurseId,
+        currentShift,
+        currentDay,
+        today,
       );
 
-      final availableAssignments = currentNurseAssignments.docs;
+      // Now query for vital assignments
+      final assignmentsQuery = await _firestore
+          .collection('vitals')
+          .where('assigned_nurse_id', isEqualTo: nurseId)
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('shift', isEqualTo: currentShift)
+          .where('status', isEqualTo: 'pending') // Only show pending
+          .get();
 
-      print('Found ${availableAssignments.length} total pending assignments');
+      print('⚡ Found ${assignmentsQuery.docs.length} existing assignments');
 
-      final upcomingVitals = <Map<String, dynamic>>[];
-      final seenElderlyIds = <String>{}; // Prevent duplicates
+      // ⚡ OPTIMIZATION 3: If no assignments found, properly handle setup
+      if (assignmentsQuery.docs.isEmpty) {
+        print(
+          '🔄 No existing assignments found, checking if assignments need to be created...',
+        );
 
-      for (final assignmentDoc in availableAssignments) {
-        final assignmentData = assignmentDoc.data();
-        final elderlyId = assignmentData['elderly_id'];
-        final status = assignmentData['status'];
-        final originalNurse = assignmentData['assigned_nurse_name'];
+        // First handle shift transition to create inherited assignments
+        await _handleShiftTransition(nurseId);
 
-        // CRITICAL VALIDATION: Only show elderly that are actually assigned to this nurse AND belong to this house
-        if (assignmentData['house_id'] == widget.houseId &&
-            !seenElderlyIds.contains(elderlyId) &&
-            elderlyIdsForThisHouse.contains(elderlyId)) {
-          // ADDED: Must be in the valid assigned list
-          seenElderlyIds.add(elderlyId);
+        // Check again after shift transition
+        final assignmentsAfterTransition = await _firestore
+            .collection('vitals')
+            .where('assigned_nurse_id', isEqualTo: nurseId)
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: today)
+            .where('shift', isEqualTo: currentShift)
+            .where('status', isEqualTo: 'pending')
+            .get();
 
+        if (assignmentsAfterTransition.docs.isNotEmpty) {
           print(
-            '✅ VALIDATED: Including elderly ${assignmentData['elderly_name']} - assigned to this nurse and belongs to this house',
+            '✅ Found ${assignmentsAfterTransition.docs.length} assignments after shift transition',
           );
+          // Process these assignments instead
+          final upcomingVitals = <Map<String, dynamic>>[];
+          final seenElderlyIds = <String>{};
 
-          // Determine if this is an inherited assignment (created from previous shift)
-          final isInherited = assignmentData['inherited_from_shift'] != null;
+          for (final assignmentDoc in assignmentsAfterTransition.docs) {
+            final assignmentData = _validateVitalData(assignmentDoc.data());
+            final elderlyId = assignmentData['elderly_id'];
 
-          // Debug: Check what's actually stored in the database
-          if (isInherited) {
-            print('🔍 DEBUG Inherited assignment data:');
-            print(
-              '   - inherited_from_nurse_name: ${assignmentData['inherited_from_nurse_name']}',
-            );
-            print(
-              '   - inherited_from_shift: ${assignmentData['inherited_from_shift']}',
-            );
-            print(
-              '   - inherited_from_nurse_id: ${assignmentData['inherited_from_nurse_id']}',
-            );
-          }
+            if (!seenElderlyIds.contains(elderlyId)) {
+              seenElderlyIds.add(elderlyId);
 
-          // Get the original nurse name for display
-          String originalNurseForDisplay = originalNurse;
+              final isInherited =
+                  assignmentData['inherited_from_shift'] != null;
+              String originalNurseForDisplay =
+                  assignmentData['assigned_nurse_name'] ?? 'Unknown Nurse';
 
-          if (isInherited) {
-            // First try the stored nurse name
-            print(
-              '🔍 Stored nurse name: ${assignmentData['inherited_from_nurse_name']}',
-            );
-            if (assignmentData['inherited_from_nurse_name'] != null &&
-                assignmentData['inherited_from_nurse_name'] != '') {
-              originalNurseForDisplay =
-                  assignmentData['inherited_from_nurse_name'];
-              print('✅ Using stored nurse name: $originalNurseForDisplay');
-            } else {
-              // If not available, look up from vitals activity logs who missed this elderly's vitals
-              try {
-                print(
-                  '🔍 Looking up nurse name from activity logs for elderly: $elderlyId',
-                );
-
-                final activityQuery = await _firestore
-                    .collection('vitals_activity_logs')
-                    .where('elderly_id', isEqualTo: elderlyId)
-                    .where('action_type', isEqualTo: 'missed')
-                    .limit(10)
-                    .get();
-
-                print(
-                  '🔍 Found ${activityQuery.docs.length} missed activity logs for elderly $elderlyId',
-                );
-
-                if (activityQuery.docs.isNotEmpty) {
-                  // Find the most recent activity log manually since we can't use orderBy
-                  Map<String, dynamic>? mostRecentLog;
-                  Timestamp? mostRecentTime;
-
-                  for (final doc in activityQuery.docs) {
-                    final data = doc.data();
-                    final timestamp = data['action_timestamp'] as Timestamp?;
-
-                    if (timestamp != null &&
-                        (mostRecentTime == null ||
-                            timestamp.compareTo(mostRecentTime) > 0)) {
-                      mostRecentTime = timestamp;
-                      mostRecentLog = data;
-                    }
-                  }
-
-                  if (mostRecentLog != null) {
-                    print('🔍 Most recent activity log data: $mostRecentLog');
-
-                    final nurseName = mostRecentLog['nurse_name'];
-                    final actionType = mostRecentLog['action_type'];
-                    final elderlyIdFromLog = mostRecentLog['elderly_id'];
-
-                    print('🔍 Extracted data:');
-                    print('   - nurse_name: $nurseName');
-                    print('   - action_type: $actionType');
-                    print('   - elderly_id: $elderlyIdFromLog');
-                    print('   - Looking for elderly_id: $elderlyId');
-
-                    if (nurseName != null && nurseName != '') {
-                      originalNurseForDisplay = nurseName;
-                      print(
-                        '✅ SUCCESS: Found nurse from activity logs: $originalNurseForDisplay',
-                      );
-                    } else {
-                      final previousShift =
-                          assignmentData['inherited_from_shift'];
-                      originalNurseForDisplay =
-                          'Previous Nurse ($previousShift shift)';
-                      print(
-                        '❌ FAILED: Nurse name is null/empty in activity logs',
-                      );
-                    }
-                  } else {
-                    final previousShift =
-                        assignmentData['inherited_from_shift'];
-                    originalNurseForDisplay =
-                        'Previous Nurse ($previousShift shift)';
-                    print(
-                      '❌ FAILED: No valid timestamp found in activity logs',
-                    );
-                  }
-                } else {
-                  final previousShift = assignmentData['inherited_from_shift'];
-                  originalNurseForDisplay =
-                      'Previous Nurse ($previousShift shift)';
-                  print(
-                    '❌ No missed activity logs found for elderly $elderlyId',
-                  );
-                }
-              } catch (e) {
-                print('❌ Error fetching from activity logs: $e');
-                // Final fallback - if we can't get from activity logs,
-                // the assignment should have been created with the correct nurse name
-                final previousShift = assignmentData['inherited_from_shift'];
+              if (isInherited &&
+                  assignmentData['inherited_from_nurse_name'] != null) {
                 originalNurseForDisplay =
-                    'Previous Nurse ($previousShift shift)';
+                    assignmentData['inherited_from_nurse_name'];
               }
+
+              upcomingVitals.add({
+                'assignment_id': assignmentDoc.id,
+                'elderly_id': assignmentData['elderly_id'],
+                'elderly_name':
+                    assignmentData['elderly_name'] ?? 'Unknown Elderly',
+                'elderly_profilePic':
+                    assignmentData['elderly_profilePic'] ?? '',
+                'house_id': assignmentData['house_id'],
+                'status': 'pending',
+                'assigned_date': assignmentData['assigned_date'],
+                'shift': assignmentData['shift'],
+                'original_nurse': originalNurseForDisplay,
+                'is_inherited': isInherited,
+                'inherited_from_shift': assignmentData['inherited_from_shift'],
+                'last_vital': null, // Can be loaded on-demand later
+              });
             }
           }
-          print(
-            'Adding elderly: ${assignmentData['elderly_name']} - Status: $status, ${isInherited ? "INHERITED from previous shift" : "CURRENT ASSIGNMENT"}',
+
+          // Sort by elderly name
+          upcomingVitals.sort(
+            (a, b) => (a['elderly_name'] as String).compareTo(
+              b['elderly_name'] as String,
+            ),
           );
+
+          print(
+            '⚡ Returning ${upcomingVitals.length} elderly assignments after transition',
+          );
+          return upcomingVitals;
+        }
+
+        // Still no assignments, continue with background creation
+        _ensureAssignmentsExistInBackground(
+          nurseId,
+          currentShift,
+          currentDay,
+          today,
+        );
+
+        // Return empty for now - will refresh automatically when background completes
+        return [];
+      }
+
+      // ⚡ OPTIMIZATION 4: Batch process assignments without individual elderly lookups
+      final upcomingVitals = <Map<String, dynamic>>[];
+      final seenElderlyIds = <String>{};
+
+      for (final assignmentDoc in assignmentsQuery.docs) {
+        final assignmentData = _validateVitalData(assignmentDoc.data());
+        final elderlyId = assignmentData['elderly_id'];
+
+        // Only show if not completed or missed
+        if (assignmentData['status'] != 'pending') continue;
+
+        if (!seenElderlyIds.contains(elderlyId)) {
+          seenElderlyIds.add(elderlyId);
+
+          final isInherited = assignmentData['inherited_from_shift'] != null;
+          String originalNurseForDisplay =
+              assignmentData['assigned_nurse_name'] ?? 'Unknown Nurse';
+
+          if (isInherited &&
+              assignmentData['inherited_from_nurse_name'] != null) {
+            originalNurseForDisplay =
+                assignmentData['inherited_from_nurse_name'];
+          }
 
           upcomingVitals.add({
             'assignment_id': assignmentDoc.id,
             'elderly_id': assignmentData['elderly_id'],
-            'elderly_name': assignmentData['elderly_name'],
+            'elderly_name': assignmentData['elderly_name'] ?? 'Unknown Elderly',
             'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
             'house_id': assignmentData['house_id'],
-            'status':
-                'pending', // All assignments shown are pending for current nurse
+            'status': 'pending',
             'assigned_date': assignmentData['assigned_date'],
             'shift': assignmentData['shift'],
             'original_nurse': originalNurseForDisplay,
             'is_inherited': isInherited,
             'inherited_from_shift': assignmentData['inherited_from_shift'],
-            'last_vital': null, // Will be loaded separately if needed
+            'last_vital': null, // Can be loaded on-demand later
           });
-        } else if (seenElderlyIds.contains(elderlyId)) {
-          print(
-            '🔄 DUPLICATE: Skipping duplicate elderly: ${assignmentData['elderly_name']} (${elderlyId})',
-          );
-        } else {
-          // Debug: Why was this elderly rejected?
-          final reasons = <String>[];
-          if (assignmentData['house_id'] != widget.houseId) {
-            reasons.add(
-              'wrong house (${assignmentData['house_id']} != ${widget.houseId})',
-            );
-          }
-          if (!elderlyIdsForThisHouse.contains(elderlyId)) {
-            reasons.add('not assigned to this nurse');
-          }
-          print(
-            '❌ REJECTED: Skipping elderly ${assignmentData['elderly_name']} - ${reasons.join(', ')}',
-          );
         }
       }
 
@@ -698,11 +663,101 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
         ),
       );
 
-      print('DEBUG: Returning ${upcomingVitals.length} elderly for display');
+      print('⚡ FAST: Returning ${upcomingVitals.length} elderly assignments');
       return upcomingVitals;
     } catch (e) {
-      print('Error getting upcoming vitals: $e');
+      print('❌ Error getting upcoming vitals: $e');
       return [];
+    }
+  }
+
+  /// ⚡ BACKGROUND: Ensure assignments exist without blocking UI
+  void _ensureAssignmentsExistInBackground(
+    String nurseId,
+    String currentShift,
+    String currentDay,
+    String today,
+  ) async {
+    try {
+      print('🔄 Background: Ensuring assignments exist...');
+
+      // Handle shift transition in background
+      await _handleShiftTransition(nurseId);
+
+      // Check shift assignment
+      final shiftQuery = await _firestore
+          .collection('nurse_shift_assign')
+          .where('nurse_id', isEqualTo: nurseId)
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('days_assigned', arrayContains: currentDay)
+          .get();
+
+      if (shiftQuery.docs.isEmpty) {
+        print('🔄 Background: Nurse not assigned to this shift');
+        return;
+      }
+
+      // Get nurse's assigned elderly for current day and shift
+      final nurseElderlyQuery = await _firestore
+          .collection('nurse_elderly_assign')
+          .where('nurse_id', isEqualTo: nurseId)
+          .where('is_current', isEqualTo: true)
+          .where('house_ids', arrayContains: widget.houseId)
+          .where('shift', isEqualTo: currentShift)
+          .where('day', isEqualTo: currentDay)
+          .get();
+
+      if (nurseElderlyQuery.docs.isEmpty) {
+        print('🔄 Background: No nurse elderly assignments found');
+        return;
+      }
+
+      final assignmentDoc = nurseElderlyQuery.docs.first;
+      final data = assignmentDoc.data();
+      final allElderlyIds = List<String>.from(data['elderly_ids'] ?? []);
+
+      // ⚡ OPTIMIZATION: Batch fetch elderly data instead of individual queries
+      final elderlyIdsForThisHouse = <String>[];
+
+      if (allElderlyIds.isNotEmpty) {
+        // Process in chunks of 10 to respect Firestore's 'whereIn' limit
+        for (var i = 0; i < allElderlyIds.length; i += 10) {
+          final end = (i + 10 < allElderlyIds.length)
+              ? i + 10
+              : allElderlyIds.length;
+          final chunk = allElderlyIds.sublist(i, end);
+
+          final elderlyQuery = await _firestore
+              .collection('elderly')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .where('house_id', isEqualTo: widget.houseId)
+              .where('elderly_status', isEqualTo: 'Alive')
+              .get();
+
+          for (final doc in elderlyQuery.docs) {
+            elderlyIdsForThisHouse.add(doc.id);
+          }
+        }
+      }
+
+      if (elderlyIdsForThisHouse.isNotEmpty) {
+        // Clean up incorrect assignments
+        await _cleanupIncorrectAssignments(nurseId, elderlyIdsForThisHouse);
+
+        // Create missing assignments
+        await _createDailyVitalAssignments(nurseId, elderlyIdsForThisHouse);
+
+        // Refresh UI with new data
+        if (mounted) {
+          print('🔄 Background: Refreshing UI with new assignments...');
+          await _loadUpcomingVitals();
+        }
+
+        print('✅ Background: Assignment creation completed, UI refreshed');
+      }
+    } catch (e) {
+      print('❌ Background assignment creation failed: $e');
     }
   }
 
@@ -715,13 +770,32 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
           elderlyId: elderlyInfo['elderly_id'],
           elderlyName: elderlyInfo['elderly_name'],
           nurseName: widget.nurseName,
+          houseId: widget.houseId,
         ),
       ),
     );
 
     // Refresh the list if vitals were updated
     if (result == true && mounted) {
-      setState(() {});
+      await _refreshVitals();
+    }
+  }
+
+  // 🆕 FOLLOW-UP VITALS: Show selection screen for follow-up recordings
+  Future<void> _showFollowUpVitalsSelection() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FollowUpVitalsSelectionScreen(
+          nurseName: widget.nurseName,
+          houseId: widget.houseId,
+        ),
+      ),
+    );
+
+    // Refresh the list if follow-up vitals were recorded
+    if (result == true && mounted) {
+      await _refreshVitals();
     }
   }
 
@@ -730,47 +804,29 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
     print(
       '🏗️ UpcomingVitalsTab build() called with houseId: ${widget.houseId}',
     );
+    final upcomingVitals = _upcomingVitals ?? [];
 
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+    // Always show loading spinner if _isLoading is true or if there are no assignments
+    if (_isLoading || upcomingVitals.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Loading assignments...',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
     }
 
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _getUpcomingVitals(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-
-        final upcomingVitals = snapshot.data ?? [];
-
-        if (upcomingVitals.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.elderly, size: 64, color: Colors.grey),
-                SizedBox(height: 16),
-                Text(
-                  'No elderly assigned',
-                  style: TextStyle(fontSize: 18, color: Colors.grey),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'No elderly assigned to you for this shift',
-                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          padding: EdgeInsets.symmetric(vertical: 8),
+    return Stack(
+      children: [
+        ListView.builder(
+          padding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
           itemCount: upcomingVitals.length,
           itemBuilder: (context, index) {
             final elderlyInfo = upcomingVitals[index];
@@ -1011,8 +1067,150 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab> {
               ),
             );
           },
-        );
-      },
+        ),
+        Positioned(
+          bottom: 20,
+          right: 20,
+          child: FloatingActionButton.extended(
+            onPressed: _showFollowUpVitalsSelection,
+            backgroundColor: Colors.green[600],
+            foregroundColor: Colors.white,
+            icon: Icon(Icons.add_circle_outline),
+            label: Text('Follow-up'),
+            heroTag: "followup_vitals_fab",
+          ),
+        ),
+      ],
     );
+  }
+
+  // 🧹 HELPER: Clean up any inconsistent data on load
+  Map<String, dynamic> _validateVitalData(Map<String, dynamic> data) {
+    // 🔧 ULTRA CLEAN: Only keep essential vital fields (no redundancy)
+    final requiredVitalFields = [
+      'blood_pressure',
+      'pulse_rate',
+      'oxygen_saturation',
+      'temperature',
+      'respiratory_rate',
+      'vital_remarks',
+      'completed_at', // ✅ Keep only this timestamp (not vital_record_at)
+      'updated_by_nurse_id',
+      'updated_by_nurse_name',
+    ];
+    for (String field in requiredVitalFields) {
+      if (!data.containsKey(field)) {
+        data[field] = null;
+      }
+    }
+
+    // 🔧 CLEAN: Normalize old field names to new standard and remove redundant fields
+    if (data.containsKey('heart_rate') && !data.containsKey('pulse_rate')) {
+      data['pulse_rate'] = data['heart_rate'];
+    }
+
+    if (data.containsKey('o2_sat') && !data.containsKey('oxygen_saturation')) {
+      data['oxygen_saturation'] = data['o2_sat'];
+    }
+
+    // 🧹 REMOVE: Delete ALL unnecessary/redundant fields
+    final fieldsToRemove = [
+      // Old field names
+      'heart_rate', 'o2_sat',
+      // Unused form fields
+      'blood_pressure_systolic', 'blood_pressure_diastolic',
+      // Redundant tracking fields
+      'recorded_at', 'recorded_by_nurse_id', 'updated_by_nurse', 'updated_at',
+      // 🔧 NEW: Remove redundant timestamp fields
+      'last_updated',
+      'last_updated_at',
+      'vital_record_at', // Keep only completed_at
+      // 🔧 NEW: Remove unnecessary profile pic
+      'elderly_profilePic',
+    ];
+
+    for (String field in fieldsToRemove) {
+      data.remove(field);
+    }
+
+    return data;
+  }
+
+  // 🔧 FIXED: Ensure all assigned elderly have vital assignments
+  Future<void> _ensureAllAssignmentsExist(
+    String nurseId,
+    String shift,
+    String currentDay,
+    String today,
+  ) async {
+    try {
+      print('🔍 Checking all nurse assignments...');
+
+      // Get all elderly assigned to this nurse for current day/shift
+      final assignedElderlyQuery = await _firestore
+          .collection('nurse_elderly_assign')
+          .where('nurse_id', isEqualTo: nurseId)
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('${currentDay.toLowerCase()}_$shift', isEqualTo: true)
+          .get();
+
+      for (var assignDoc in assignedElderlyQuery.docs) {
+        final elderlyId = assignDoc['elderly_id'];
+        final elderlyName = assignDoc['elderly_name'];
+
+        print('📋 Checking assignments for: $elderlyName');
+
+        // Check if vital assignment already exists
+        final existingVitalQuery = await _firestore
+            .collection('vitals')
+            .where('elderly_id', isEqualTo: elderlyId)
+            .where('assigned_nurse_id', isEqualTo: nurseId)
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: today)
+            .where('shift', isEqualTo: shift)
+            .limit(1)
+            .get();
+
+        // If no vital assignment exists, create one
+        if (existingVitalQuery.docs.isEmpty) {
+          print('➕ Creating vital assignment for: $elderlyName');
+
+          await _firestore.collection('vitals').add({
+            // 🔧 ASSIGNMENT FIELDS (required)
+            'elderly_id': elderlyId,
+            'elderly_name': elderlyName,
+            'assigned_nurse_id': nurseId,
+            'assigned_nurse_name': widget.nurseName ?? 'Unknown',
+            'house_id': widget.houseId,
+            'shift': shift,
+            'assigned_date': today,
+            'status': 'pending',
+            'created_at': FieldValue.serverTimestamp(),
+
+            // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
+            'blood_pressure': null,
+            'pulse_rate': null,
+            'oxygen_saturation': null,
+            'temperature': null,
+            'respiratory_rate': null,
+            'vital_remarks': null,
+
+            // ✅ Single completion timestamp (null until completed)
+            'completed_at': null,
+
+            // ✅ Minimal tracking (null until updated)
+            'updated_by_nurse_id': null,
+            'updated_by_nurse_name': null,
+          });
+          print('✅ Created vital assignment for: $elderlyName');
+        } else {
+          print('ℹ️ Vital assignment already exists for: $elderlyName');
+        }
+      }
+
+      print('✅ All assignments verified and created if needed');
+    } catch (e) {
+      print('❌ Error ensuring assignments exist: $e');
+    }
   }
 }

@@ -19,20 +19,13 @@ class CompletedVitalsTab extends StatefulWidget {
 class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  String _getCurrentShift() {
-    final currentHour = DateTime.now().hour;
-    if (currentHour >= 6 && currentHour < 14) return "1st";
-    if (currentHour >= 14 && currentHour < 22) return "2nd";
-    return "3rd";
-  }
-
   String _getTodayDateString() {
     return DateFormat('yyyy-MM-dd').format(DateTime.now());
   }
 
   Future<List<Map<String, dynamic>>> _getCompletedVitals() async {
     try {
-      final currentShift = _getCurrentShift();
+      final today = _getTodayDateString();
 
       // Get nurse ID using same logic as upcoming vitals
       final nameParts = widget.nurseName?.split(' ') ?? [];
@@ -57,140 +50,82 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
       }
 
       final nurseId = userQuery.docs.first.id;
-      final today = _getTodayDateString();
 
       print(
-        'Getting completed vitals for nurse: $nurseId, date: $today, shift: $currentShift',
+        '🔍 Getting ALL completed vitals for: ${widget.nurseName} ($nurseId)',
       );
+      print('🏠 House: ${widget.houseId}, Date: $today (ALL shifts)');
 
-      // Debug: Check ALL assignments first
-      final allAssignmentsQuery = await _firestore
-          .collection('daily_vital_assignments')
+      // 🔧 ENHANCED: Query ALL completed vitals for today (any shift)
+      // This allows nurses to see their completions from earlier shifts
+      final completedVitalsQuery = await _firestore
+          .collection('vitals')
+          .where('recorded_by', isEqualTo: nurseId)
           .where('house_id', isEqualTo: widget.houseId)
           .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('assigned_nurse_id', isEqualTo: nurseId)
-          .get();
-
-      print('🔍 DEBUG: All assignments for house ${widget.houseId}:');
-      for (final doc in allAssignmentsQuery.docs) {
-        final data = doc.data();
-        print('   - ${data['elderly_name']} → Status: ${data['status']}');
-      }
-
-      // Get completed vital assignments for today
-      final completedAssignments = await _firestore
-          .collection('daily_vital_assignments')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('assigned_nurse_id', isEqualTo: nurseId)
           .where('status', isEqualTo: 'completed')
           .get();
 
-      print(
-        'Found ${completedAssignments.docs.length} completed assignments out of ${allAssignmentsQuery.docs.length} total',
-      );
-
-      // Debug: Print completed assignments details
-      print('🟢 DEBUG: Completed assignments found:');
-      for (final doc in completedAssignments.docs) {
-        final data = doc.data();
-        print('   - Assignment ID: ${doc.id}');
-        print('   - Elderly: ${data['elderly_name']}');
-        print('   - Status: ${data['status']}');
-        print('   - Completed At: ${data['completed_at']}');
-      }
+      print('✅ Found ${completedVitalsQuery.docs.length} completed vitals');
 
       final completedVitals = <Map<String, dynamic>>[];
 
-      for (final assignmentDoc in completedAssignments.docs) {
-        final assignmentData = assignmentDoc.data();
+      // Process completed vitals with clean data structure
+      for (final vitalDoc in completedVitalsQuery.docs) {
+        final vitalData = vitalDoc.data();
 
         print(
-          '🔍 Checking completed assignment: ${assignmentData['elderly_name']}',
-        );
-        print('   - Assignment ID: ${assignmentDoc.id}');
-        print('   - Elderly ID: ${assignmentData['elderly_id']}');
-
-        // Get vital record using assignment_id to connect the collections properly
-        final vitalQuery = await _firestore
-            .collection('vitals')
-            .where('assignment_id', isEqualTo: assignmentDoc.id)
-            .limit(1)
-            .get();
-
-        print(
-          '   - Found ${vitalQuery.docs.length} vital records for this assignment',
+          '📋 Processing completed vital for: ${vitalData['elderly_name']}',
         );
 
-        if (vitalQuery.docs.isNotEmpty) {
-          final vitalData = vitalQuery.docs.first.data();
-          print('   ✅ Found vital data with proper assignment_id connection');
+        // 🔧 CLEAN: Build completed vital record with essential data only
+        completedVitals.add({
+          'vital_id': vitalDoc.id,
+          'assignment_id':
+              vitalDoc.id, // The vital document itself is the assignment
+          'elderly_id': vitalData['elderly_id'] ?? '',
+          'elderly_name': vitalData['elderly_name'] ?? 'Unknown',
 
-          // Add vital record with actual data
-          completedVitals.add({
-            'assignment_id': assignmentDoc.id,
-            'elderly_id': assignmentData['elderly_id'],
-            'elderly_name': assignmentData['elderly_name'],
-            'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
-            'blood_pressure': vitalData['blood_pressure'] ?? 'N/A',
-            'pulse_rate': vitalData['pulse_rate'] ?? 'N/A',
-            'o2_sat': vitalData['o2_sat'] ?? 'N/A',
-            'temperature': vitalData['temperature'] ?? 'N/A',
-            'respiratory_rate': vitalData['respiratory_rate'] ?? 'N/A',
-            'vital_remarks': vitalData['vital_remarks'] ?? '',
-            'updated_at': assignmentData['updated_at'],
-            'updated_by_nurse':
-                vitalData['updated_by_nurse_name'] ??
-                assignmentData['assigned_nurse_name'],
-            'updated_by_nurse_id':
-                vitalData['updated_by_nurse_id'] ??
-                assignmentData['assigned_nurse_id'],
-            'vital_record_at': vitalData['vital_record_at'],
-            'status': 'completed',
-          });
-        } else {
-          print(
-            '   ❌ No vital record found for assignment: ${assignmentDoc.id}',
-          );
-          print(
-            '   📊 Assignment marked as completed but no vital data exists yet',
-          );
+          // ✅ CLEAN: Essential vital data with standardized field names
+          'blood_pressure': vitalData['blood_pressure'] ?? 'N/A',
+          'pulse_rate': vitalData['pulse_rate'] ?? 'N/A',
+          'oxygen_saturation':
+              vitalData['oxygen_saturation'] ??
+              'N/A', // Standardized field name
+          'temperature': vitalData['temperature'] ?? 'N/A',
+          'respiratory_rate': vitalData['respiratory_rate'] ?? 'N/A',
+          'remarks':
+              vitalData['remarks'] ?? '', // Use 'remarks' not 'vital_remarks'
+          // ✅ CLEAN: Completion tracking
+          'completed_at': vitalData['completed_at'],
+          'created_at': vitalData['created_at'],
+          'recorded_by': vitalData['recorded_by'] ?? nurseId,
+          'recorded_by_name': vitalData['recorded_by_name'] ?? widget.nurseName,
+          'status': 'completed',
 
-          // Still add to completed list but with placeholder data
-          completedVitals.add({
-            'assignment_id': assignmentDoc.id,
-            'elderly_id': assignmentData['elderly_id'],
-            'elderly_name': assignmentData['elderly_name'],
-            'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
-            'blood_pressure': 'Pending',
-            'pulse_rate': 'Pending',
-            'o2_sat': 'Pending',
-            'temperature': 'Pending',
-            'respiratory_rate': 'Pending',
-            'vital_remarks': 'Data entry in progress',
-            'updated_at': assignmentData['updated_at'],
-            'updated_by_nurse': assignmentData['assigned_nurse_name'],
-            'updated_by_nurse_id': assignmentData['assigned_nurse_id'],
-            'vital_record_at':
-                assignmentData['completed_at'] ?? assignmentData['updated_at'],
-            'status': 'completed',
-          });
-        }
+          // 🆕 ENHANCED: Show shift information for better timeline tracking
+          'shift': vitalData['shift'] ?? 'Unknown',
+          'assigned_date': vitalData['assigned_date'] ?? '',
+
+          // ✅ Show inheritance info if applicable
+          'inherited_from': vitalData['inherited_from'],
+        });
       }
 
-      // Sort by record time (most recent first)
+      // Sort by completion time (most recent first)
       completedVitals.sort((a, b) {
-        final aTime = a['vital_record_at'] != null
-            ? (a['vital_record_at'] as Timestamp).toDate()
+        final aTime = a['completed_at'] != null
+            ? (a['completed_at'] as Timestamp).toDate()
             : DateTime.now();
-        final bTime = b['vital_record_at'] != null
-            ? (b['vital_record_at'] as Timestamp).toDate()
+        final bTime = b['completed_at'] != null
+            ? (b['completed_at'] as Timestamp).toDate()
             : DateTime.now();
         return bTime.compareTo(aTime);
       });
 
+      print(
+        '🏁 Returning ${completedVitals.length} completed vitals for display',
+      );
       return completedVitals;
     } catch (e) {
       print('Error getting completed vitals: $e');
@@ -247,14 +182,7 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                       children: [
                         CircleAvatar(
                           backgroundColor: const Color(0xFF00588E),
-                          child: vital['elderly_profilePic']?.isNotEmpty == true
-                              ? ClipOval(
-                                  child: Image.network(
-                                    vital['elderly_profilePic'],
-                                    fit: BoxFit.cover,
-                                  ),
-                                )
-                              : Icon(Icons.person, color: Colors.white),
+                          child: Icon(Icons.person, color: Colors.white),
                         ),
                         SizedBox(width: 12),
                         Expanded(
@@ -326,20 +254,29 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                                 ),
                                 SizedBox(height: 6),
                                 Text(
-                                  'Updated by: ${vital['updated_by_nurse'] ?? 'Unknown'}',
+                                  'Recorded by: ${vital['recorded_by_name'] ?? 'Unknown'}',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.grey[700],
                                   ),
                                 ),
-                                if (vital['vital_record_at'] != null)
+                                if (vital['completed_at'] != null)
                                   Text(
-                                    'Completed: ${DateFormat('MMM dd, yyyy HH:mm').format((vital['vital_record_at'] as Timestamp).toDate())}',
+                                    'Completed: ${DateFormat('MMM dd, yyyy HH:mm').format((vital['completed_at'] as Timestamp).toDate())}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Colors.grey[700],
                                     ),
                                   ),
+                                // 🆕 ENHANCED: Show shift information
+                                Text(
+                                  'Shift: ${vital['shift'] ?? 'Unknown'}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -413,7 +350,9 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
-                                    Text('${vital['o2_sat'] ?? 'N/A'}%'),
+                                    Text(
+                                      '${vital['oxygen_saturation'] ?? 'N/A'}%',
+                                    ),
                                   ],
                                 ),
                               ),
@@ -446,7 +385,7 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                               ),
                             ],
                           ),
-                          if (vital['vital_remarks']?.isNotEmpty == true) ...[
+                          if (vital['remarks']?.isNotEmpty == true) ...[
                             SizedBox(height: 8),
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -455,8 +394,45 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                                   'Remarks:',
                                   style: TextStyle(fontWeight: FontWeight.w600),
                                 ),
-                                Text('${vital['vital_remarks']}'),
+                                Text('${vital['remarks']}'),
                               ],
+                            ),
+                          ],
+
+                          // ✅ Show inheritance info if applicable
+                          if (vital['inherited_from']?.isNotEmpty == true) ...[
+                            SizedBox(height: 8),
+                            Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.1),
+                                border: Border.all(
+                                  color: Colors.orange.withOpacity(0.3),
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.transfer_within_a_station,
+                                    size: 16,
+                                    color: Colors.orange,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Inherited from: ${vital['inherited_from']}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.orange[700],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ],

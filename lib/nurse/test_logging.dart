@@ -1,6 +1,5 @@
 // Test file to debug medication activity logging
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
 
 class TestMedicationLogging {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;

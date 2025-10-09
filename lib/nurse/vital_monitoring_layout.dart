@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'vital_monitoring_details.dart';
-import 'vital_activity_logs.dart';
+import 'activity_logs.dart';
 import 'edit_profile.dart';
 import 'leave_form.dart';
 
@@ -100,7 +100,12 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => const VitalsActivityLogsScreen(),
+                              builder: (_) => ActivityLogsScreen(
+                                houseId:
+                                    widget.selectedHouseId ??
+                                    'H001', // Default to first house if none selected
+                                nurseName: widget.nurseName,
+                              ),
                             ),
                           );
                         },
@@ -447,7 +452,6 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
                     leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
                     title: const Text("Edit Profile"),
                     onTap: () {
-                      
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -463,7 +467,6 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
                     ),
                     title: const Text("Request Leave"),
                     onTap: () {
-                     
                       Navigator.push(
                         context,
                         MaterialPageRoute(

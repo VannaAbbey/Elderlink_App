@@ -22,20 +22,20 @@ class DailyResetService {
 
       print('Starting daily reset for assignments from: $yesterdayString');
 
-      // Get all completed assignments from yesterday
+      // Get all completed vital assignments from yesterday
       final completedAssignments = await _firestore
-          .collection('daily_vital_assignments')
+          .collection('vitals')
           .where('assigned_date', isEqualTo: yesterdayString)
           .where('status', isEqualTo: 'completed')
           .get();
 
       print(
-        'Found ${completedAssignments.docs.length} completed assignments to reset',
+        'Found ${completedAssignments.docs.length} completed vital assignments to reset',
       );
 
-      // Mark missed assignments from yesterday
+      // Mark missed vital assignments from yesterday
       final pendingAssignments = await _firestore
-          .collection('daily_vital_assignments')
+          .collection('vitals')
           .where('assigned_date', isEqualTo: yesterdayString)
           .where('status', isEqualTo: 'pending')
           .get();
@@ -130,7 +130,7 @@ class DailyResetService {
       final queryDate = date ?? DateFormat('yyyy-MM-dd').format(DateTime.now());
 
       var query = _firestore
-          .collection('daily_vital_assignments')
+          .collection('vitals')
           .where('house_id', isEqualTo: houseId)
           .where('assigned_date', isEqualTo: queryDate);
 

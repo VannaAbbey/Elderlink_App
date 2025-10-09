@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class VitalUpdateScreen extends StatefulWidget {
@@ -7,14 +8,16 @@ class VitalUpdateScreen extends StatefulWidget {
   final String elderlyId;
   final String elderlyName;
   final String? nurseName;
+  final String? houseId;
 
   const VitalUpdateScreen({
-    Key? key,
+    super.key,
     required this.assignmentId,
     required this.elderlyId,
     required this.elderlyName,
     this.nurseName,
-  }) : super(key: key);
+    this.houseId,
+  });
 
   @override
   State<VitalUpdateScreen> createState() => _VitalUpdateScreenState();
@@ -23,6 +26,13 @@ class VitalUpdateScreen extends StatefulWidget {
 class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
   final _formKey = GlobalKey<FormState>();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  String _getCurrentShift() {
+    final currentHour = DateTime.now().hour;
+    if (currentHour >= 6 && currentHour < 14) return "1st";
+    if (currentHour >= 14 && currentHour < 22) return "2nd";
+    return "3rd";
+  }
 
   // Controllers for vital signs (editable combo box)
   final TextEditingController _bloodPressureController =
@@ -35,6 +45,9 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
   final TextEditingController _notesController = TextEditingController();
 
   bool _isLoading = false;
+
+  // Get current nurse ID from Firebase Auth
+  String? get _currentNurseId => FirebaseAuth.instance.currentUser?.uid;
 
   // Predefined options for combo boxes (like medication management)
   final List<String> _bloodPressureOptions = [
@@ -103,7 +116,10 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           _bloodPressureController.text =
               lastVital['blood_pressure']?.toString() ?? '';
           _pulseRateController.text = lastVital['pulse_rate']?.toString() ?? '';
-          _o2SatController.text = lastVital['o2_saturation']?.toString() ?? '';
+          _o2SatController.text =
+              lastVital['oxygen_saturation']?.toString() ??
+              lastVital['o2_sat']?.toString() ??
+              ''; // 🔧 FIXED: Check both field names for compatibility
           _temperatureController.text =
               lastVital['temperature']?.toString() ?? '';
           _respiratoryRateController.text =
@@ -183,87 +199,107 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
     print('🏥 Assignment ID: ${widget.assignmentId}');
     print('👴 Elderly ID: ${widget.elderlyId}');
     print('👩‍⚕️ Nurse Name: ${widget.nurseName}');
-
+    print('🆔 Current Nurse ID: $_currentNurseId');
+    print('📊 Vital Values:');
+    print('   - Blood Pressure: ${_bloodPressureController.text}');
+    print('   - Pulse Rate: ${_pulseRateController.text}');
+    print('   - O2 Sat: ${_o2SatController.text}');
+    print('   - Temperature: ${_temperatureController.text}');
+    print('   - Respiratory Rate: ${_respiratoryRateController.text}');
+    print('   - Notes: ${_notesController.text}');
     setState(() {
       _isLoading = true;
     });
 
     try {
       final now = DateTime.now();
-      final vitalId = _firestore.collection('vitals').doc().id;
 
-      // Save vital signs
-      final vitalData = {
-        'vital_id': vitalId,
-        'elderly_id': widget.elderlyId,
-        'assignment_id': widget.assignmentId,
-        'nurse_id': widget.nurseName ?? 'Unknown',
-        'updated_by_nurse_name': widget.nurseName ?? 'Unknown',
-        'updated_by_nurse_id': widget.nurseName ?? 'Unknown',
+      // 🔧 CLEANED: Prepare vital data for activity log with standardized field names
+      final vitalValues = {
         'blood_pressure': _bloodPressureController.text.trim(),
         'pulse_rate': _pulseRateController.text.trim(),
-        'o2_sat': _o2SatController.text.trim(),
+        'oxygen_saturation': _o2SatController.text
+            .trim(), // ✅ Standardized field name
         'temperature': _temperatureController.text.trim(),
         'respiratory_rate': _respiratoryRateController.text.trim(),
-        'vital_remarks': _notesController.text.trim(),
-        'vital_record_at': Timestamp.fromDate(now),
-        'recorded_at': Timestamp.fromDate(now),
-        'created_at': Timestamp.fromDate(now),
       };
 
-      print('💾 Saving vital data to database: $vitalData');
-      await _firestore.collection('vitals').doc(vitalId).set(vitalData);
-      print('✅ Successfully saved vital data to vitals collection');
-
-      // Update daily assignment status
-      print('🔄 Updating assignment status to completed...');
-      print('📋 Assignment ID to update: ${widget.assignmentId}');
-
-      final updateData = {
-        'status': 'completed',
-        'completed_at': Timestamp.fromDate(now),
-        'last_updated': Timestamp.fromDate(now),
+      // 🔧 FIXED: Prepare activity log data using assignment ID
+      final activityLogData = {
+        'vital_assignment_id':
+            widget.assignmentId, // Use existing assignment ID
+        'elderly_id': widget.elderlyId,
+        'elderly_name': widget.elderlyName,
+        'assignment_id': widget.assignmentId,
+        'house_id': widget.houseId,
+        'shift': _getCurrentShift(),
+        'action_type': 'vital_completed',
+        'nurse_id': _currentNurseId ?? 'Unknown',
+        'nurse_name': widget.nurseName ?? 'Unknown',
+        'timestamp': Timestamp.fromDate(now),
+        'old_values': {},
+        'new_values': vitalValues,
+        'remarks': _notesController.text
+            .trim(), // ✅ FIXED: Use 'remarks' consistently
       };
 
-      print('📝 Update data: $updateData');
+      print('💾 Starting batch write operation...');
 
-      await _firestore
-          .collection('daily_vital_assignments')
-          .doc(widget.assignmentId)
-          .update(updateData);
+      // 🔧 FIXED: Use batch write for atomic operations (faster & more reliable)
+      final batch = _firestore.batch();
 
-      print('✅ Successfully updated assignment status to completed');
-
-      // Verify the update
-      final updatedDoc = await _firestore
-          .collection('daily_vital_assignments')
+      // 🔧 ULTRA CLEAN: First get existing assignment to preserve inheritance info
+      final assignmentDoc = await _firestore
+          .collection('vitals')
           .doc(widget.assignmentId)
           .get();
+      final assignmentData = assignmentDoc.exists ? assignmentDoc.data()! : {};
 
-      if (updatedDoc.exists) {
-        final updatedData = updatedDoc.data()!;
-        print(
-          '🔍 Verification - Updated document status: ${updatedData['status']}',
-        );
-        print('🔍 Verification - Updated document data: $updatedData');
-      } else {
-        print('❌ ERROR: Assignment document not found after update!');
+      // Prepare update data with essential fields only
+      final updateData = <String, dynamic>{
+        // Assignment status
+        'status': 'completed',
+        'completed_at': Timestamp.fromDate(now), // ✅ Main completion timestamp
+        // 🔧 CLEAN: Only the 5 vital fields from the form + notes
+        'blood_pressure': _bloodPressureController.text.trim(),
+        'pulse_rate': _pulseRateController.text.trim(),
+        'oxygen_saturation': _o2SatController.text.trim(),
+        'temperature': _temperatureController.text.trim(),
+        'respiratory_rate': _respiratoryRateController.text.trim(),
+        'remarks': _notesController.text
+            .trim(), // ✅ FIXED: Use 'remarks' not 'vital_remarks'
+        // ✅ Minimal recording tracking
+        'recorded_by': _currentNurseId ?? 'Unknown',
+        'recorded_by_name': widget.nurseName ?? 'Unknown',
+      };
+
+      // ✅ PRESERVE inheritance info if it exists
+      if (assignmentData['inherited_from_shift'] != null) {
+        updateData['inherited_from'] =
+            '${assignmentData['inherited_from_nurse_name']} (${assignmentData['inherited_from_shift']} shift)';
       }
 
-      // Log activity
-      await _firestore.collection('vitals_activity_logs').add({
-        'elderly_id': widget.elderlyId,
-        'nurse_name': widget.nurseName ?? 'Unknown',
-        'action': 'vital_signs_recorded',
-        'timestamp': Timestamp.fromDate(now),
-        'details': {
-          'blood_pressure': _bloodPressureController.text.trim(),
-          'pulse_rate': _pulseRateController.text.trim(),
-          'o2_sat': _o2SatController.text.trim(),
-          'temperature': _temperatureController.text.trim(),
-          'respiratory_rate': _respiratoryRateController.text.trim(),
-        },
-      });
+      batch.update(
+        _firestore.collection('vitals').doc(widget.assignmentId),
+        updateData,
+      );
+
+      // Write activity log
+      batch.set(
+        _firestore.collection('vital_activity_logs').doc(),
+        activityLogData,
+      );
+
+      // Execute all operations atomically
+      await batch.commit();
+
+      // 🧹 CLEANUP: Remove any redundant fields from the document
+      await _cleanupRedundantFields();
+
+      print('✅ Batch write completed successfully - all data saved atomically');
+      print('💾 Assignment document ID: ${widget.assignmentId}');
+      print('📋 Assignment status updated to completed');
+      print('📝 Activity log created');
 
       print('🎉 All database operations completed successfully!');
 
@@ -294,6 +330,43 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  // 🧹 ULTRA CLEANUP: Remove ALL redundant fields from the vital document
+  Future<void> _cleanupRedundantFields() async {
+    try {
+      final fieldsToRemove = [
+        // Old field names
+        'heart_rate', 'o2_sat',
+        // Unused form fields
+        'blood_pressure_systolic', 'blood_pressure_diastolic',
+        // Redundant tracking fields (replaced with recorded_by/recorded_by_name)
+        'recorded_at', 'recorded_by_nurse_id', 'updated_by_nurse', 'updated_at',
+        'updated_by_nurse_id', 'updated_by_nurse_name', // Old tracking fields
+        // 🔧 Remove redundant timestamp fields
+        'last_updated', 'last_updated_at', 'vital_record_at',
+        // 🔧 Remove unnecessary profile pic
+        'elderly_profilePic',
+        // 🔧 Remove old remarks field name
+        'vital_remarks', // Keep only 'remarks'
+      ];
+      final updateData = <String, dynamic>{};
+      for (String field in fieldsToRemove) {
+        updateData[field] = FieldValue.delete();
+      }
+
+      if (updateData.isNotEmpty) {
+        await _firestore
+            .collection('vitals')
+            .doc(widget.assignmentId)
+            .update(updateData);
+        print(
+          '🧹 Cleaned up redundant fields from document: ${widget.assignmentId}',
+        );
+      }
+    } catch (e) {
+      print('⚠️ Error cleaning up fields: $e');
     }
   }
 

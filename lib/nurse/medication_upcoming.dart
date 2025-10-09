@@ -977,219 +977,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
     }
   }
 
-  Future<void> _createCompletedMedicationIntake(
-    String medicationId,
-    Map<String, dynamic> medicationData,
-    Map<String, dynamic> completedTake,
-    String nurseId,
-    DateTime completedTime,
-  ) async {
-    try {
-      final takeNumber = completedTake['take_number'] as int;
+  // Removed _createCompletedMedicationIntake - using unified activity logs only
 
-      // Check if a completed intake record already exists for this medication and take
-      final existingRecords = await _firestore
-          .collection('completed_medication_intakes')
-          .where('medication_id', isEqualTo: medicationId)
-          .where('take_number', isEqualTo: takeNumber)
-          .get();
-
-      if (existingRecords.docs.isNotEmpty) {
-        print(
-          'Completed medication intake record already exists for this take',
-        );
-        return; // Don't create duplicate
-      }
-
-      // Get elderly information
-      final elderlyDoc = await _firestore
-          .collection('elderly')
-          .doc(medicationData['elderly_id'])
-          .get();
-
-      String elderlyName = 'Unknown';
-      if (elderlyDoc.exists) {
-        final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
-        elderlyName =
-            '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
-                .trim();
-      }
-
-      // Generate proper ordinal for take name
-      final takeName = _getOrdinal(takeNumber);
-
-      // Create completed medication intake document
-      final completedIntakeData = {
-        'medication_id': medicationId,
-        'elderly_id': medicationData['elderly_id'],
-        'elderly_name': elderlyName,
-        'house_id': medicationData['house_id'],
-        'nurse_id': nurseId,
-        'nurse_name': widget.nurseName, // Use current nurse's name
-        'medication_name': medicationData['medication_name'],
-        'dosage': medicationData['dosage'],
-        'take_number': takeNumber,
-        'take_name': '$takeName Take',
-        'scheduled_time': completedTake['scheduled_time'],
-        'completed_at': Timestamp.fromDate(completedTime),
-        'completed_by': nurseId,
-        'status': 'completed',
-        'shift': medicationData['shift'],
-        'repeat_interval': medicationData['repeat_interval'],
-        'original_created_at': medicationData['created_at'],
-        'created_nurse_id':
-            medicationData['created_nurse_id'], // Original creator
-        'created_nurse_name':
-            medicationData['created_nurse_name'], // Original creator name
-      };
-
-      await _firestore
-          .collection('completed_medication_intakes')
-          .add(completedIntakeData);
-      print('Completed medication intake record created successfully');
-    } catch (e) {
-      print('Error creating completed medication intake: $e');
-    }
-  }
-
-  Future<void> _removeCompletedMedicationIntake(
-    String medicationId,
-    int takeNumber,
-  ) async {
-    try {
-      print(
-        'Attempting to remove completed intake for medication: $medicationId, take: $takeNumber',
-      );
-
-      // Find and delete the completed intake record for this medication and take
-      final existingRecords = await _firestore
-          .collection('completed_medication_intakes')
-          .where('medication_id', isEqualTo: medicationId)
-          .where('take_number', isEqualTo: takeNumber)
-          .get();
-
-      print(
-        'Found ${existingRecords.docs.length} completed intake records to delete',
-      );
-
-      for (final doc in existingRecords.docs) {
-        final data = doc.data();
-        print(
-          'Deleting completed intake: ${data['medication_name']} - ${data['take_name']} for ${data['elderly_name']}',
-        );
-        await doc.reference.delete();
-      }
-
-      if (existingRecords.docs.isNotEmpty) {
-        print('Completed medication intake record(s) removed successfully');
-      } else {
-        print('No completed intake records found to remove');
-      }
-    } catch (e) {
-      print('Error removing completed medication intake: $e');
-    }
-  }
-
-  Future<void> _createMissedMedicationIntake(
-    String medicationId,
-    Map<String, dynamic> medicationData,
-    Map<String, dynamic> missedTake,
-    String nurseId,
-    DateTime missedTime,
-  ) async {
-    try {
-      final takeNumber = missedTake['take_number'] as int;
-
-      // Check if a missed intake record already exists
-      final existingRecords = await _firestore
-          .collection('missed_medication_intakes')
-          .where('medication_id', isEqualTo: medicationId)
-          .where('take_number', isEqualTo: takeNumber)
-          .get();
-
-      if (existingRecords.docs.isNotEmpty) {
-        print('Missed medication intake record already exists for this take');
-        return;
-      }
-
-      // Get elderly information
-      final elderlyDoc = await _firestore
-          .collection('elderly')
-          .doc(medicationData['elderly_id'])
-          .get();
-
-      String elderlyName = 'Unknown';
-      if (elderlyDoc.exists) {
-        final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
-        elderlyName =
-            '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
-                .trim();
-      }
-
-      final takeName = _getOrdinal(takeNumber);
-
-      // Create missed medication intake document
-      final missedIntakeData = {
-        'medication_id': medicationId,
-        'elderly_id': medicationData['elderly_id'],
-        'elderly_name': elderlyName,
-        'house_id': medicationData['house_id'],
-        'nurse_id': nurseId,
-        'nurse_name': widget.nurseName, // Use current nurse's name
-        'medication_name': medicationData['medication_name'],
-        'dosage': medicationData['dosage'],
-        'take_number': takeNumber,
-        'take_name': '$takeName Take',
-        'scheduled_time': missedTake['scheduled_time'],
-        'missed_at': Timestamp.fromDate(missedTime),
-        'missed_by': nurseId,
-        'missed_reason':
-            missedTake['missed_reason'] ?? 'Manually marked as missed',
-        'status': 'missed',
-        'shift': medicationData['shift'],
-        'repeat_interval': medicationData['repeat_interval'],
-        'original_created_at': medicationData['created_at'],
-        'created_nurse_id':
-            medicationData['created_nurse_id'], // Original creator
-        'created_nurse_name':
-            medicationData['created_nurse_name'], // Original creator name
-      };
-
-      await _firestore
-          .collection('missed_medication_intakes')
-          .add(missedIntakeData);
-      print('Missed medication intake record created successfully');
-    } catch (e) {
-      print('Error creating missed medication intake: $e');
-    }
-  }
-
-  Future<void> _removeMissedMedicationIntake(
-    String medicationId,
-    int takeNumber,
-  ) async {
-    try {
-      print(
-        'Attempting to remove missed intake for medication: $medicationId, take: $takeNumber',
-      );
-
-      final existingRecords = await _firestore
-          .collection('missed_medication_intakes')
-          .where('medication_id', isEqualTo: medicationId)
-          .where('take_number', isEqualTo: takeNumber)
-          .get();
-
-      for (final doc in existingRecords.docs) {
-        await doc.reference.delete();
-      }
-
-      if (existingRecords.docs.isNotEmpty) {
-        print('Missed medication intake record(s) removed successfully');
-      }
-    } catch (e) {
-      print('Error removing missed medication intake: $e');
-    }
-  }
+  // Removed methods that use separate collections - now using unified activity logs only
 
   Future<void> _logMedicationActivity({
     required String action,
@@ -1198,6 +988,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
     required int takeNumber,
     Map<String, dynamic>? oldData,
     Map<String, dynamic>? newData,
+    Map<String, dynamic>? takeData,
   }) async {
     try {
       final nurseId = await _getNurseId();
@@ -1209,11 +1000,24 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
           .get();
 
       String elderlyName = 'Unknown';
+      String elderlyTitle = 'Lola';
       if (elderlyDoc.exists) {
         final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
         elderlyName =
             '${elderlyData['elderly_fname']} ${elderlyData['elderly_lname']}'
                 .trim();
+        elderlyTitle = elderlyData['elderly_title'] ?? 'Lola';
+      }
+
+      // Get scheduled time from takeData if provided, otherwise from medicationData
+      String? scheduledTime;
+      if (takeData != null && takeData['scheduled_time'] != null) {
+        scheduledTime = takeData['scheduled_time'] as String;
+      } else if (medicationData['intake_times'] != null && takeNumber > 0) {
+        final intakeTimes = List<String>.from(medicationData['intake_times']);
+        if (takeNumber <= intakeTimes.length) {
+          scheduledTime = intakeTimes[takeNumber - 1];
+        }
       }
 
       final activityData = {
@@ -1222,11 +1026,16 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
         'nurse_name': widget.nurseName,
         'medication_id': medicationId,
         'medication_name': medicationData['medication_name'],
+        'dosage':
+            medicationData['dosage'] ?? medicationData['medication_dosage'],
+        'repeat_interval': medicationData['repeat_interval'],
         'elderly_id': medicationData['elderly_id'],
         'elderly_name': elderlyName,
+        'elderly_title': elderlyTitle,
         'house_id': widget.houseId,
         'take_number': takeNumber,
         'take_ordinal': _getOrdinal(takeNumber),
+        'scheduled_time': scheduledTime,
         'timestamp': FieldValue.serverTimestamp(),
         'shift': _getCurrentShift(),
         'day': _getCurrentDay(),
@@ -1614,15 +1423,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
                           'updated_at': FieldValue.serverTimestamp(),
                         });
 
-                    // Remove any completed/missed intake records for this specific take
-                    await _removeCompletedMedicationIntake(
-                      medicationId,
-                      takeNumber,
-                    );
-                    await _removeMissedMedicationIntake(
-                      medicationId,
-                      takeNumber,
-                    );
+                    // Using unified activity logs only - no separate collections to clean up
 
                     // Log the deletion activity
                     await _logMedicationActivity(
@@ -2102,42 +1903,34 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
         }
       }
 
-      // Handle completed medication intake records
+      // Handle activity logging
       if (originalTake != null) {
         final originalStatus = originalTake['status'] as String;
         print(
           'Status change: $originalStatus -> $newStatus for take $takeNumber',
         );
 
+        // Log the activity based on the new status
         if (newStatus == 'complete' && originalStatus != 'complete') {
-          // Create completed intake record when changing to complete
-          print('Creating completed intake record');
-          await _createCompletedMedicationIntake(
-            medicationId,
-            data,
-            originalTake,
-            nurseId!,
-            currentTime,
+          await _logMedicationActivity(
+            action: 'complete_take',
+            medicationId: medicationId,
+            medicationData: data,
+            takeNumber: takeNumber,
+            takeData: originalTake,
           );
-        } else if (originalStatus == 'complete' && newStatus != 'complete') {
-          // Remove completed intake record when changing from complete to other status
-          print('Removing completed intake record');
-          await _removeCompletedMedicationIntake(medicationId, takeNumber);
+        } else if (newStatus == 'missed' && originalStatus != 'missed') {
+          await _logMedicationActivity(
+            action: 'miss_take',
+            medicationId: medicationId,
+            medicationData: data,
+            takeNumber: takeNumber,
+            takeData: originalTake,
+          );
         }
+      }
 
-        // Handle missed medication intake records
-        if (newStatus == 'missed' && originalStatus != 'missed') {
-          await _createMissedMedicationIntake(
-            medicationId,
-            data,
-            originalTake,
-            nurseId!,
-            currentTime,
-          );
-        } else if (originalStatus == 'missed' && newStatus != 'missed') {
-          await _removeMissedMedicationIntake(medicationId, takeNumber);
-        }
-      } // Update the document
+      // Update the document
       await _firestore.collection('medications').doc(medicationId).update({
         'take_statuses': takeStatuses,
       });
@@ -2166,6 +1959,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab> {
       );
     }
   }
+
+  // Activity logging is now handled directly in _updateTakeStatus method
 
   @override
   Widget build(BuildContext context) {

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../auth/login.dart';
 import 'vital_monitoring_new_layout.dart';
-import 'medication_activity_logs.dart';
+import 'activity_logs.dart';
 
 /// =============================
 /// Medication Management Screen
@@ -63,7 +62,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => MedicationActivityLogsScreen(
+        builder: (context) => ActivityLogsScreen(
           houseId: selectedHouseId ?? 'H001', // Use selected house or default
           nurseName: nurseName,
         ),
@@ -114,21 +113,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
           .toList();
     }
     return list;
-  }
-
-  Future<void> _handleLogout() async {
-    try {
-      await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
-    }
   }
 
   @override
