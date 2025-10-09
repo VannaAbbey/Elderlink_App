@@ -585,11 +585,23 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         border: OutlineInputBorder(),
                       ),
                       items: const [
-                        DropdownMenuItem(value: 'Vitals', child: Text('Vitals')),
-                        DropdownMenuItem(value: 'Medication', child: Text('Medication')),
-                        DropdownMenuItem(value: 'Assessment', child: Text('Assessment')),
+                        DropdownMenuItem(
+                          value: 'Vitals',
+                          child: Text('Vitals'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Medication',
+                          child: Text('Medication'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Assessment',
+                          child: Text('Assessment'),
+                        ),
                         DropdownMenuItem(value: 'Other', child: Text('Other')),
-                        DropdownMenuItem(value: 'Custom', child: Text('Custom')),
+                        DropdownMenuItem(
+                          value: 'Custom',
+                          child: Text('Custom'),
+                        ),
                       ],
                       onChanged: (value) {
                         if (value != null) {
@@ -613,46 +625,65 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     const SizedBox(height: 12),
 
                     // Task Description (predefined choices per type, with custom fallback)
-                    Builder(builder: (context) {
-                      final Map<String, List<String>> descOptions = {
-                        'Vitals': ['BP/HR', 'Temperature', 'Respiration', 'Other'],
-                        'Medication': ['Give Medication', 'Prepare Medication', 'Other'],
-                        'Assessment': ['Cognitive', 'Mobility', 'Other'],
-                        'Other': ['Other'],
-                        'Custom': ['Other'],
-                      };
-                      final options = descOptions[taskTitle] ?? ['Other'];
-                      final initial = options.contains(taskDescription) && taskDescription.isNotEmpty
-                          ? taskDescription
-                          : options.first;
+                    Builder(
+                      builder: (context) {
+                        final Map<String, List<String>> descOptions = {
+                          'Vitals': [
+                            'BP/HR',
+                            'Temperature',
+                            'Respiration',
+                            'Other',
+                          ],
+                          'Medication': [
+                            'Give Medication',
+                            'Prepare Medication',
+                            'Other',
+                          ],
+                          'Assessment': ['Cognitive', 'Mobility', 'Other'],
+                          'Other': ['Other'],
+                          'Custom': ['Other'],
+                        };
+                        final options = descOptions[taskTitle] ?? ['Other'];
+                        final initial =
+                            options.contains(taskDescription) &&
+                                taskDescription.isNotEmpty
+                            ? taskDescription
+                            : options.first;
 
-                      return Column(
-                        children: [
-                          DropdownButtonFormField<String>(
-                            value: initial,
-                            decoration: const InputDecoration(
-                              labelText: 'Task Description',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: options
-                                .map((o) => DropdownMenuItem(value: o, child: Text(o)))
-                                .toList(),
-                            onChanged: (value) {
-                              if (value != null) setState(() => taskDescription = value);
-                            },
-                          ),
-                          const SizedBox(height: 8),
-                          if (taskDescription == 'Other')
-                            TextField(
+                        return Column(
+                          children: [
+                            DropdownButtonFormField<String>(
+                              value: initial,
                               decoration: const InputDecoration(
-                                labelText: 'Custom Description',
+                                labelText: 'Task Description',
                                 border: OutlineInputBorder(),
                               ),
-                              onChanged: (value) => taskDescription = value,
+                              items: options
+                                  .map(
+                                    (o) => DropdownMenuItem(
+                                      value: o,
+                                      child: Text(o),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value != null)
+                                  setState(() => taskDescription = value);
+                              },
                             ),
-                        ],
-                      );
-                    }),
+                            const SizedBox(height: 8),
+                            if (taskDescription == 'Other')
+                              TextField(
+                                decoration: const InputDecoration(
+                                  labelText: 'Custom Description',
+                                  border: OutlineInputBorder(),
+                                ),
+                                onChanged: (value) => taskDescription = value,
+                              ),
+                          ],
+                        );
+                      },
+                    ),
                     const SizedBox(height: 12),
 
                     // Note: removed separate Category field; category will be derived from Task Title
@@ -690,10 +721,14 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       ),
                       items: const [
                         DropdownMenuItem(value: 'Once', child: Text('Once')),
-                        DropdownMenuItem(value: 'Everyday', child: Text('Everyday')),
+                        DropdownMenuItem(
+                          value: 'Everyday',
+                          child: Text('Everyday'),
+                        ),
                       ],
                       onChanged: (value) {
-                        if (value != null) setState(() => taskFrequency = value);
+                        if (value != null)
+                          setState(() => taskFrequency = value);
                       },
                     ),
                     const SizedBox(height: 12),
@@ -955,17 +990,28 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   context: context,
                   builder: (_) => AlertDialog(
                     title: const Text('Delete Task'),
-                    content: const Text('Are you sure you want to delete this task?'),
+                    content: const Text(
+                      'Are you sure you want to delete this task?',
+                    ),
                     actions: [
-                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: const Text('Delete'),
+                      ),
                     ],
                   ),
                 );
                 if (confirm == true) {
                   try {
                     // Attempt to read the task doc to see if it has medication metadata
-                    final doc = await FirebaseFirestore.instance.collection('medical_tasks').doc(taskId).get();
+                    final doc = await FirebaseFirestore.instance
+                        .collection('medical_tasks')
+                        .doc(taskId)
+                        .get();
                     final data = doc.data();
                     if (data != null) {
                       // If this task was generated from a medication, cancel the deterministic notification id too
@@ -973,14 +1019,21 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       final takeIndex = data['take_index'];
                       if (medId != null && takeIndex != null) {
                         try {
-                          NotificationService.cancelNotification(('${medId}_$takeIndex').hashCode);
+                          NotificationService.cancelNotification(
+                            ('${medId}_$takeIndex').hashCode,
+                          );
                         } catch (e) {
-                          debugPrint('Error cancelling deterministic notification for $medId:$takeIndex -> $e');
+                          debugPrint(
+                            'Error cancelling deterministic notification for $medId:$takeIndex -> $e',
+                          );
                         }
                       }
                     }
 
-                    await FirebaseFirestore.instance.collection('medical_tasks').doc(taskId).delete();
+                    await FirebaseFirestore.instance
+                        .collection('medical_tasks')
+                        .doc(taskId)
+                        .delete();
                   } catch (e) {
                     debugPrint('Error deleting task $taskId: $e');
                   }
