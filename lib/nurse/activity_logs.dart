@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'activity_report.dart';
 
 class ActivityLogsScreen extends StatefulWidget {
   final String houseId;
@@ -905,6 +906,20 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         backgroundColor: Color(0xFF00588E),
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.print, color: Colors.white),
+            tooltip: 'Generate PDF Report',
+            onPressed: () async {
+              final report = ActivityReport();
+              await report.generateAndShareReport(
+                houseId: widget.houseId,
+                nurseName: widget.nurseName ?? 'Unknown Nurse',
+                context: context,
+              );
+            },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           tabs: [

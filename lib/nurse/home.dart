@@ -234,7 +234,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             final taskTitle =
                 '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
             final taskDesc =
-                'Medication scheduled for $elderlyName at ${scheduled}';
+                'Medication scheduled for $elderlyName at $scheduled';
 
             await _firestore.collection('medical_tasks').add({
               'task_title': taskTitle,
@@ -687,8 +687,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                   )
                                   .toList(),
                               onChanged: (value) {
-                                if (value != null)
+                                if (value != null) {
                                   setState(() => taskDescription = value);
+                                }
                               },
                             ),
                             const SizedBox(height: 8),
@@ -723,8 +724,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         ),
                       ],
                       onChanged: (value) {
-                        if (value != null)
+                        if (value != null) {
                           setState(() => taskFrequency = value);
+                        }
                       },
                     ),
                     const SizedBox(height: 12),

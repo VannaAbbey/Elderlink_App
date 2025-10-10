@@ -280,7 +280,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final taskTitle =
             '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
         final taskDesc =
-            'Medication scheduled for $elderlyName at ${scheduled}';
+            'Medication scheduled for $elderlyName at $scheduled';
 
         await _firestore.collection('medical_tasks').add({
           'task_title': taskTitle,
@@ -1638,8 +1638,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         bool shouldDelete = false;
 
                         // Delete if take_index matches removed index
-                        if (ti != null && ti == removedIndex)
+                        if (ti != null && ti == removedIndex) {
                           shouldDelete = true;
+                        }
 
                         // Delete if task_start matches the removed scheduled time
                         try {
