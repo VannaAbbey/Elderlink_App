@@ -69,10 +69,11 @@ class ShiftHandoverService {
         return null;
       }
 
-      // Get current caregiver's house and shift information from cg_house_assign
+      // Get current caregiver's house and shift information from house_shift_assignments
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: user.uid)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: user.uid)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
 
@@ -82,7 +83,8 @@ class ShiftHandoverService {
 
       final currentAssignment = currentCaregiverAssignQuery.docs.first.data();
       final currentHouseId = currentAssignment['house_id'] as String;
-      final currentTimeRange = currentAssignment['time_range'] as Map<String, dynamic>?;
+      final currentStartTime = currentAssignment['start_time'] as String?;
+      final currentEndTime = currentAssignment['end_time'] as String?;
       final currentShift = currentAssignment['shift'];
 
       // Determine previous shift timing based on current shift
@@ -92,13 +94,13 @@ class ShiftHandoverService {
         print('ShiftHandoverService: Current shift (lowercase): "$shiftLower"');
         
         if (shiftLower.contains('1st') || shiftLower.contains('morning') || 
-            (currentTimeRange != null && currentTimeRange['start'] == '06:00')) {
+            (currentStartTime == '06:00')) {
           previousShiftType = '3rd Shift'; // Night shift hands over to morning
         } else if (shiftLower.contains('2nd') || shiftLower.contains('afternoon') || 
-                   (currentTimeRange != null && currentTimeRange['start'] == '14:00')) {
+                   (currentStartTime == '14:00')) {
           previousShiftType = '1st Shift'; // Morning shift hands over to afternoon
         } else if (shiftLower.contains('3rd') || shiftLower.contains('night') || 
-                   (currentTimeRange != null && currentTimeRange['start'] == '22:00')) {
+                   (currentStartTime == '22:00')) {
           previousShiftType = '2nd Shift'; // Afternoon shift hands over to night
         }
       }
@@ -110,7 +112,7 @@ class ShiftHandoverService {
       if (previousShiftType.isNotEmpty) {
         // Try exact match first
         final previousCaregiverQuery = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
+            .collection('house_shift_assignments')
             .where('house_id', isEqualTo: currentHouseId)
             .where('shift', isEqualTo: previousShiftType)
             .get();
@@ -122,13 +124,14 @@ class ShiftHandoverService {
         
         for (var doc in previousCaregiverQuery.docs) {
           final data = doc.data();
-          final caregiverId = data['caregiver_id'] as String;
+          final caregiverId = data['user_id'] as String;
+          final userType = data['user_type'] as String?;
           final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
           
           print('🔍 ShiftHandoverService: Checking caregiver $caregiverId - days assigned: $daysAssigned');
           
           // Only include caregivers who are scheduled to work today and not the current user
-          if (caregiverId != user.uid && daysAssigned.contains(todayName)) {
+          if (userType == 'caregiver' && caregiverId != user.uid && daysAssigned.contains(todayName)) {
             previousShiftCaregiverIds.add(caregiverId);
             print('✅ ShiftHandoverService: ADDED caregiver $caregiverId (works on $todayName)');
           } else {
@@ -142,17 +145,18 @@ class ShiftHandoverService {
         if (previousShiftCaregiverIds.isEmpty) {
           print('🔍 ShiftHandoverService: No exact matches found, trying partial matching with day filtering...');
           final allHouseCaregivers = await FirebaseFirestore.instance
-              .collection('cg_house_assign')
+              .collection('house_shift_assignments')
               .where('house_id', isEqualTo: currentHouseId)
               .get();
           
           for (var doc in allHouseCaregivers.docs) {
             final data = doc.data();
-            final caregiverId = data['caregiver_id'] as String;
+            final caregiverId = data['user_id'] as String;
+            final userType = data['user_type'] as String?;
             final shift = data['shift'] as String?;
             final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
             
-            if (caregiverId != user.uid && shift != null && daysAssigned.contains(todayName)) {
+            if (userType == 'caregiver' && caregiverId != user.uid && shift != null && daysAssigned.contains(todayName)) {
               final shiftLower = shift.toLowerCase();
               final previousShiftLower = previousShiftType.toLowerCase();
               
@@ -171,7 +175,7 @@ class ShiftHandoverService {
         print('ShiftHandoverService: No shift name match found, trying time-based matching...');
         
         final allHouseCaregiverQuery = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
+            .collection('house_shift_assignments')
             .where('house_id', isEqualTo: currentHouseId)
             .get();
 
@@ -179,17 +183,21 @@ class ShiftHandoverService {
 
         for (var doc in allHouseCaregiverQuery.docs) {
           final data = doc.data();
-          final caregiverId = data['caregiver_id'] as String;
-          final timeRange = data['time_range'] as Map<String, dynamic>?;
+          final caregiverId = data['user_id'] as String;
+          final userType = data['user_type'] as String?;
+          final otherStartTime = data['start_time'] as String?;
+          final otherEndTime = data['end_time'] as String?;
           final shift = data['shift'] as String?;
           
-          print('ShiftHandoverService: Checking caregiver $caregiverId, shift: $shift, timeRange: $timeRange');
+          print('ShiftHandoverService: Checking caregiver $caregiverId, shift: $shift, times: $otherStartTime-$otherEndTime');
           
-          // Skip current caregiver
-          if (caregiverId == user.uid) continue;
+          // Skip current caregiver or non-caregivers
+          if (userType != 'caregiver' || caregiverId == user.uid) continue;
           
           // Check if this caregiver has a different shift time (previous shift)
-          if (currentTimeRange != null && timeRange != null && _isPreviousShift(currentTimeRange, timeRange)) {
+          if (currentStartTime != null && currentEndTime != null && 
+              otherStartTime != null && otherEndTime != null && 
+              _isPreviousShift(currentStartTime, currentEndTime, otherStartTime, otherEndTime)) {
             previousShiftCaregiverIds.add(caregiverId);
             print('ShiftHandoverService: Added caregiver $caregiverId based on time range match');
           }
@@ -205,13 +213,21 @@ class ShiftHandoverService {
         print('ShiftHandoverService: No previous shift caregivers found, using fallback to get all house caregivers');
         
         final allHouseCaregiverQuery = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
+            .collection('house_shift_assignments')
             .where('house_id', isEqualTo: currentHouseId)
             .get();
 
         previousShiftCaregiverIds = allHouseCaregiverQuery.docs
-            .map((doc) => doc.data()['caregiver_id'] as String)
-            .where((id) => id != user.uid) // Exclude current caregiver
+            .where((doc) {
+              final data = doc.data();
+              return data['user_type'] == 'caregiver';
+            })
+            .map((doc) {
+              final data = doc.data();
+              return data['user_id'] as String?;
+            })
+            .where((id) => id != null && id != user.uid) // Exclude current caregiver and nulls
+            .cast<String>()
             .toList();
             
         print('ShiftHandoverService: Fallback found ${previousShiftCaregiverIds.length} other caregivers in house');
@@ -405,10 +421,11 @@ class ShiftHandoverService {
       // This ensures we get the previous shift's data from the same date, not yesterday's data
       print('ShiftHandoverService: Showing shift data FROM the target date: $targetDateString');
 
-      // Get current caregiver's house and shift information from cg_house_assign
+      // Get current caregiver's house and shift information from house_shift_assignments
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: user.uid)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: user.uid)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
 
@@ -420,7 +437,7 @@ class ShiftHandoverService {
       final currentAssignment = currentCaregiverAssignQuery.docs.first.data();
       final currentHouseId = currentAssignment['house_id'];
       final currentShift = currentAssignment['shift'];
-      final currentTimeRange = currentAssignment['time_range'];
+      final currentStartTime = currentAssignment['start_time'] as String?;
 
       print('🏠 ShiftHandoverService: Current caregiver house: $currentHouseId');
       print('🏠 ShiftHandoverService: Current shift: $currentShift');
@@ -433,15 +450,15 @@ class ShiftHandoverService {
         final shiftLower = currentShift.toLowerCase();
         
         if (shiftLower.contains('1st') || shiftLower.contains('morning') || 
-            (currentTimeRange != null && currentTimeRange['start'] == '06:00')) {
+            (currentStartTime != null && currentStartTime == '06:00')) {
           previousShiftType = '3rd Shift'; // Night shift hands over to morning
           previousShiftKey = '3rd'; // For database lookup
         } else if (shiftLower.contains('2nd') || shiftLower.contains('afternoon') || 
-                   (currentTimeRange != null && currentTimeRange['start'] == '14:00')) {
+                   (currentStartTime != null && currentStartTime == '14:00')) {
           previousShiftType = '1st Shift'; // Morning shift hands over to afternoon
           previousShiftKey = '1st'; // For database lookup
         } else if (shiftLower.contains('3rd') || shiftLower.contains('night') || 
-                   (currentTimeRange != null && currentTimeRange['start'] == '22:00')) {
+                   (currentStartTime != null && currentStartTime == '22:00')) {
           previousShiftType = '2nd Shift'; // Afternoon shift hands over to night
           previousShiftKey = '2nd'; // For database lookup
         }
@@ -473,15 +490,16 @@ class ShiftHandoverService {
         
         // Get all caregivers in the house first, then filter by shift
         final allHouseCaregivers = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
+            .collection('house_shift_assignments')
             .where('house_id', isEqualTo: currentHouseId)
             .get();
         
         // Filter for caregivers with matching shift format
         final previousCaregiverDocs = allHouseCaregivers.docs.where((doc) {
           final data = doc.data();
+          final userType = data['user_type'] as String?;
           final caregiverShift = data['shift'] as String?;
-          if (caregiverShift == null) return false;
+          if (userType != 'caregiver' || caregiverShift == null) return false;
           
           // Check if any of our possible formats match
           return possibleShiftFormats.any((format) => 
@@ -495,7 +513,7 @@ class ShiftHandoverService {
         // Debug: show all found caregivers and their house assignments with names
         for (var doc in previousCaregiverDocs) {
           final data = doc.data();
-          final caregiverId = data['caregiver_id'];
+          final caregiverId = data['user_id'];
           
           // Get the actual caregiver name
           try {
@@ -675,13 +693,8 @@ class ShiftHandoverService {
   }
 
   /// Helper method to determine if a time range represents a previous shift
-  static bool _isPreviousShift(Map<String, dynamic> currentTimeRange, Map<String, dynamic> otherTimeRange) {
+  static bool _isPreviousShift(String currentStart, String currentEnd, String otherStart, String otherEnd) {
     try {
-      final currentStart = currentTimeRange['start'] as String? ?? '00:00';
-      final currentEnd = currentTimeRange['end'] as String? ?? '23:59';
-      final otherStart = otherTimeRange['start'] as String? ?? '00:00';
-      final otherEnd = otherTimeRange['end'] as String? ?? '23:59';
-      
       print('ShiftHandoverService: Comparing shifts - Current: $currentStart-$currentEnd, Other: $otherStart-$otherEnd');
       
       // Parse times
@@ -828,10 +841,11 @@ class ShiftHandoverService {
     try {
       print('=== DEBUG DATABASE STATE ===');
       
-      // Check cg_house_assign for current user
+      // Check house_shift_assignments for current user
       final userAssignQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: currentUserId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: currentUserId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
       
       print('DEBUG: Current user assignments: ${userAssignQuery.docs.length}');
@@ -841,18 +855,24 @@ class ShiftHandoverService {
       }
       
       if (userAssignQuery.docs.isNotEmpty) {
-        final houseId = userAssignQuery.docs.first.data()['house_id'] as String;
+        final userData = userAssignQuery.docs.first.data();
+        final houseId = userData['house_id'] as String?;
+        
+        if (houseId == null) {
+          print('DEBUG: No house_id found in user assignment');
+          return;
+        }
         
         // Check all caregivers in the same house
         final houseCaregiversQuery = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
+            .collection('house_shift_assignments')
             .where('house_id', isEqualTo: houseId)
             .get();
         
         print('DEBUG: Total caregivers in house $houseId: ${houseCaregiversQuery.docs.length}');
         for (var doc in houseCaregiversQuery.docs) {
           final data = doc.data();
-          print('DEBUG: House caregiver - id: ${data['caregiver_id']}, shift: ${data['shift']}, time_range: ${data['time_range']}');
+          print('DEBUG: House caregiver - id: ${data['user_id']}, shift: ${data['shift']}, time_range: ${data['time_range']}');
         }
         
         // Check task logs for today

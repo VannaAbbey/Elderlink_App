@@ -816,8 +816,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
         // Get caregiver's house assignment
         final houseSnapshot = await FirebaseFirestore.instance
-            .collection('cg_house_assign')
-            .where('caregiver_id', isEqualTo: caregiverId)
+            .collection('house_shift_assignments')
+            .where('user_id', isEqualTo: caregiverId)
+            .where('user_type', isEqualTo: 'caregiver')
             .where('is_current', isEqualTo: true)
             .limit(1)
             .get();
@@ -831,11 +832,34 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
         final houseData = houseSnapshot.docs.first.data();
         final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
-        final startDate = (houseData['start_date'] as Timestamp).toDate();
-        final endDate = (houseData['end_date'] as Timestamp).toDate();
+        
+        // Get dates from nested schedule_period object
+        final schedulePeriod = houseData['schedule_period'] as Map<String, dynamic>?;
+        
+        if (schedulePeriod == null) {
+          print('🔴 SHIFT: schedule_period is null!');
+          return false;
+        }
+        
+        final startDateTimestamp = schedulePeriod['start_date'] as Timestamp?;
+        final endDateTimestamp = schedulePeriod['end_date'] as Timestamp?;
+        
+        if (startDateTimestamp == null || endDateTimestamp == null) {
+          print('🔴 SHIFT: start_date or end_date is null in schedule_period!');
+          return false;
+        }
+        
+        final startDate = startDateTimestamp.toDate();
+        final endDate = endDateTimestamp.toDate();
 
+        print('🔍 SHIFT: ========== HOUSE ASSIGNMENT DATA ==========');
         print('🔍 SHIFT: Days assigned: $daysAssigned');
-        print('🔍 SHIFT: Assignment period: $startDate to $endDate');
+        print('🔍 SHIFT: Start date: ${startDate.toString()}');
+        print('🔍 SHIFT: End date: ${endDate.toString()}');
+        print('🔍 SHIFT: Current date/time: ${now.toString()}');
+        print('🔍 SHIFT: now.isBefore(startDate): ${now.isBefore(startDate)}');
+        print('🔍 SHIFT: now.isAfter(endDate): ${now.isAfter(endDate)}');
+        print('🔍 SHIFT: ==================================================');
 
         // Check if current date is within assignment period
         if (now.isBefore(startDate) || now.isAfter(endDate)) {
@@ -844,12 +868,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
         }
 
         // Check if current time is within shift hours
-        final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+        final startTime = houseData['start_time'] as String?;
+        final endTime = houseData['end_time'] as String?;
         int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
 
-        if (timeRange.isNotEmpty) {
-          final startParts = (timeRange['start'] as String).split(':');
-          final endParts = (timeRange['end'] as String).split(':');
+        if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+          final startParts = startTime.split(':');
+          final endParts = endTime.split(':');
           startHour = int.parse(startParts[0]);
           startMinute = int.parse(startParts[1]);
           endHour = int.parse(endParts[0]);
@@ -909,10 +934,18 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
         final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
 
+        print('🔍 SHIFT: ========== SHIFT TIME VALIDATION ==========');
+        print('🔍 SHIFT: Start time from DB: $startTime');
+        print('🔍 SHIFT: End time from DB: $endTime');
+        print('🔍 SHIFT: Parsed start hour:minute: $startHour:$startMinute');
+        print('🔍 SHIFT: Parsed end hour:minute: $endHour:$endMinute');
         print('🔍 SHIFT: Shift start: $calculatedShiftStart');
         print('🔍 SHIFT: Shift end: $calculatedShiftEnd');
-        print('🔍 SHIFT: Current time: $now');
+        print('🔍 SHIFT: Current time (now): $now');
+        print('🔍 SHIFT: now.isBefore(calculatedShiftStart): ${now.isBefore(calculatedShiftStart)}');
+        print('🔍 SHIFT: now.isAfter(calculatedShiftEnd): ${now.isAfter(calculatedShiftEnd)}');
         print('🔍 SHIFT: Within shift: $isWithinShift');
+        print('🔍 SHIFT: ===========================================');
 
         return isWithinShift;
       } catch (e) {

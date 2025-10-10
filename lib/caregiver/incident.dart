@@ -159,8 +159,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
       print('🔍 INCIDENT: Checking for caregiver $caregiverId at ${now.toString()}');
 
       final houseSnapshot = await _firestore
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('is_current', isEqualTo: true)
           .limit(1)
           .get();
@@ -180,17 +181,70 @@ class _IncidentScreenState extends State<IncidentScreen> {
       }
 
       final houseData = houseSnapshot.docs.first.data();
+      print('🔍 INCIDENT: Raw house data: $houseData');
+      
+      // Safe parsing with detailed error checking
       final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
-      final houseId = houseData['house_id'] as String;
-      final startDate = (houseData['start_date'] as Timestamp).toDate();
-      final endDate = (houseData['end_date'] as Timestamp).toDate();
+      print('🔍 INCIDENT: Days assigned parsed: $daysAssigned');
+      
+      final houseId = houseData['house_id'] as String?;
+      if (houseId == null) {
+        print('🔴 INCIDENT: house_id is null!');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      print('🔍 INCIDENT: House ID parsed: $houseId');
+      
+      // Get dates from nested schedule_period object
+      final schedulePeriod = houseData['schedule_period'] as Map<String, dynamic>?;
+      
+      if (schedulePeriod == null) {
+        print('🔴 INCIDENT: schedule_period is null!');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      final startDateTimestamp = schedulePeriod['start_date'] as Timestamp?;
+      final endDateTimestamp = schedulePeriod['end_date'] as Timestamp?;
+      
+      if (startDateTimestamp == null || endDateTimestamp == null) {
+        print('🔴 INCIDENT: start_date or end_date is null in schedule_period!');
+        print('🔴 INCIDENT: start_date: $startDateTimestamp, end_date: $endDateTimestamp');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      final startDate = startDateTimestamp.toDate();
+      final endDate = endDateTimestamp.toDate();
+      print('🔍 INCIDENT: Dates parsed - start: $startDate, end: $endDate');
 
-      print('🔍 INCIDENT: House assignment data:');
-      print('   - House ID: $houseId');
-      print('   - Days assigned: $daysAssigned');
-      print('   - Start date: $startDate');
-      print('   - End date: $endDate');
-      print('   - Current date: $now');
+      print('🔍 INCIDENT: ========== HOUSE ASSIGNMENT DATA ==========');
+      print('🔍 INCIDENT: House ID: $houseId');
+      print('🔍 INCIDENT: Days assigned: $daysAssigned');
+      print('🔍 INCIDENT: Start date: ${startDate.toString()}');
+      print('🔍 INCIDENT: End date: ${endDate.toString()}');
+      print('🔍 INCIDENT: Current date/time: ${now.toString()}');
+      print('🔍 INCIDENT: now.isBefore(startDate): ${now.isBefore(startDate)}');
+      print('🔍 INCIDENT: now.isAfter(endDate): ${now.isAfter(endDate)}');
+      print('🔍 INCIDENT: ================================================');
 
       if (now.isBefore(startDate) || now.isAfter(endDate)) {
         print('🔴 INCIDENT: Current date outside assignment period');
@@ -204,13 +258,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
         return;
       }
 
-      final timeRange = Map<String, dynamic>.from(
-        houseData['time_range'] ?? {},
-      );
+      final startTime = houseData['start_time'] as String?;
+      final endTime = houseData['end_time'] as String?;
+      
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
-      if (timeRange.isNotEmpty) {
-        final startParts = (timeRange['start'] as String).split(':');
-        final endParts = (timeRange['end'] as String).split(':');
+      
+      if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+        final startParts = startTime.split(':');
+        final endParts = endTime.split(':');
         startHour = int.parse(startParts[0]);
         startMinute = int.parse(startParts[1]);
         endHour = int.parse(endParts[0]);
@@ -280,10 +335,18 @@ class _IncidentScreenState extends State<IncidentScreen> {
           !(now.isBefore(calculatedShiftStart) ||
               now.isAfter(calculatedShiftEnd));
 
+      print('🔍 INCIDENT: ========== SHIFT TIME VALIDATION ==========');
+      print('🔍 INCIDENT: Start time from DB: $startTime');
+      print('🔍 INCIDENT: End time from DB: $endTime');
+      print('🔍 INCIDENT: Parsed start hour:minute: $startHour:$startMinute');
+      print('🔍 INCIDENT: Parsed end hour:minute: $endHour:$endMinute');
       print('🔍 INCIDENT: Calculated shift start: $calculatedShiftStart');
       print('🔍 INCIDENT: Calculated shift end: $calculatedShiftEnd');
-      print('🔍 INCIDENT: Current time: $now');
+      print('🔍 INCIDENT: Current time (now): $now');
+      print('🔍 INCIDENT: now.isBefore(calculatedShiftStart): ${now.isBefore(calculatedShiftStart)}');
+      print('🔍 INCIDENT: now.isAfter(calculatedShiftEnd): ${now.isAfter(calculatedShiftEnd)}');
       print('🔍 INCIDENT: Is within shift: $isWithinShift');
+      print('🔍 INCIDENT: =======================================');
 
       if (!isWithinShift) {
         print('🔴 INCIDENT: Not within shift hours');
@@ -298,8 +361,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
       }
 
       final assignSnapshot = await _firestore
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('day', isEqualTo: dayToCheck)
           .get();
 
@@ -363,7 +427,11 @@ class _IncidentScreenState extends State<IncidentScreen> {
           shiftEnd = calculatedShiftEnd;
         });
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('🔴 INCIDENT: ========== ERROR OCCURRED ==========');
+      print('🔴 INCIDENT: Error: $e');
+      print('🔴 INCIDENT: Stack trace: $stackTrace');
+      print('🔴 INCIDENT: =======================================');
       if (mounted) {
         setState(() {
           elderlyList = [];
@@ -620,10 +688,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
     // 1. Get caregiver assignment
     final query = await FirebaseFirestore.instance
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: user.uid)
+        .collection('house_shift_assignments')
+        .where('user_id', isEqualTo: user.uid)
+        .where('user_type', isEqualTo: 'caregiver')
         .where('is_current', isEqualTo: true)
-        .where('is_absent', isEqualTo: false)
         .get();
 
     if (query.docs.isEmpty) {
@@ -632,11 +700,15 @@ class _IncidentScreenState extends State<IncidentScreen> {
     }
 
     final data = query.docs.first.data();
-    final List daysAssigned = data['days_assigned'] ?? [];
-    final String shift = data['shift'] ?? "";
-    final Map<String, dynamic> timeRange = Map<String, dynamic>.from(
-      data['time_range'],
-    );
+    final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
+    final shift = data['shift'] as String? ?? "";
+    final startTime = data['start_time'] as String?;
+    final endTime = data['end_time'] as String?;
+    
+    if (startTime == null || endTime == null || startTime.isEmpty || endTime.isEmpty) {
+      _showWarningDialog(context, "Invalid shift time configuration.");
+      return;
+    }
 
     // 2. Check if today is included
     if (!daysAssigned.contains(currentDay)) {
@@ -645,8 +717,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
     }
 
     // 3. Parse time range
-    final startParts = (timeRange['start'] as String).split(":");
-    final endParts = (timeRange['end'] as String).split(":");
+    final startParts = startTime.split(":");
+    final endParts = endTime.split(":");
 
     DateTime start = DateTime(
       now.year,

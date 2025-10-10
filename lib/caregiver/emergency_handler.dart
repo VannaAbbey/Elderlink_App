@@ -20,8 +20,9 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
 
   // 🔹 Hanapin assignment ng caregiver
   final cgAssignSnap = await FirebaseFirestore.instance
-      .collection("cg_house_assign")
-      .where("caregiver_id", isEqualTo: user.uid)
+      .collection("house_shift_assignments")
+      .where("user_id", isEqualTo: user.uid)
+      .where("user_type", isEqualTo: "caregiver")
       .where("is_current", isEqualTo: true)
       .limit(1)
       .get();
@@ -32,14 +33,22 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   }
 
   final assign = cgAssignSnap.docs.first.data();
-  final List daysAssigned = assign["days_assigned"];
-  final String shift = assign["shift"];
-  final Map<String, dynamic> timeRange = assign["time_range"];
-  final String houseId = assign["house_id"];
+  
+  // 🔹 Null safety checks for all required fields
+  final daysAssigned = assign["days_assigned"] as List<dynamic>?;
+  final shift = assign["shift"] as String?;
+  final startTime = assign["start_time"] as String?;
+  final endTime = assign["end_time"] as String?;
+  final houseId = assign["house_id"] as String?;
+  
+  if (daysAssigned == null || shift == null || startTime == null || endTime == null || houseId == null) {
+    if (context.mounted) _showError(context, "Invalid assignment data. Please contact administrator.");
+    return;
+  }
 
   // 🔹 Parse shift times
-  final start = _parseTimeOfDay(timeRange["start"]);
-  final end = _parseTimeOfDay(timeRange["end"]);
+  final start = _parseTimeOfDay(startTime);
+  final end = _parseTimeOfDay(endTime);
 
   // 🔹 Determine if this is an overnight shift
   final isOvernightShift = end.hour < start.hour || (end.hour == start.hour && end.minute <= start.minute);
@@ -83,7 +92,7 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     if (context.mounted) {
       _showError(
         context,
-        "It is not your shift right now.\n\n✅ Your shift: $shift (${_formatToAMPM(timeRange["start"])} - ${_formatToAMPM(timeRange["end"])})",
+        "It is not your shift right now.\n\n✅ Your shift: $shift (${_formatToAMPM(startTime)} - ${_formatToAMPM(endTime)})",
       );
     }
     return;
@@ -115,11 +124,16 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   for (var doc in nurseQuery.docs) {
     final data = doc.data();
 
-    final List assignedDays = (data["days_assigned"] ?? []) as List;
-    final String startStr = data["start_time"];
-    final String endStr = data["end_time"];
-    final String nurseId = data["nurse_id"];
-    final String nurseShift = data["shift"];
+    final assignedDays = (data["days_assigned"] as List<dynamic>?) ?? [];
+    final startStr = data["start_time"] as String?;
+    final endStr = data["end_time"] as String?;
+    final nurseId = data["nurse_id"] as String?;
+    final nurseShift = data["shift"] as String?;
+    
+    // Skip if missing critical data
+    if (startStr == null || endStr == null || nurseId == null || nurseShift == null) {
+      continue;
+    }
 
     // check if today is assigned
     if (!assignedDays.contains(todayName)) continue;
@@ -149,24 +163,28 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   // ✅ Save to Firestore with BOTH house_id & house_name
   await FirebaseFirestore.instance.collection("emergency_alert").add({
     "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
-    "emergency_type": result["emergencyType"], // Main field for emergency type
-    "additional_info": result["description"], // Optional additional information
+    "emergency_type": result["emergencyType"] ?? "", // Main field for emergency type
+    "additional_info": result["description"] ?? "", // Optional additional information
     "alert_timestamp": DateTime.now(),
     "alert_verify": false,
     "house_id": houseNameToId[result["houseName"]] ?? "",
-    "house_name": result["houseName"],
-    "caregiver_name": result["caregiverName"], // Add caregiver name field
+    "house_name": result["houseName"] ?? "",
+    "caregiver_name": result["caregiverName"] ?? "", // Add caregiver name field
     "user_id_cg": user.uid,
     "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
   });
 
   // ✅ Also save to unified shift logs collection
   try {
+    final emergencyType = result["emergencyType"] as String? ?? "";
+    final description = result["description"] as String? ?? "";
+    final caregiverName = result["caregiverName"] as String? ?? "Unknown";
+    
     await CaregiverShiftLogService.createEmergencyAlertLog(
       caregiverId: user.uid,
-      emergencyType: result["emergencyType"],
-      description: result["description"],
-      caregiverFname: result["caregiverName"].split(' ').first, // Extract first name
+      emergencyType: emergencyType,
+      description: description,
+      caregiverFname: caregiverName.split(' ').first, // Extract first name
     );
     print('✅ Emergency alert logged to shift logs successfully');
   } catch (e) {
@@ -251,8 +269,16 @@ String _getDayName(int weekday) {
 }
 
 TimeOfDay _parseTimeOfDay(String hhmm) {
-  final parts = hhmm.split(":");
-  return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+  try {
+    final parts = hhmm.split(":");
+    if (parts.length != 2) {
+      return const TimeOfDay(hour: 0, minute: 0);
+    }
+    return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+  } catch (e) {
+    print("Error parsing time: $hhmm - $e");
+    return const TimeOfDay(hour: 0, minute: 0);
+  }
 }
 
 /// 🔹 Convert "14:00" → "2:00 PM"
@@ -297,17 +323,21 @@ Future<String> _getCaregiverName(String uid) async {
         await FirebaseFirestore.instance.collection("users").doc(uid).get();
 
     if (userDoc.exists) {
-      final data = userDoc.data()!;
+      final data = userDoc.data();
+      
+      if (data == null) {
+        return "Unknown Caregiver";
+      }
 
-      final fname = data["user_fname"] ?? "";
-      final lname = data["user_lname"] ?? "";
+      final fname = data["user_fname"] as String? ?? "";
+      final lname = data["user_lname"] as String? ?? "";
 
       if (fname.isNotEmpty || lname.isNotEmpty) {
         return "$fname $lname".trim();
       }
 
       // fallback if walang fname/lname
-      return data["user_email"] ?? "Unknown Caregiver";
+      return data["user_email"] as String? ?? "Unknown Caregiver";
     } else {
       return "Unknown Caregiver";
     }

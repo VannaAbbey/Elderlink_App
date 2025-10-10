@@ -89,7 +89,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     }
   }
 
-  // Get caregiver's status information from cg_house_assign
+  // Get caregiver's status information from house_shift_assignments
   Future<Map<String, dynamic>?> getCaregiverStatus() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final caregiverId = authProvider.currentUser?.uid;
@@ -97,8 +97,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
 
     try {
       final querySnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
 
       if (querySnapshot.docs.isNotEmpty) {
@@ -981,32 +982,12 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                               'Not assigned')
                                         : 'Not assigned';
 
-                                    // Handle time_range field - could be Map or String
-                                    final timeRangeData =
-                                        statusData?['time_range'];
-                                    final timeRange =
-                                        timeRangeData is Map<String, dynamic>
-                                        ? () {
-                                            final startTime =
-                                                timeRangeData['start'] ?? '';
-                                            final endTime =
-                                                timeRangeData['end'] ?? '';
-                                            if (startTime.isNotEmpty &&
-                                                endTime.isNotEmpty) {
-                                              final formattedStart =
-                                                  _convertTo12HourFormat(
-                                                    startTime,
-                                                  );
-                                              final formattedEnd =
-                                                  _convertTo12HourFormat(
-                                                    endTime,
-                                                  );
-                                              return '$formattedStart - $formattedEnd';
-                                            }
-                                            return 'Not specified';
-                                          }()
-                                        : timeRangeData is String
-                                        ? timeRangeData
+                                    // Handle start_time and end_time fields (NEW structure)
+                                    final startTime = statusData?['start_time'] as String? ?? '';
+                                    final endTime = statusData?['end_time'] as String? ?? '';
+                                    
+                                    final timeRange = (startTime.isNotEmpty && endTime.isNotEmpty)
+                                        ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
                                         : 'Not specified';
 
                                     return Column(

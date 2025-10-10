@@ -6,12 +6,18 @@ class HouseService {
 
   Future<Map<String, dynamic>?> getAssignedHouseForCaregiver(String caregiverId) async {
     final assignSnapshot = await _firestore
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: caregiverId)
+        .collection('house_shift_assignments')
+        .where('user_id', isEqualTo: caregiverId)
+        .where('user_type', isEqualTo: 'caregiver')
         .limit(1)
         .get();
     if (assignSnapshot.docs.isEmpty) return null;
-    final houseId = assignSnapshot.docs.first.data()['house_id'] as String;
+    
+    final assignData = assignSnapshot.docs.first.data();
+    final houseId = assignData['house_id'] as String?;
+    
+    if (houseId == null) return null;
+    
     final houseSnapshot = await _firestore
         .collection('house')
         .where('house_id', isEqualTo: houseId)
@@ -27,20 +33,22 @@ class HouseService {
       
       // ENHANCED APPROACH: First try to get specific elderly assignments, 
       // then fallback to house-based approach if needed
-      // HYBRID APPROACH: Try elderly_caregiver_assign first, then fall back to house-based approach
-      print('DEBUG HouseService: Querying elderly_caregiver_assign for caregiver $caregiverId...');
+      // HYBRID APPROACH: Try elderly_assignments first, then fall back to house-based approach
+      print('DEBUG HouseService: Querying elderly_assignments for caregiver $caregiverId...');
       final elderlyAssignSnapshot = await _firestore
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
       
-      print('DEBUG HouseService: Found ${elderlyAssignSnapshot.docs.length} elderly_caregiver_assign documents');
+      print('DEBUG HouseService: Found ${elderlyAssignSnapshot.docs.length} elderly_assignments documents');
       
       // Get house information for context (needed for both approaches)
-      print('DEBUG HouseService: Querying cg_house_assign for caregiver $caregiverId...');
+      print('DEBUG HouseService: Querying house_shift_assignments for caregiver $caregiverId...');
       final caregiverHouseSnapshot = await _firestore
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
       
@@ -52,7 +60,12 @@ class HouseService {
       final caregiverHouseData = caregiverHouseSnapshot.docs.first.data();
       print('DEBUG HouseService: Caregiver house assignment data: $caregiverHouseData');
       
-      final houseId = caregiverHouseData['house_id'] as String;
+      final houseId = caregiverHouseData['house_id'] as String?;
+      if (houseId == null) {
+        print('DEBUG HouseService: No house_id found in assignment');
+        return [];
+      }
+      
       print('DEBUG HouseService: Caregiver assigned to house: $houseId');
       
       final houseSnapshot = await _firestore
@@ -63,7 +76,8 @@ class HouseService {
       
       String? houseName;
       if (houseSnapshot.docs.isNotEmpty) {
-        houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
+        final houseData = houseSnapshot.docs.first.data();
+        houseName = houseData['house_name'] as String?;
         print('DEBUG HouseService: House name: $houseName');
       }
 
@@ -123,7 +137,7 @@ class HouseService {
         // First, get all elderly who ARE specifically assigned to OTHER caregivers
         print('DEBUG HouseService: Checking for other caregivers assignments...');
         final otherCaregiversAssignments = await _firestore
-            .collection('elderly_caregiver_assign')
+            .collection('elderly_assignments')
             .get(); // Get ALL assignments, then filter in code
         
         print('DEBUG HouseService: Found ${otherCaregiversAssignments.docs.length} total assignments');
@@ -131,11 +145,12 @@ class HouseService {
         Set<String> elderlyAssignedToOthers = {};
         for (var doc in otherCaregiversAssignments.docs) {
           final assignData = doc.data();
-          final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+          final assignmentCaregiverId = assignData['user_id'] as String?;
+          final assignmentUserType = assignData['user_type'] as String?;
           final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
           
           // Only include assignments for OTHER caregivers
-          if (assignmentCaregiverId != null && assignmentCaregiverId != caregiverId) {
+          if (assignmentCaregiverId != null && assignmentUserType == 'caregiver' && assignmentCaregiverId != caregiverId) {
             elderlyAssignedToOthers.addAll(elderlyIds);
             print('DEBUG HouseService: Elderly ${elderlyIds.join(', ')} assigned to caregiver $assignmentCaregiverId (not us)');
           }
@@ -220,17 +235,19 @@ class HouseService {
     try {
       print('DEBUG HouseService: Starting getAssignedElderlyForCaregiverDay for caregiver $caregiverId on $day');
       
-      // HYBRID APPROACH: Try elderly_caregiver_assign first, then fall back to house-based approach
+      // HYBRID APPROACH: Try elderly_assignments first, then fall back to house-based approach
       final elderlyAssignSnapshot = await _firestore
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('day', isEqualTo: day)
           .get();
       
       // Get house information for context (needed for both approaches)
       final caregiverHouseSnapshot = await _firestore
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
       
@@ -240,8 +257,13 @@ class HouseService {
       }
       
       final caregiverAssignData = caregiverHouseSnapshot.docs.first.data();
-      final houseId = caregiverAssignData['house_id'] as String;
+      final houseId = caregiverAssignData['house_id'] as String?;
       final caregiverDaysAssigned = List<String>.from(caregiverAssignData['days_assigned'] ?? []);
+      
+      if (houseId == null) {
+        print('DEBUG HouseService: No house_id found in assignment');
+        return [];
+      }
       
       // Check if caregiver is assigned on the requested day
       if (!caregiverDaysAssigned.contains(day)) {
@@ -257,7 +279,8 @@ class HouseService {
       
       String? houseName;
       if (houseSnapshot.docs.isNotEmpty) {
-        houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
+        final houseData = houseSnapshot.docs.first.data();
+        houseName = houseData['house_name'] as String?;
       }
 
       List<Map<String, dynamic>> result = [];
@@ -308,7 +331,7 @@ class HouseService {
         // First, get all elderly who ARE specifically assigned to OTHER caregivers on this day
         print('DEBUG HouseService: Checking for other caregivers assignments on $day...');
         final otherCaregiversAssignments = await _firestore
-            .collection('elderly_caregiver_assign')
+            .collection('elderly_assignments')
             .where('day', isEqualTo: day)
             .get(); // Get ALL assignments for this day, then filter in code
         
@@ -317,11 +340,12 @@ class HouseService {
         Set<String> elderlyAssignedToOthersOnDay = {};
         for (var doc in otherCaregiversAssignments.docs) {
           final assignData = doc.data();
-          final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+          final assignmentCaregiverId = assignData['user_id'] as String?;
+          final assignmentUserType = assignData['user_type'] as String?;
           final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
           
           // Only include assignments for OTHER caregivers
-          if (assignmentCaregiverId != null && assignmentCaregiverId != caregiverId) {
+          if (assignmentCaregiverId != null && assignmentUserType == 'caregiver' && assignmentCaregiverId != caregiverId) {
             elderlyAssignedToOthersOnDay.addAll(elderlyIds);
             print('DEBUG HouseService: Elderly ${elderlyIds.join(', ')} assigned to caregiver $assignmentCaregiverId on $day (not us)');
           }
@@ -373,8 +397,9 @@ class HouseService {
     try {
       // Get house assignment
       final assignSnapshot = await _firestore
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
       
@@ -383,7 +408,14 @@ class HouseService {
         return [];
       }
       
-      final houseId = assignSnapshot.docs.first.data()['house_id'] as String;
+      final assignData = assignSnapshot.docs.first.data();
+      final houseId = assignData['house_id'] as String?;
+      
+      if (houseId == null) {
+        print('DEBUG HouseService: No house_id found in assignment');
+        return [];
+      }
+      
       print('DEBUG HouseService: Getting deceased elderly for house: $houseId');
 
       // Get house information first
@@ -395,7 +427,8 @@ class HouseService {
       
       String? houseName;
       if (houseSnapshot.docs.isNotEmpty) {
-        houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
+        final houseData = houseSnapshot.docs.first.data();
+        houseName = houseData['house_name'] as String?;
       }
 
       // Get all elderly in the house with deceased status

@@ -99,7 +99,8 @@ class LeaveRequestService {
     try {
       final doc = await _firestore.collection('leave_requests').doc(requestId).get();
       if (doc.exists) {
-        final data = doc.data()!;
+        final data = doc.data();
+        if (data == null) return null;
         data['id'] = doc.id;
         return data;
       }

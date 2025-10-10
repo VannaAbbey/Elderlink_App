@@ -31,12 +31,14 @@ class _HousesScreenState extends State<HousesScreen> {
     try {
       // Fetch caregiver's assigned days
       final assignSnap = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
       
       if (assignSnap.docs.isNotEmpty) {
-        caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
+        final assignData = assignSnap.docs.first.data();
+        caregiverAssignedDays = List<String>.from(assignData['days_assigned'] ?? []);
       }
 
       // Set selectedDay - prefer current day if assigned, otherwise first assigned day

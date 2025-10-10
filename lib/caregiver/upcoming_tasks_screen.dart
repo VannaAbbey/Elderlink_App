@@ -130,8 +130,9 @@ class TaskService {
       
       // Get caregiver's shift time_range
       final assignSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
       
       if (assignSnapshot.docs.isEmpty) {
@@ -140,9 +141,8 @@ class TaskService {
       }
       
       final assignData = assignSnapshot.docs.first.data();
-      final timeRange = assignData['time_range'] as Map<String, dynamic>? ?? {};
-      final shiftStartTime = timeRange['start'] ?? '00:00';
-      final shiftEndTime = timeRange['end'] ?? '23:59';
+      final shiftStartTime = assignData['start_time'] as String? ?? '00:00';
+      final shiftEndTime = assignData['end_time'] as String? ?? '23:59';
       
       // Parse shift start and end times
       final startTimeParts = shiftStartTime.split(':');
@@ -519,10 +519,11 @@ class TaskService {
     try {
       print('🔍 DEBUG: Getting assigned days for caregiverId=$caregiverId, elderlyId=$elderlyId');
       
-      // Query elderly_caregiver_assign collection for all days when this caregiver is assigned
+      // Query elderly_assignments collection for all days when this caregiver is assigned
       final elderlyAssignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
 
       print('🔍 DEBUG: Found ${elderlyAssignSnapshot.docs.length} assignment documents for this caregiver');
@@ -632,10 +633,10 @@ class TaskService {
     try {
       // Get caregiver's shift information
       final houseSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('is_current', isEqualTo: true)
-          .where('is_absent', isEqualTo: false)
           .limit(1)
           .get();
       
@@ -644,11 +645,12 @@ class TaskService {
       }
       
       final houseData = houseSnapshot.docs.first.data();
-      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      final startTime = houseData['start_time'] as String?;
+      final endTime = houseData['end_time'] as String?;
       
-      if (timeRange.isNotEmpty) {
-        final startParts = (timeRange['start'] as String).split(':');
-        final endParts = (timeRange['end'] as String).split(':');
+      if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+        final startParts = startTime.split(':');
+        final endParts = endTime.split(':');
         final shiftStartHour = int.parse(startParts[0]);
         final shiftEndHour = int.parse(endParts[0]);
         
@@ -682,8 +684,9 @@ class TaskService {
       // SIMPLIFIED APPROACH: Check if elderly is in caregiver's assigned house on that day
       // Step 1: Get caregiver's house assignment
       final houseAssignSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
       
@@ -713,7 +716,12 @@ class TaskService {
         return false;
       }
       
-      final elderlyData = elderlyDoc.data()!;
+      final elderlyData = elderlyDoc.data();
+      if (elderlyData == null) {
+        print('  ❌ Elderly document has no data');
+        return false;
+      }
+      
       final elderlyHouseId = elderlyData['house_id'] as String?;
       
       if (elderlyHouseId != houseId) {
@@ -737,10 +745,10 @@ class TaskService {
     try {
       // Get caregiver's shift information
       final houseSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('is_current', isEqualTo: true)
-          .where('is_absent', isEqualTo: false)
           .limit(1)
           .get();
       
@@ -749,11 +757,12 @@ class TaskService {
       }
       
       final houseData = houseSnapshot.docs.first.data();
-      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      final startTime = houseData['start_time'] as String?;
+      final endTime = houseData['end_time'] as String?;
       
-      if (timeRange.isNotEmpty) {
-        final startParts = (timeRange['start'] as String).split(':');
-        final endParts = (timeRange['end'] as String).split(':');
+      if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+        final startParts = startTime.split(':');
+        final endParts = endTime.split(':');
         final shiftStartHour = int.parse(startParts[0]);
         final shiftEndHour = int.parse(endParts[0]);
         
@@ -1665,20 +1674,21 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           final currentUser = FirebaseAuth.instance.currentUser;
           if (currentUser != null) {
             final houseSnapshot = await FirebaseFirestore.instance
-                .collection('cg_house_assign')
-                .where('caregiver_id', isEqualTo: currentUser.uid)
+                .collection('house_shift_assignments')
+                .where('user_id', isEqualTo: currentUser.uid)
+                .where('user_type', isEqualTo: 'caregiver')
                 .where('is_current', isEqualTo: true)
-                .where('is_absent', isEqualTo: false)
                 .limit(1)
                 .get();
             
             if (houseSnapshot.docs.isNotEmpty) {
               final houseData = houseSnapshot.docs.first.data();
-              final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+              final startTime = houseData['start_time'] as String?;
+              final endTime = houseData['end_time'] as String?;
               
-              if (timeRange.isNotEmpty) {
-                final startParts = (timeRange['start'] as String).split(':');
-                final endParts = (timeRange['end'] as String).split(':');
+              if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+                final startParts = startTime.split(':');
+                final endParts = endTime.split(':');
                 final shiftStartHour = int.parse(startParts[0]);
                 final shiftEndHour = int.parse(endParts[0]);
                 final shiftEndMinute = int.parse(endParts[1]);
@@ -2722,15 +2732,18 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                             List<String> caregiverAssignedDays = [];
                             Map<String, String> caregiverTimeRange = {'start': '00:00', 'end': '23:59'};
                             final assignSnap = await FirebaseFirestore.instance
-                              .collection('cg_house_assign')
-                              .where('caregiver_id', isEqualTo: caregiverId)
+                              .collection('house_shift_assignments')
+                              .where('user_id', isEqualTo: caregiverId)
+                              .where('user_type', isEqualTo: 'caregiver')
                               .get();
                             if (assignSnap.docs.isNotEmpty) {
-                              caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
-                              final timeRange = assignSnap.docs.first.data()['time_range'] as Map<String, dynamic>? ?? {};
+                              final assignData = assignSnap.docs.first.data();
+                              caregiverAssignedDays = List<String>.from(assignData['days_assigned'] ?? []);
+                              final startTime = assignData['start_time'] as String? ?? '00:00';
+                              final endTime = assignData['end_time'] as String? ?? '23:59';
                               caregiverTimeRange = {
-                                'start': timeRange['start'] ?? '00:00',
-                                'end': timeRange['end'] ?? '23:59',
+                                'start': startTime,
+                                'end': endTime,
                               };
                             }
                             // Now set selectedDay and fetch ALL assignedElderly with all their assigned days
@@ -2977,11 +2990,40 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                 showDialog(
                                                                   context: ctx,
                                                                   builder: (context) => AlertDialog(
-                                                                    title: const Text('Invalid Time'),
-                                                                    content: Text('The picked start time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.'),
+                                                                    shape: RoundedRectangleBorder(
+                                                                      borderRadius: BorderRadius.circular(16),
+                                                                    ),
+                                                                    title: const Row(
+                                                                      children: [
+                                                                        Icon(
+                                                                          Icons.access_time_outlined,
+                                                                          color: Color(0xFFD32F2F),
+                                                                          size: 28,
+                                                                        ),
+                                                                        SizedBox(width: 8),
+                                                                        Text(
+                                                                          'Invalid Time',
+                                                                          style: TextStyle(
+                                                                            color: Color(0xFFD32F2F),
+                                                                            fontWeight: FontWeight.bold,
+                                                                          ),
+                                                                        ),
+                                                                      ],
+                                                                    ),
+                                                                    content: Text(
+                                                                      'The picked start time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.',
+                                                                      style: const TextStyle(fontSize: 16),
+                                                                    ),
                                                                     actions: [
                                                                       TextButton(
                                                                         onPressed: () => Navigator.of(context).pop(),
+                                                                        style: TextButton.styleFrom(
+                                                                          backgroundColor: const Color(0xFFD32F2F),
+                                                                          foregroundColor: Colors.white,
+                                                                          shape: RoundedRectangleBorder(
+                                                                            borderRadius: BorderRadius.circular(8),
+                                                                          ),
+                                                                        ),
                                                                         child: const Text('OK'),
                                                                       ),
                                                                     ],
@@ -3048,11 +3090,40 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                 showDialog(
                                                                   context: ctx,
                                                                   builder: (context) => AlertDialog(
-                                                                    title: const Text('Invalid Time'),
-                                                                    content: Text('The picked end time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.'),
+                                                                    shape: RoundedRectangleBorder(
+                                                                      borderRadius: BorderRadius.circular(16),
+                                                                    ),
+                                                                    title: const Row(
+                                                                      children: [
+                                                                        Icon(
+                                                                          Icons.access_time_outlined,
+                                                                          color: Color(0xFFD32F2F),
+                                                                          size: 28,
+                                                                        ),
+                                                                        SizedBox(width: 8),
+                                                                        Text(
+                                                                          'Invalid Time',
+                                                                          style: TextStyle(
+                                                                            color: Color(0xFFD32F2F),
+                                                                            fontWeight: FontWeight.bold,
+                                                                          ),
+                                                                        ),
+                                                                      ],
+                                                                    ),
+                                                                    content: Text(
+                                                                      'The picked end time (${picked.format(ctx)}) is outside your allowed work hours (${rangeStart.format(ctx)} - ${rangeEnd.format(ctx)}). Please choose another.',
+                                                                      style: const TextStyle(fontSize: 16),
+                                                                    ),
                                                                     actions: [
                                                                       TextButton(
                                                                         onPressed: () => Navigator.of(context).pop(),
+                                                                        style: TextButton.styleFrom(
+                                                                          backgroundColor: const Color(0xFFD32F2F),
+                                                                          foregroundColor: Colors.white,
+                                                                          shape: RoundedRectangleBorder(
+                                                                            borderRadius: BorderRadius.circular(8),
+                                                                          ),
+                                                                        ),
                                                                         child: const Text('OK'),
                                                                       ),
                                                                     ],
@@ -3147,7 +3218,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     return;
                                                   }
 
-                                                  // Get assigned days for validation - query elderly_caregiver_assign directly
+                                                  // Get assigned days for validation - query elderly_assignments directly
                                                   print('🔍 DEBUG: Every Assigned Day date picker validation');
                                                   print('🔍 DEBUG: selectedElderly = $selectedElderly');
                                                   print('🔍 DEBUG: caregiverId = $caregiverId');
@@ -3155,10 +3226,11 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                   List<String> elderlyAssignedDays = [];
                                                   
                                                   try {
-                                                    // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+                                                    // Query elderly_assignments collection for all days this elderly is assigned to this caregiver
                                                     final assignmentSnapshot = await FirebaseFirestore.instance
-                                                        .collection('elderly_caregiver_assign')
-                                                        .where('caregiver_id', isEqualTo: caregiverId)
+                                                        .collection('elderly_assignments')
+                                                        .where('user_id', isEqualTo: caregiverId)
+                                                        .where('user_type', isEqualTo: 'caregiver')
                                                         .get();
                                                     
                                                     print('🔍 DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
@@ -3546,10 +3618,11 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                   print('DEBUG: Caregiver ID: $caregiverId');
                                                   
                                                   try {
-                                                    // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+                                                    // Query elderly_assignments collection for all days this elderly is assigned to this caregiver
                                                     final assignmentSnapshot = await FirebaseFirestore.instance
-                                                        .collection('elderly_caregiver_assign')
-                                                        .where('caregiver_id', isEqualTo: caregiverId)
+                                                        .collection('elderly_assignments')
+                                                        .where('user_id', isEqualTo: caregiverId)
+                                                        .where('user_type', isEqualTo: 'caregiver')
                                                         .get();
                                                     
                                                     print('DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
@@ -3878,10 +3951,11 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       
       List<String> elderlyAssignedDays = [];
       
-      // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+      // Query elderly_assignments collection for all days this elderly is assigned to this caregiver
       final assignmentSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .get();
       
       print('🔍 DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
@@ -3928,7 +4002,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       }
       
       // SIMPLIFIED APPROACH: Use house service to get all elderly for each day
-      // This works regardless of whether elderly_caregiver_assign exists or not
+      // This works regardless of whether elderly_assignments exists or not
       final houseService = HouseService();
       
       for (String day in assignedDays) {
@@ -4595,8 +4669,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
 
       // Get caregiver's house assignment
       final houseSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('is_current', isEqualTo: true)
           .limit(1)
           .get();
@@ -4607,8 +4682,23 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
 
       final houseData = houseSnapshot.docs.first.data();
       final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
-      final startDate = (houseData['start_date'] as Timestamp).toDate();
-      final endDate = (houseData['end_date'] as Timestamp).toDate();
+      
+      // Get dates from nested schedule_period object
+      final schedulePeriod = houseData['schedule_period'] as Map<String, dynamic>?;
+      
+      if (schedulePeriod == null) {
+        return false;
+      }
+      
+      final startDateTimestamp = schedulePeriod['start_date'] as Timestamp?;
+      final endDateTimestamp = schedulePeriod['end_date'] as Timestamp?;
+      
+      if (startDateTimestamp == null || endDateTimestamp == null) {
+        return false;
+      }
+      
+      final startDate = startDateTimestamp.toDate();
+      final endDate = endDateTimestamp.toDate();
 
       // Check if current date is within assignment period
       if (now.isBefore(startDate) || now.isAfter(endDate)) {
@@ -4616,12 +4706,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       }
 
       // Check if current time is within shift hours
-      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      final startTime = houseData['start_time'] as String?;
+      final endTime = houseData['end_time'] as String?;
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
 
-      if (timeRange.isNotEmpty) {
-        final startParts = (timeRange['start'] as String).split(':');
-        final endParts = (timeRange['end'] as String).split(':');
+      if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+        final startParts = startTime.split(':');
+        final endParts = endTime.split(':');
         startHour = int.parse(startParts[0]);
         startMinute = int.parse(startParts[1]);
         endHour = int.parse(endParts[0]);

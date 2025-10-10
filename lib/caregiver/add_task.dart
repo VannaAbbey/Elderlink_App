@@ -158,13 +158,14 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
     try {
       String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][date.weekday - 1];
       
-      // CORRECTED APPROACH: Check elderly_caregiver_assign collection with array structure
+      // CORRECTED APPROACH: Check elderly_assignments collection with array structure
       print('DEBUG AddTask: Checking if elderly $elderlyId is assigned to caregiver $caregiverId on $weekdayStr');
       
       // Step 1: Check specific elderly assignments from array structure
       final elderlyAssignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('day', isEqualTo: weekdayStr)
           .get();
       
@@ -189,8 +190,9 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
       
       // Get caregiver's house assignment
       final houseAssignSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
       
@@ -220,7 +222,12 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
         return false;
       }
       
-      final elderlyData = elderlyDoc.data()!;
+      final elderlyData = elderlyDoc.data();
+      if (elderlyData == null) {
+        print('DEBUG AddTask: Elderly document has no data');
+        return false;
+      }
+      
       final elderlyHouseId = elderlyData['house_id'] as String?;
       
       if (elderlyHouseId != houseId) {
@@ -230,16 +237,17 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
       
       // Check if elderly is specifically assigned to OTHER caregivers on this day
       final otherAssignments = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
+          .collection('elderly_assignments')
           .where('day', isEqualTo: weekdayStr)
           .get();
       
       for (var doc in otherAssignments.docs) {
         final assignData = doc.data();
-        final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+        final assignmentCaregiverId = assignData['user_id'] as String?;
+        final assignmentUserType = assignData['user_type'] as String?;
         final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
         
-        if (assignmentCaregiverId != caregiverId && elderlyIds.contains(elderlyId)) {
+        if (assignmentCaregiverId != caregiverId && assignmentUserType == 'caregiver' && elderlyIds.contains(elderlyId)) {
           print('DEBUG AddTask: ❌ Elderly $elderlyId is assigned to another caregiver on $weekdayStr');
           return false;
         }
@@ -256,7 +264,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
   Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiver(String caregiverId) async {
     try {
       // SIMPLIFIED APPROACH: Use house service to get all assigned elderly
-      // This works regardless of whether elderly_caregiver_assign exists or not
+      // This works regardless of whether elderly_assignments exists or not
       final houseService = HouseService();
       final assignedElderly = await houseService.getAssignedElderlyForCaregiver(caregiverId);
       

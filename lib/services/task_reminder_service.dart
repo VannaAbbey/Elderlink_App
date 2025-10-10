@@ -1067,7 +1067,12 @@ class TaskReminderService {
         return false;
       }
       
-      final taskData = taskDoc.data()!;
+      final taskData = taskDoc.data();
+      if (taskData == null) {
+        print('⚠️ Task $taskId has no data');
+        return false;
+      }
+      
       final taskStatus = List<String>.from(taskData['task_status'] ?? []);
       
       print('📋 Current task status: $taskStatus');

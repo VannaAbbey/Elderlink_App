@@ -18,8 +18,9 @@ import 'package:intl/intl.dart';
       }
       
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: user.uid)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: user.uid)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
 
@@ -28,12 +29,19 @@ import 'package:intl/intl.dart';
         return [];
       }
 
-      final currentHouseId = currentCaregiverAssignQuery.docs.first.data()['house_id'];
+      final currentAssignData = currentCaregiverAssignQuery.docs.first.data();
+      final currentHouseId = currentAssignData['house_id'] as String?;
+      
+      if (currentHouseId == null) {
+        print('❌ DEBUG: No house_id found in assignment');
+        return [];
+      }
+      
       print('🏠 DEBUG: Current user house: $currentHouseId');
       
-      // Query cg_house_assign collection for caregivers with the specified shift AND same house
+      // Query house_shift_assignments collection for caregivers with the specified shift AND same house
       final query = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
+          .collection('house_shift_assignments')
           .where('house_id', isEqualTo: currentHouseId)
           .where('shift', isEqualTo: shiftType)
           .get();
@@ -44,13 +52,14 @@ import 'package:intl/intl.dart';
       
       for (var doc in query.docs) {
         final data = doc.data();
-        final caregiverId = data['caregiver_id'] as String?;
+        final caregiverId = data['user_id'] as String?;
+        final userType = data['user_type'] as String?;
         final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
         
         print('🔍 DEBUG: Checking caregiver $caregiverId - assigned days: $daysAssigned');
         
         // Check if the caregiver is assigned to work on this specific day
-        if (caregiverId != null && daysAssigned.contains(dayName)) {
+        if (userType == 'caregiver' && caregiverId != null && daysAssigned.contains(dayName)) {
           // Get caregiver name from users collection
           final userDoc = await FirebaseFirestore.instance
               .collection('users')
@@ -88,8 +97,9 @@ import 'package:intl/intl.dart';
     }
     
     final currentCaregiverAssignQuery = await FirebaseFirestore.instance
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: user.uid)
+        .collection('house_shift_assignments')
+        .where('user_id', isEqualTo: user.uid)
+        .where('user_type', isEqualTo: 'caregiver')
         .limit(1)
         .get();
 
@@ -98,7 +108,14 @@ import 'package:intl/intl.dart';
       return {'shiftType': '', 'previousShiftType': '', 'previousCaregivers': <String>[], 'previousDate': date};
     }
 
-    final currentUserShift = currentCaregiverAssignQuery.docs.first.data()['shift'] as String;
+    final currentAssignData = currentCaregiverAssignQuery.docs.first.data();
+    final currentUserShift = currentAssignData['shift'] as String? ?? '';
+    
+    if (currentUserShift.isEmpty) {
+      print('❌ DEBUG: No shift found in assignment data');
+      return {'shiftType': '', 'previousShiftType': '', 'previousCaregivers': <String>[], 'previousDate': date};
+    }
+    
     print('🔄 DEBUG: Current user assigned shift: $currentUserShift');
     
     String shiftType = '';
@@ -206,8 +223,9 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
 
       // First, get the current caregiver's shift assignment to determine previous shift
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: user.uid)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: user.uid)
+          .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
 
@@ -240,7 +258,7 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
 
       // Get caregivers from the PREVIOUS shift in the same house
       final previousShiftCaregiverQuery = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
+          .collection('house_shift_assignments')
           .where('house_id', isEqualTo: currentHouseId)
           .where('shift', isEqualTo: previousShiftKey)
           .get();
@@ -251,10 +269,11 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
       // Filter caregivers by who was actually scheduled to work on this day
       for (var doc in previousShiftCaregiverQuery.docs) {
         final data = doc.data();
-        final caregiverId = data['caregiver_id'] as String?;
+        final caregiverId = data['user_id'] as String?;
+        final userType = data['user_type'] as String?;
         final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
         
-        if (caregiverId != null && daysAssigned.contains(dayName)) {
+        if (userType == 'caregiver' && caregiverId != null && daysAssigned.contains(dayName)) {
           previousShiftCaregiversIds.add(caregiverId);
           print('✅ ShiftLogs: Including previous shift caregiver: $caregiverId (works on $dayName)');
         } else if (caregiverId != null) {
