@@ -13,6 +13,7 @@ import 'nurse/home.dart';
 import 'nurse/emergency_screen_modal.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -20,6 +21,96 @@ import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// Top-level background message handler required by firebase_messaging.
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // Ensure Firebase is initialized in background isolate
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
+
+  try {
+    final notification = message.notification;
+    final data = message.data;
+    final title = notification?.title ?? data['title'] ?? 'Notification';
+    String body = notification?.body ?? data['body'] ?? '';
+
+    // If body empty, attempt to compose from emergency or incident doc
+    if (body.trim().isEmpty) {
+      final alertId = data['alertId'] ?? data['alert_id'] ?? '';
+      if (alertId != null && alertId.toString().isNotEmpty) {
+        try {
+          final doc = await FirebaseFirestore.instance
+              .collection('emergency_alert')
+              .doc(alertId.toString())
+              .get();
+          if (doc.exists) {
+            final d = doc.data()!;
+            final et = (d['emergency_type'] ?? '').toString().trim();
+            final ai = (d['additional_info'] ?? '').toString().trim();
+            String composed = '';
+            if (et.isNotEmpty) composed = et;
+            if (ai.isNotEmpty)
+              composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+            if (composed.isNotEmpty) body = composed;
+          }
+        } catch (e) {
+          // ignore fetch error
+        }
+      } else {
+        final incidentId = data['incidentId'] ?? data['incident_id'] ?? '';
+        if (incidentId != null && incidentId.toString().isNotEmpty) {
+          try {
+            final doc = await FirebaseFirestore.instance
+                .collection('incident_report')
+                .doc(incidentId.toString())
+                .get();
+            if (doc.exists) {
+              final d = doc.data()!;
+              final it = (d['incident_type'] ?? '').toString().trim();
+              final ai = (d['additional_info'] ?? '').toString().trim();
+              String composed = '';
+              if (it.isNotEmpty) composed = it;
+              if (ai.isNotEmpty)
+                composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+              if (composed.isNotEmpty) body = composed;
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      }
+    }
+
+    // Initialize a local notifications instance and show a notification
+    final FlutterLocalNotificationsPlugin localNotifications =
+        FlutterLocalNotificationsPlugin();
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await localNotifications.initialize(
+      const InitializationSettings(android: androidInit),
+    );
+
+    const androidDetails = AndroidNotificationDetails(
+      'emergency_channel',
+      'Emergency Alerts',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      ongoing: false,
+    );
+
+    final details = NotificationDetails(android: androidDetails);
+    await localNotifications.show(
+      message.hashCode,
+      title,
+      body,
+      details,
+      payload: data['alertId'] ?? data['alert_id'] ?? '',
+    );
+  } catch (e) {
+    print('❌ Background message handling failed: $e');
+  }
+}
 
 /// ---------------------- EMERGENCY SERVICE ----------------------
 class EmergencyService {
@@ -40,6 +131,166 @@ class EmergencyService {
         }
       },
     );
+
+    // Initialize Firebase Messaging handlers so push notifications work
+    try {
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
+
+      final messaging = FirebaseMessaging.instance;
+
+      // Request permissions on iOS/macOS
+      NotificationSettings settingsPerm = await messaging.requestPermission(
+        alert: true,
+        announcement: false,
+        badge: true,
+        carPlay: false,
+        criticalAlert: false,
+        provisional: false,
+        sound: true,
+      );
+
+      print('🔔 FCM permission status: ${settingsPerm.authorizationStatus}');
+
+      // Get FCM token (useful for server-side sends). You can send this to your backend.
+      try {
+        final token = await messaging.getToken();
+        print('🔑 FCM token: $token');
+      } catch (e) {
+        print('❌ Failed to get FCM token: $e');
+      }
+
+      // Foreground messages: show local notification and optionally open modal
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+        final notification = message.notification;
+        final data = message.data;
+        final title = notification?.title ?? data['title'] ?? 'Notification';
+        String body = notification?.body ?? data['body'] ?? '';
+
+        // If body is empty, try to fetch an emergency or incident doc using ids
+        if (body.trim().isEmpty) {
+          final alertId = data['alertId'] ?? data['alert_id'] ?? '';
+          if (alertId != null && alertId.toString().isNotEmpty) {
+            try {
+              final doc = await FirebaseFirestore.instance
+                  .collection('emergency_alert')
+                  .doc(alertId.toString())
+                  .get();
+              if (doc.exists) {
+                final d = doc.data()!;
+                final et = (d['emergency_type'] ?? '').toString().trim();
+                final ai = (d['additional_info'] ?? '').toString().trim();
+                String composed = '';
+                if (et.isNotEmpty) composed = et;
+                if (ai.isNotEmpty) {
+                  composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+                }
+                if (composed.isNotEmpty) {
+                  body = composed;
+                }
+              }
+            } catch (e) {
+              print('❌ Error fetching emergency doc for FCM message: $e');
+            }
+          } else {
+            final incidentId = data['incidentId'] ?? data['incident_id'] ?? '';
+            if (incidentId != null && incidentId.toString().isNotEmpty) {
+              try {
+                final doc = await FirebaseFirestore.instance
+                    .collection('incident_report')
+                    .doc(incidentId.toString())
+                    .get();
+                if (doc.exists) {
+                  final d = doc.data()!;
+                  final it = (d['incident_type'] ?? '').toString().trim();
+                  final ai = (d['additional_info'] ?? '').toString().trim();
+                  String composed = '';
+                  if (it.isNotEmpty) composed = it;
+                  if (ai.isNotEmpty) {
+                    composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+                  }
+                  if (composed.isNotEmpty) {
+                    body = composed;
+                  }
+                }
+              } catch (e) {
+                print('❌ Error fetching incident doc for FCM message: $e');
+              }
+            }
+          }
+        }
+
+        try {
+          // Show a local notification mirroring the FCM message
+          const androidDetails = AndroidNotificationDetails(
+            'emergency_channel',
+            'Emergency Alerts',
+            importance: Importance.max,
+            priority: Priority.high,
+            playSound: true,
+          );
+          final details = NotificationDetails(android: androidDetails);
+          await _notifications.show(
+            message.hashCode,
+            title,
+            body,
+            details,
+            payload: data['alertId'] ?? data['alert_id'] ?? '',
+          );
+        } catch (e) {
+          print('❌ Error showing local notif from FCM: $e');
+        }
+      });
+
+      // When the app is opened from a notification
+      FirebaseMessaging.onMessageOpenedApp.listen((
+        RemoteMessage message,
+      ) async {
+        final data = message.data;
+        final alertId = data['alertId'] ?? data['alert_id'] ?? '';
+        if (alertId != null && alertId.toString().isNotEmpty) {
+          await _showModal(alertId.toString());
+          return;
+        }
+
+        final incidentId = data['incidentId'] ?? data['incident_id'] ?? '';
+        if (incidentId != null && incidentId.toString().isNotEmpty) {
+          // Navigate to nurse home (adjust as needed to open incident details)
+          navigatorKey.currentState?.push(
+            MaterialPageRoute(builder: (_) => NurseHomeScreen()),
+          );
+        }
+      });
+
+      // Handle when app is launched from terminated state via notification
+      FirebaseMessaging.instance.getInitialMessage().then((
+        RemoteMessage? message,
+      ) async {
+        if (message != null) {
+          final data = message.data;
+          final alertId = data['alertId'] ?? data['alert_id'] ?? '';
+          if (alertId != null && alertId.toString().isNotEmpty) {
+            // Delay slightly to allow navigator to be ready
+            Future.delayed(const Duration(milliseconds: 500), () async {
+              await _showModal(alertId.toString());
+            });
+            return;
+          }
+
+          final incidentId = data['incidentId'] ?? data['incident_id'] ?? '';
+          if (incidentId != null && incidentId.toString().isNotEmpty) {
+            Future.delayed(const Duration(milliseconds: 500), () async {
+              navigatorKey.currentState?.push(
+                MaterialPageRoute(builder: (_) => NurseHomeScreen()),
+              );
+            });
+          }
+        }
+      });
+    } catch (e) {
+      print('❌ FirebaseMessaging init error: $e');
+    }
   }
 
   static Future<void> showEmergencyAlert({
@@ -80,6 +331,21 @@ class EmergencyService {
         ? DateFormat('M/dd/yyyy | h:mm a').format(timestampRaw)
         : 'Unknown time';
 
+    // Compose description: prefer provided description, but fall back to
+    // emergency_type and additional_info values (value-only, no labels)
+    String finalDescription = description.toString().trim();
+    if (finalDescription.isEmpty ||
+        finalDescription.toLowerCase() == 'no description') {
+      final et = (data['emergency_type'] ?? '').toString().trim();
+      final ai = (data['additional_info'] ?? '').toString().trim();
+      String composed = '';
+      if (et.isNotEmpty) composed = et;
+      if (ai.isNotEmpty) {
+        composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+      }
+      finalDescription = composed.isNotEmpty ? composed : 'No description';
+    }
+
     try {
       _audioPlayer.setReleaseMode(ReleaseMode.loop);
       await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
@@ -102,7 +368,7 @@ class EmergencyService {
       await _notifications.show(
         0,
         '🚨 Emergency Alert - $houseName at $formattedTime',
-        description,
+        finalDescription,
         notifDetails,
         payload: alertId,
       );
@@ -112,7 +378,7 @@ class EmergencyService {
 
     await _showModal(
       alertId,
-      description: description,
+      description: finalDescription,
       timestamp: formattedTime,
     );
   }
@@ -138,6 +404,8 @@ class EmergencyService {
 
       final data = doc.data()!;
       final descriptionData = data['alert_description'] ?? 'No description';
+      final emergencyType = data['emergency_type'] ?? '';
+      final additionalInfo = data['additional_info'] ?? '';
       final timestampRaw = data['alert_timestamp']?.toDate();
       final formattedTime = timestampRaw != null
           ? DateFormat('M/dd/yyyy | h:mm a').format(timestampRaw)
@@ -168,6 +436,8 @@ class EmergencyService {
           alertTimestamp: formattedTime,
           houseName: houseName,
           caregiverName: caregiverName,
+          emergencyType: emergencyType,
+          additionalInfo: additionalInfo,
         ),
       );
     } catch (e) {

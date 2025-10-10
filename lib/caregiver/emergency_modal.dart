@@ -8,6 +8,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
   String? selectedHouse = defaultHouse;
   String selectedType = "Medical"; // default
   String emergencyDetails = '';
+  String additionalInfo = '';
   bool acknowledged = false;
 
   final List<String> houses = [
@@ -18,7 +19,17 @@ Future<Map<String, dynamic>?> showEmergencyModal(
     'St. Gabriel',
   ];
 
+  final List<String> emergencyTypes = [
+    'Medical',
+    'Fire',
+    'Security',
+    'Environmental',
+    'Equipment',
+    'Other',
+  ];
+
   final TextEditingController detailsController = TextEditingController();
+  final TextEditingController additionalController = TextEditingController();
 
   return await showModalBottomSheet<Map<String, dynamic>>(
     context: context,
@@ -141,6 +152,53 @@ Future<Map<String, dynamic>?> showEmergencyModal(
 
                       const SizedBox(height: 18),
 
+                      // Emergency Type
+                      Row(
+                        children: [
+                          const Icon(Icons.warning, color: Color(0xFF00588e)),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Type of Emergency?',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Color(0xFF00588e),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE6F3FA),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedType,
+                            isExpanded: true,
+                            icon: const Icon(
+                              Icons.arrow_drop_down,
+                              color: Color(0xFF00588e),
+                            ),
+                            items: emergencyTypes.map((type) {
+                              return DropdownMenuItem<String>(
+                                value: type,
+                                child: Text(type),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              setState(() {
+                                selectedType = value!;
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 18),
+
                       // Details
                       Row(
                         children: [
@@ -168,13 +226,55 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                         child: TextField(
                           controller: detailsController,
                           maxLines: 5,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             hintText: 'Write here what happened...',
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.all(12),
+                            prefixText: '$selectedType: ',
+                            prefixStyle: const TextStyle(
+                              color: Color(0xFF00588e),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          onChanged: (val) {
+                            emergencyDetails = val;
+                          },
+                        ),
+                      ),
+
+                      const SizedBox(height: 18),
+
+                      // Additional Info
+                      Row(
+                        children: [
+                          const Icon(Icons.info, color: Color(0xFF00588e)),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Additional Information (Optional)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Color(0xFF00588e),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE6F3FA),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: TextField(
+                          controller: additionalController,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            hintText: 'Any additional details...',
                             border: InputBorder.none,
                             contentPadding: EdgeInsets.all(12),
                           ),
                           onChanged: (val) {
-                            emergencyDetails = val;
+                            additionalInfo = val;
                           },
                         ),
                       ),
@@ -242,6 +342,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                                     "houseName": selectedHouse,
                                     "type": selectedType,
                                     "description": emergencyDetails,
+                                    "additionalInfo": additionalInfo,
                                     "caregiverName": caregiverName,
                                   });
                                 }

@@ -1,6 +1,8 @@
+import 'package:elderlink_app/nurse/leave_form.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'edit_profile.dart';
 import 'nurse_sidebar.dart';
 import 'package:intl/intl.dart';
 
@@ -55,7 +57,18 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         }
       }
     } catch (e) {
-      print(' Error loading nurse data: $e');
+      print("❌ Error loading nurse data: $e");
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    await FirebaseAuth.instance.signOut();
+    if (mounted) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        '/get_started',
+        (route) => false,
+      );
     }
   }
 
@@ -158,7 +171,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                         }
                         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                           return const Center(
-                            child: Text('No emergency alerts yet.'),
+                            child: Text("No emergency alerts yet."),
                           );
                         }
 
@@ -240,7 +253,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       const Text(
-                                        'Reporting Caregiver: ',
+                                        "Reporting Caregiver: ",
                                         style: TextStyle(
                                           fontWeight: FontWeight.bold,
                                           color: Colors.black,
@@ -260,7 +273,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                   const SizedBox(height: 12),
                                   // What happened label
                                   const Text(
-                                    'What happened?',
+                                    "What happened?",
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       color: Colors.black,
@@ -352,14 +365,114 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               ),
             ),
           // Sidebar
-          if (isSidebarOpen)
-            NurseSidebar(
-              isSidebarOpen: isSidebarOpen,
-              toggleSidebar: toggleSidebar,
-              parentContext: context,
-            ),
+          if (isSidebarOpen) NurseSidebar(
+            onLogout: _handleLogout,
+            isSidebarOpen: isSidebarOpen,
+            toggleSidebar: toggleSidebar,
+            parentContext: context,
+          ),
         ],
       ),
+    );
+  }
+
+
+
+      children: [
+        GestureDetector(
+          onTap: toggleSidebar,
+          child: Container(color: Colors.black54),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: 0,
+          child: Material(
+            elevation: 5,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(10),
+              bottomRight: Radius.circular(10),
+            ),
+            child: Container(
+              width: 250,
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(color: Colors.white),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 50),
+                  Text(
+                    nurseName != null ? "Nurse $nurseName" : "No name found",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
+                    title: const Text("Edit Profile"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EditProfile(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.settings,
+                      color: Color(0xFF00588E),
+                    ),
+                    title: const Text("Request Leave"),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const LeaveForm(),
+                        ),
+                      );
+                    },
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFF00588E),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 60,
+                        ),
+                      ),
+                      onPressed: () {
+                        toggleSidebar();
+                        // TODO: add logout
+                      },
+                      child: const Text(
+                        'LOGOUT',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

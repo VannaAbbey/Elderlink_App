@@ -26,62 +26,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   bool isSidebarOpen = false;
   String? selectedHouseId; // track selected house
 
-  // 🔹 Improved: Scroll controller for horizontal tab scroll
-  final ScrollController _tabScrollController = ScrollController();
-
-  // 🔹 Improved: Auto-scroll to center selected tab with dynamic tab width calculation
-  void _scrollToCenter(int index, List<Map<String, dynamic>> houses) {
-    if (!_tabScrollController.hasClients) return;
-
-    // Calculate approximate tab width based on text length and icon
-    double calculateTabWidth(String houseName) {
-      // Base width for icon + padding
-      double baseWidth = 24 + 8 + 20; // icon(24) + spacing(8) + padding(20)
-      // Add text width (rough estimate: ~8-10px per character)
-      double textWidth = houseName.length * 9.0;
-      return baseWidth + textWidth + 40; // extra padding
-    }
-
-    // Calculate scroll position to center the selected tab
-    double scrollPosition = 0.0;
-    for (int i = 0; i < index; i++) {
-      scrollPosition += calculateTabWidth(houses[i]['house_name'] ?? '');
-    }
-
-    final double screenWidth = MediaQuery.of(context).size.width;
-    final double selectedTabWidth = calculateTabWidth(
-      houses[index]['house_name'] ?? '',
-    );
-    final double targetScroll =
-        scrollPosition - (screenWidth / 2) + (selectedTabWidth / 2);
-
-    // Ensure scroll position stays within bounds
-    final double maxScroll = _tabScrollController.position.maxScrollExtent;
-    final double clampedScroll = targetScroll.clamp(0.0, maxScroll);
-
-    // Smooth animation with better curve and physics
-    _tabScrollController
-        .animateTo(
-          clampedScroll,
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeOutCubic,
-        )
-        .then((_) {
-          // Optional: Add a subtle bounce effect at the end for better UX
-          if (clampedScroll > 0 && clampedScroll < maxScroll) {
-            Future.delayed(const Duration(milliseconds: 50), () {
-              if (_tabScrollController.hasClients) {
-                _tabScrollController.animateTo(
-                  clampedScroll,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.elasticOut,
-                );
-              }
-            });
-          }
-        });
-  }
-
   final Map<String, String> houseDescriptions = const {
     'St. Sebastian': 'Females with Psychological Needs',
     'St. Emmanuel': 'Females that are Bedridden',
@@ -94,12 +38,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   void initState() {
     super.initState();
     _loadNurseData();
-  }
-
-  @override
-  void dispose() {
-    _tabScrollController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadNurseData() async {
@@ -129,7 +67,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => ActivityLogsScreen(
-          houseId: selectedHouseId ?? 'H001',
+          houseId: selectedHouseId ?? 'H001', // Use selected house or default
           nurseName: nurseName,
         ),
       ),
@@ -153,7 +91,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
     final snap = await _firestore
         .collection('elderly')
         .where('house_id', isEqualTo: houseId)
-        .where('elderly_status', isEqualTo: 'Alive')
+        .where('elderly_status', isEqualTo: 'Alive') // optional filter
         .get();
 
     final list = snap.docs.map((d) {
@@ -168,6 +106,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
       };
     }).toList();
 
+    // Apply search filter
     if (_search.isNotEmpty) {
       return list
           .where(
@@ -248,105 +187,51 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                         length: houses.length,
                         child: Column(
                           children: [
-                            // 🩶 House Tabs — fixed divider + auto-scroll center
-                            Stack(
-                              children: [
-                                Positioned(
-                                  bottom: 0,
-                                  left: 0,
-                                  right: 0,
-                                  child: Container(
-                                    height: 1,
-                                    color: Colors.grey.shade400,
+                            // House Tabs
+                            Transform.translate(
+                              offset: const Offset(-32, 0),
+                              child: Material(
+                                color: Colors.white,
+                                child: TabBar(
+                                  isScrollable: true,
+                                  labelColor: const Color(0xFF00588E),
+                                  unselectedLabelColor: Colors.grey,
+                                  indicatorColor: const Color(0xFF00588E),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 0,
                                   ),
-                                ),
-                                SingleChildScrollView(
-                                  controller: _tabScrollController,
-                                  scrollDirection: Axis.horizontal,
-                                  physics: const BouncingScrollPhysics(),
-                                  child: Transform.translate(
-                                    offset: const Offset(-32, 0),
-                                    child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        minWidth:
-                                            MediaQuery.of(context).size.width +
-                                            64, // extended right side
+                                  tabs: houses.map((house) {
+                                    print(
+                                      '🏠 Creating tab for house: ${house['house_name']} with ID: ${house['house_id']}',
+                                    );
+                                    return Tab(
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            child: Image.asset(
+                                              'assets/images/${house['house_name']?.toString().replaceAll('St. ', '').replaceAll(' ', '')}_Logo.png',
+                                              width: 24,
+                                              height: 24,
+                                              errorBuilder:
+                                                  (context, error, stackTrace) {
+                                                    return const Icon(
+                                                      Icons.home,
+                                                    );
+                                                  },
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(house['house_name'] ?? ''),
+                                        ],
                                       ),
-                                      child: Material(
-                                        color: Colors.white,
-                                        child: TabBar(
-                                          isScrollable: true,
-                                          labelColor: const Color(0xFF00588E),
-                                          unselectedLabelColor: Colors.grey,
-                                          indicator:
-                                              const UnderlineTabIndicator(
-                                                borderSide: BorderSide(
-                                                  color: Color(0xFF00588E),
-                                                  width: 3,
-                                                ),
-                                                insets: EdgeInsets.symmetric(
-                                                  horizontal: -20,
-                                                ),
-                                              ),
-                                          labelPadding:
-                                              const EdgeInsets.symmetric(
-                                                horizontal: 20,
-                                              ),
-                                          physics:
-                                              const BouncingScrollPhysics(),
-                                          onTap: (index) {
-                                            WidgetsBinding.instance
-                                                .addPostFrameCallback((_) {
-                                                  _scrollToCenter(
-                                                    index,
-                                                    houses,
-                                                  );
-                                                });
-                                          },
-                                          tabs: houses.map((house) {
-                                            return Tab(
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    child: Image.asset(
-                                                      'assets/images/${house['house_name']?.toString().replaceAll('St. ', '').replaceAll(' ', '')}_Logo.png',
-                                                      width: 24,
-                                                      height: 24,
-                                                      errorBuilder:
-                                                          (
-                                                            context,
-                                                            error,
-                                                            stackTrace,
-                                                          ) {
-                                                            return const Icon(
-                                                              Icons.home,
-                                                            );
-                                                          },
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    house['house_name'] ?? '',
-                                                    style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          }).toList(),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                                    );
+                                  }).toList(),
                                 ),
-                              ],
+                              ),
                             ),
 
                             // House Content
@@ -357,6 +242,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                                     length: 3,
                                     child: Column(
                                       children: [
+                                        // Vital Status Tabs
                                         TabBar(
                                           labelColor: const Color(0xFF00588E),
                                           unselectedLabelColor: Colors.grey,
@@ -369,11 +255,16 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                                             Tab(text: 'Missed'),
                                           ],
                                         ),
+
+                                        // Vital Content
                                         Expanded(
                                           child: TabBarView(
                                             children: [
                                               Builder(
                                                 builder: (context) {
+                                                  print(
+                                                    '🔄 Creating UpcomingVitalsTab for house: ${house['house_name']} with ID: ${house['house_id']}',
+                                                  );
                                                   return UpcomingVitalsTab(
                                                     houseId: house['house_id'],
                                                     nurseName: nurseName,

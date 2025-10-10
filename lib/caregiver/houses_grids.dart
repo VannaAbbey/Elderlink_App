@@ -10,7 +10,8 @@ class AliveProfilesGrid extends StatelessWidget {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
-        childAspectRatio: 0.85,
+        // Make cards taller than they are wide (width / height < 1)
+        childAspectRatio: 0.6,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
@@ -23,28 +24,33 @@ class AliveProfilesGrid extends StatelessWidget {
           ),
           color: Color(0xFFC1E5E9),
           elevation: 2,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.asset(
-                  'assets/images/people_icon.png',
-                  width: 80,
-                  height: 80,
-                  fit: BoxFit.cover,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(
+                    'assets/images/people_icon.png',
+                    width: 90,
+                    height: 120,
+                    fit: BoxFit.cover,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                profile['name'] ?? '',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: Color(0xFF00588e),
+                const SizedBox(height: 12),
+                Text(
+                  profile['name'] ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Color(0xFF00588e),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -62,7 +68,8 @@ class DeceasedProfilesGrid extends StatelessWidget {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
-        childAspectRatio: 0.85,
+        // Make cards taller than they are wide (width / height < 1)
+        childAspectRatio: 0.6,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
@@ -75,28 +82,33 @@ class DeceasedProfilesGrid extends StatelessWidget {
           ),
           color: Color(0xFFB0B0B0), // Different color for deceased
           elevation: 2,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.asset(
-                  'assets/images/people_icon.png',
-                  width: 80,
-                  height: 80,
-                  fit: BoxFit.cover,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(
+                    'assets/images/people_icon.png',
+                    width: 90,
+                    height: 120,
+                    fit: BoxFit.cover,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                profile['name'] ?? '',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: Color(0xFF7A7A7A), // Muted color for deceased
+                const SizedBox(height: 12),
+                Text(
+                  profile['name'] ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Color(0xFF7A7A7A), // Muted color for deceased
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },

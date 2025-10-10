@@ -24,6 +24,62 @@ class _MedicationManagementScreenState
   bool isSidebarOpen = false;
   String? selectedHouseId; // track selected house
 
+  // 🔹 Improved: Scroll controller for horizontal tab scroll
+  final ScrollController _tabScrollController = ScrollController();
+
+  // 🔹 Improved: Auto-scroll to center selected tab with dynamic tab width calculation
+  void _scrollToCenter(int index, List<Map<String, dynamic>> houses) {
+    if (!_tabScrollController.hasClients) return;
+
+    // Calculate approximate tab width based on text length and icon
+    double calculateTabWidth(String houseName) {
+      // Base width for icon + padding
+      double baseWidth = 24 + 8 + 20; // icon(24) + spacing(8) + padding(20)
+      // Add text width (rough estimate: ~8-10px per character)
+      double textWidth = houseName.length * 9.0;
+      return baseWidth + textWidth + 40; // extra padding
+    }
+
+    // Calculate scroll position to center the selected tab
+    double scrollPosition = 0.0;
+    for (int i = 0; i < index; i++) {
+      scrollPosition += calculateTabWidth(houses[i]['house_name'] ?? '');
+    }
+
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double selectedTabWidth = calculateTabWidth(
+      houses[index]['house_name'] ?? '',
+    );
+    final double targetScroll =
+        scrollPosition - (screenWidth / 2) + (selectedTabWidth / 2);
+
+    // Ensure scroll position stays within bounds
+    final double maxScroll = _tabScrollController.position.maxScrollExtent;
+    final double clampedScroll = targetScroll.clamp(0.0, maxScroll);
+
+    // Smooth animation with better curve and physics
+    _tabScrollController
+        .animateTo(
+          clampedScroll,
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeOutCubic,
+        )
+        .then((_) {
+          // Optional: Add a subtle bounce effect at the end for better UX
+          if (clampedScroll > 0 && clampedScroll < maxScroll) {
+            Future.delayed(const Duration(milliseconds: 50), () {
+              if (_tabScrollController.hasClients) {
+                _tabScrollController.animateTo(
+                  clampedScroll,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.elasticOut,
+                );
+              }
+            });
+          }
+        });
+  }
+
   final Map<String, String> houseDescriptions = const {
     'St. Sebastian': 'Females with Psychological Needs',
     'St. Emmanuel': 'Females that are Bedridden',
@@ -36,6 +92,12 @@ class _MedicationManagementScreenState
   void initState() {
     super.initState();
     _loadNurseData();
+  }
+
+  @override
+  void dispose() {
+    _tabScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadNurseData() async {
@@ -214,6 +276,8 @@ class _MedicationManagementScreenState
         setState(() => selectedHouseId = houseId);
       },
       onBellPressed: _onBellPressed,
+      tabScrollController: _tabScrollController,
+      scrollToCenter: _scrollToCenter,
     );
   }
 }

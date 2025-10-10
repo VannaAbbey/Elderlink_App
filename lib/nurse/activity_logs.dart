@@ -898,52 +898,98 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Activity Logs',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: Color(0xFF00588E),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.print, color: Colors.white),
-            tooltip: 'Generate PDF Report',
-            onPressed: () async {
-              final report = ActivityReport();
-              await report.generateAndShareReport(
-                houseId: widget.houseId,
-                nurseName: widget.nurseName ?? 'Unknown Nurse',
-                context: context,
-              );
-            },
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: [
-            Tab(
-              icon: Icon(Icons.medication, color: Colors.white),
-              text: 'Medications',
-            ),
-            Tab(
-              icon: Icon(Icons.favorite, color: Colors.white),
-              text: 'Vital Signs',
-            ),
-          ],
-          indicatorColor: Colors.white,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white70,
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Stack(
         children: [
-          // Medication Activities Tab
-          _buildMedicationTab(),
-          // Vitals Activities Tab
-          _buildVitalsTab(),
+          // Background
+          Positioned.fill(
+            child: Image.asset(
+              'assets/images/background1.png',
+              fit: BoxFit.cover,
+            ),
+          ),
+
+          // Main Content
+          SafeArea(
+            child: Column(
+              children: [
+                // Header Row
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.arrow_back,
+                          size: 30,
+                          color: Color(0xFF00588E),
+                        ),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          "Activity Logs",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF00588E),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.print, color: Color(0xFF00588E)),
+                        iconSize: 30,
+                        tooltip: 'Generate PDF Report',
+                        onPressed: () async {
+                          final report = ActivityReport();
+                          await report.generateAndShareReport(
+                            houseId: widget.houseId,
+                            nurseName: widget.nurseName ?? 'Unknown Nurse',
+                            context: context,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Tab Bar
+                Material(
+                  color: Colors.white,
+                  child: TabBar(
+                    controller: _tabController,
+                    tabs: const [
+                      Tab(
+                        icon: Icon(Icons.medication, color: Color(0xFF00588E)),
+                        text: 'Medications',
+                      ),
+                      Tab(
+                        icon: Icon(Icons.favorite, color: Color(0xFF00588E)),
+                        text: 'Vital Signs',
+                      ),
+                    ],
+                    indicatorColor: const Color(0xFF00588E),
+                    labelColor: const Color(0xFF00588E),
+                    unselectedLabelColor: Colors.grey,
+                  ),
+                ),
+
+                // Tab Content
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      // Medication Activities Tab
+                      _buildMedicationTab(),
+                      // Vitals Activities Tab
+                      _buildVitalsTab(),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

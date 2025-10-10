@@ -84,65 +84,70 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   );
 
   if (result != null) {
-  // ✅ Hanapin nurses na naka-duty today at this shift
-  final nurseQuery = await FirebaseFirestore.instance
-      .collection("nurse_shift_assign")
-      .where("is_current", isEqualTo: true)
-      .get();
+    // ✅ Hanapin nurses na naka-duty today at this shift
+    final nurseQuery = await FirebaseFirestore.instance
+        .collection("nurse_shift_assign")
+        .where("is_current", isEqualTo: true)
+        .get();
 
-  List<String> activeNurseIds = [];
+    List<String> activeNurseIds = [];
 
-  for (var doc in nurseQuery.docs) {
-    final data = doc.data();
+    for (var doc in nurseQuery.docs) {
+      final data = doc.data();
 
-    final List assignedDays = (data["days_assigned"] ?? []) as List;
-    final String startStr = data["start_time"];
-    final String endStr = data["end_time"];
-    final String nurseId = data["nurse_id"];
-    final String nurseShift = data["shift"];
+      final List assignedDays = (data["days_assigned"] ?? []) as List;
+      final String startStr = data["start_time"];
+      final String endStr = data["end_time"];
+      final String nurseId = data["nurse_id"];
+      final String nurseShift = data["shift"];
 
-    // check if today is assigned
-    if (!assignedDays.contains(todayName)) continue;
+      // check if today is assigned
+      if (!assignedDays.contains(todayName)) continue;
 
-    // check if time fits
-    final start = _parseTimeOfDay(startStr);
-    final end = _parseTimeOfDay(endStr);
-    bool inShift;
+      // check if time fits
+      final start = _parseTimeOfDay(startStr);
+      final end = _parseTimeOfDay(endStr);
+      bool inShift;
 
-    if (nurseShift == "3rd") {
-      // 22:00 – 06:00 case
-      inShift = now.hour >= start.hour || now.hour < end.hour;
-    } else {
-      inShift = (now.hour >= start.hour && now.hour < end.hour);
+      if (nurseShift == "3rd") {
+        // 22:00 – 06:00 case
+        inShift = now.hour >= start.hour || now.hour < end.hour;
+      } else {
+        inShift = (now.hour >= start.hour && now.hour < end.hour);
+      }
+
+      if (inShift) {
+        activeNurseIds.add(nurseId);
+      }
     }
 
-    if (inShift) {
-      activeNurseIds.add(nurseId);
+    if (activeNurseIds.isEmpty) {
+      _showError(context, "No nurse is currently on duty for this shift.");
+      return;
     }
+
+    // ✅ Save to Firestore with BOTH house_id & house_name
+    await FirebaseFirestore.instance.collection("emergency_alert").add({
+      "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
+      "alert_description": result["description"],
+      "emergency_type": result["type"],
+      "additional_info": result["additionalInfo"],
+      "alert_timestamp": DateTime.now(),
+      "alert_verify": false,
+      "house_id": houseNameToId[result["houseName"]] ?? "",
+      "house_name": result["houseName"],
+      "user_id_cg": user.uid,
+      "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "🚨 Emergency alert sent to ${activeNurseIds.length} nurse(s)!",
+        ),
+      ),
+    );
   }
-
-  if (activeNurseIds.isEmpty) {
-    _showError(context, "No nurse is currently on duty for this shift.");
-    return;
-  }
-
-  // ✅ Save to Firestore with BOTH house_id & house_name
-  await FirebaseFirestore.instance.collection("emergency_alert").add({
-    "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
-    "alert_description": result["description"],
-    "alert_timestamp": DateTime.now(),
-    "alert_verify": false,
-    "house_id": houseNameToId[result["houseName"]] ?? "",
-    "house_name": result["houseName"],
-    "user_id_cg": user.uid,
-    "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
-  });
-
-  ScaffoldMessenger.of(context).showSnackBar(
-  SnackBar(content: Text("🚨 Emergency alert sent to ${activeNurseIds.length} nurse(s)!")),
-);
-}
-
 }
 
 void _showError(BuildContext context, String msg) {
@@ -238,8 +243,9 @@ const Map<String, String> houseIdToName = {
 };
 
 /// 🔹 Reverse mapping House Name → House ID
-final Map<String, String> houseNameToId =
-    houseIdToName.map((key, value) => MapEntry(value, key));
+final Map<String, String> houseNameToId = houseIdToName.map(
+  (key, value) => MapEntry(value, key),
+);
 
 /// 🔹 Para maayos ang pagkakasunod ng araw
 const Map<String, int> _dayOrder = {
@@ -255,8 +261,10 @@ const Map<String, int> _dayOrder = {
 // ✅ Kunin caregiver display name
 Future<String> _getCaregiverName(String uid) async {
   try {
-    final userDoc =
-        await FirebaseFirestore.instance.collection("users").doc(uid).get();
+    final userDoc = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(uid)
+        .get();
 
     if (userDoc.exists) {
       final data = userDoc.data()!;
@@ -278,4 +286,3 @@ Future<String> _getCaregiverName(String uid) async {
     return "Unknown Caregiver";
   }
 }
-

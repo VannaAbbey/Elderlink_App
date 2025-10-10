@@ -1,10 +1,8 @@
 // lib/nurse/vitals_monitoring_layout.dart
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'vital_monitoring_details.dart';
 import 'activity_logs.dart';
-import 'edit_profile.dart';
-import 'leave_form.dart';
+import 'nurse_sidebar.dart';
 
 class VitalMonitoringLayout extends StatefulWidget {
   final String search;
@@ -63,7 +61,12 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.only(
+                left: 0,
+                right: 8,
+                top: 16,
+                bottom: 16,
+              ),
               child: Column(
                 children: [
                   // Header Row
@@ -221,7 +224,19 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
               ),
             ),
           ),
-          if (widget.isSidebarOpen) _buildSidebarOverlay(context),
+          // Sidebar overlay - positioned to cover entire screen
+          if (widget.isSidebarOpen)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: NurseSidebar(
+                isSidebarOpen: widget.isSidebarOpen,
+                toggleSidebar: widget.toggleSidebar,
+                parentContext: context,
+              ),
+            ),
         ],
       ),
     );
@@ -247,6 +262,7 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
             .toList();
 
         return ListView(
+          padding: EdgeInsets.zero,
           children: houses.map((house) {
             final houseName = house['house_name'] ?? 'Unknown House';
             final desc = widget.houseDescriptions[houseName] ?? '';
@@ -258,8 +274,13 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
             return GestureDetector(
               onTap: () => widget.onHouseSelected(house['house_id'].toString()),
               child: Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.only(bottom: 12, left: 0),
+                padding: const EdgeInsets.only(
+                  left: 0,
+                  right: 16,
+                  top: 16,
+                  bottom: 16,
+                ),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
                   color: const Color(0xFFE7EFFF),
@@ -394,119 +415,6 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
           },
         );
       },
-    );
-  }
-
-  Widget _buildSidebarOverlay(BuildContext context) {
-    void handleLogout() async {
-      await FirebaseAuth.instance.signOut();
-      Navigator.pushReplacementNamed(context, '/login');
-    }
-
-    Widget sidebarItem(IconData icon, String title) {
-      return ListTile(
-        leading: Icon(icon, color: const Color(0xFF00588E)),
-        title: Text(title),
-        onTap: () {
-          print('$title tapped');
-        },
-      );
-    }
-
-    return Stack(
-      children: [
-        GestureDetector(
-          onTap: widget.toggleSidebar,
-          child: Container(color: Colors.black54),
-        ),
-        Positioned(
-          top: 0,
-          bottom: 0,
-          left: 0,
-          child: Material(
-            elevation: 5,
-            borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(10),
-              bottomRight: Radius.circular(10),
-            ),
-            child: Container(
-              width: 250,
-              padding: const EdgeInsets.all(16),
-              color: Colors.white,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const SizedBox(height: 50),
-                  Text(
-                    widget.nurseName != null && widget.nurseName!.isNotEmpty
-                        ? 'Nurse ${widget.nurseName!.split(' ').first}'
-                        : 'No name found',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const Divider(),
-                  ListTile(
-                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
-                    title: const Text("Edit Profile"),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const EditProfile(),
-                        ),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(
-                      Icons.settings,
-                      color: Color(0xFF00588E),
-                    ),
-                    title: const Text("Request Leave"),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const LeaveForm(),
-                        ),
-                      );
-                    },
-                  ),
-                  const Divider(),
-                  const SizedBox(height: 20),
-                  Center(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1D5B78),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 10,
-                          horizontal: 60,
-                        ),
-                      ),
-                      onPressed: handleLogout,
-                      child: const Text(
-                        'LOGOUT',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

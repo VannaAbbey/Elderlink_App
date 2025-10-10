@@ -10,8 +10,7 @@ import 'vital_monitoring.dart';
 import 'emergency.dart';
 import 'nurse_bottom_navbar.dart';
 import 'incident_report.dart';
-import 'edit_profile.dart';
-import 'leave_form.dart';
+import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import 'activity_logs.dart';
 
@@ -290,18 +289,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     }
   }
 
-  Future<void> _handleLogout() async {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    await authProvider.signOut();
-    if (mounted) {
-      Navigator.pushNamedAndRemoveUntil(
-        context,
-        '/get_started',
-        (route) => false,
-      );
-    }
-  }
-
   void toggleSidebar() {
     setState(() {
       isSidebarOpen = !isSidebarOpen;
@@ -352,7 +339,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       ),
                     ),
                   ),
-                  if (isSidebarOpen) _buildSidebarOverlay(),
+                  if (isSidebarOpen)
+                    NurseSidebar(
+                      isSidebarOpen: isSidebarOpen,
+                      toggleSidebar: toggleSidebar,
+                      parentContext: context,
+                    ),
                 ],
               )
             : _screens[selectedIndex],
@@ -464,7 +456,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ),
           const SizedBox(height: 10),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               ElevatedButton.icon(
                 onPressed: _showAddTaskDialog,
@@ -481,87 +473,127 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          StreamBuilder<QuerySnapshot>(
-            stream: _firestore
-                .collection('medical_tasks')
-                .orderBy('task_start')
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return const Text("No tasks available.");
-              }
-
-              final tasks = snapshot.data!.docs.map((doc) {
-                final task = doc.data() as Map<String, dynamic>;
-                task['task_id'] = doc.id; // assign doc ID
-                return task;
-              }).toList();
-
-              return ListView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                itemCount: tasks.length,
-                itemBuilder: (context, index) {
-                  final task = tasks[index];
-                  final title = task['task_title'] ?? '';
-                  final description = task['task_description'] ?? '';
-                  final start = task['task_start'] != null
-                      ? (task['task_start'] as Timestamp).toDate()
-                      : DateTime.now();
-                  final formattedTime = TimeOfDay.fromDateTime(
-                    start,
-                  ).format(context);
-
-                  // Schedule notification and dialog if not already shown
-                  final taskId = task['task_id'];
-                  if (!_shownTaskDialogs.containsKey(taskId) &&
-                      start.isAfter(DateTime.now())) {
-                    _shownTaskDialogs[taskId] = true;
-
-                    NotificationService.scheduleTaskNotification(
-                      id: taskId.hashCode,
-                      title: title,
-                      body: description,
-                      dateTime: start,
-                    );
-
-                    Future.delayed(start.difference(DateTime.now()), () async {
-                      if (mounted) {
-                        await _showTaskDialog(taskId, title, description);
-                      }
-                    });
-                  }
-
-                  // Color based on category
-                  final category = task['task_category'] ?? 'Other';
-                  Color bgColor;
-                  switch (category) {
-                    case 'Vitals':
-                      bgColor = Colors.orange[200]!;
-                      break;
-                    case 'Medication':
-                      bgColor = Colors.yellow[200]!;
-                      break;
-                    case 'Assessment':
-                      bgColor = Colors.blue[200]!;
-                      break;
-                    default:
-                      bgColor = Colors.grey[200]!;
-                  }
-
-                  return _medicalTaskCard(
-                    title,
-                    description,
-                    formattedTime,
-                    bgColor,
-                    taskId: taskId,
+          // Inner container for tasks
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color.fromARGB(255, 232, 244, 248),
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(
+                color: const Color.fromARGB(255, 70, 179, 247).withOpacity(0.2),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: StreamBuilder<QuerySnapshot>(
+              stream: _firestore
+                  .collection('medical_tasks')
+                  .orderBy('task_start')
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: CircularProgressIndicator(),
+                    ),
                   );
-                },
-              );
-            },
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: Text(
+                        "No tasks available.",
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                final tasks = snapshot.data!.docs.map((doc) {
+                  final task = doc.data() as Map<String, dynamic>;
+                  task['task_id'] = doc.id; // assign doc ID
+                  return task;
+                }).toList();
+
+                return ListView.builder(
+                  physics: const NeverScrollableScrollPhysics(),
+                  shrinkWrap: true,
+                  itemCount: tasks.length,
+                  itemBuilder: (context, index) {
+                    final task = tasks[index];
+                    final title = task['task_title'] ?? '';
+                    final description = task['task_description'] ?? '';
+                    final start = task['task_start'] != null
+                        ? (task['task_start'] as Timestamp).toDate()
+                        : DateTime.now();
+                    final formattedTime = TimeOfDay.fromDateTime(
+                      start,
+                    ).format(context);
+
+                    // Schedule notification and dialog if not already shown
+                    final taskId = task['task_id'];
+                    if (!_shownTaskDialogs.containsKey(taskId) &&
+                        start.isAfter(DateTime.now())) {
+                      _shownTaskDialogs[taskId] = true;
+
+                      NotificationService.scheduleTaskNotification(
+                        id: taskId.hashCode,
+                        title: title,
+                        body: description,
+                        dateTime: start,
+                      );
+
+                      Future.delayed(
+                        start.difference(DateTime.now()),
+                        () async {
+                          if (mounted) {
+                            await _showTaskDialog(taskId, title, description);
+                          }
+                        },
+                      );
+                    }
+
+                    // Color based on category
+                    final category = task['task_category'] ?? 'Other';
+                    Color bgColor;
+                    switch (category) {
+                      case 'Vitals':
+                        bgColor = Colors.orange[200]!;
+                        break;
+                      case 'Medication':
+                        bgColor = Colors.yellow[200]!;
+                        break;
+                      case 'Assessment':
+                        bgColor = Colors.blue[200]!;
+                        break;
+                      default:
+                        bgColor = Colors.grey[200]!;
+                    }
+
+                    return _medicalTaskCard(
+                      title,
+                      description,
+                      formattedTime,
+                      bgColor,
+                      taskId: taskId,
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -1196,111 +1228,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               ),
             );
           },
-        ),
-      ],
-    );
-  }
-
-  // ---------------------- SIDEBAR ----------------------
-  Widget _buildSidebarOverlay() {
-    return Stack(
-      children: [
-        GestureDetector(
-          onTap: toggleSidebar,
-          child: Container(color: Colors.black54),
-        ),
-        Positioned(
-          top: 0,
-          bottom: 0,
-          left: 0,
-          child: Material(
-            elevation: 5,
-            child: Container(
-              width: 250,
-              padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(color: Colors.white),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 50),
-                  Center(
-                    child: Consumer<AuthProvider>(
-                      builder: (context, authProvider, child) {
-                        final firstName = authProvider.userFirstName;
-                        final displayName =
-                            (firstName.isEmpty || firstName == 'User')
-                            ? ''
-                            : firstName;
-                        return Text(
-                          displayName.isEmpty ? 'Nurse' : 'Nurse $displayName',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const Divider(),
-                  ListTile(
-                    leading: const Icon(Icons.edit, color: Color(0xFF00588E)),
-                    title: const Text("Edit Profile"),
-                    onTap: () {
-                      toggleSidebar();
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const EditProfile(),
-                        ),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(
-                      Icons.settings,
-                      color: Color(0xFF00588E),
-                    ),
-                    title: const Text("Request Leave"),
-                    onTap: () {
-                      toggleSidebar();
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const LeaveForm(),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  Center(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1D5B78),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 10,
-                          horizontal: 60,
-                        ),
-                      ),
-                      onPressed: _handleLogout,
-                      child: const Text(
-                        'LOGOUT',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
         ),
       ],
     );
