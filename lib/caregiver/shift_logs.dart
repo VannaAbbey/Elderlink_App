@@ -204,7 +204,7 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
         return null;
       }
 
-      // First, get the current caregiver's house assignment
+      // First, get the current caregiver's shift assignment to determine previous shift
       final currentCaregiverAssignQuery = await FirebaseFirestore.instance
           .collection('cg_house_assign')
           .where('caregiver_id', isEqualTo: user.uid)
@@ -216,52 +216,132 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
         return null;
       }
 
-      final currentHouseId = currentCaregiverAssignQuery.docs.first.data()['house_id'];
+      final currentCaregiverData = currentCaregiverAssignQuery.docs.first.data();
+      final currentHouseId = currentCaregiverData['house_id'];
+      final currentUserShift = currentCaregiverData['shift'] as String;
+      
       print('🏠 ShiftLogs: Current caregiver house: $currentHouseId');
+      print('🔄 ShiftLogs: Current caregiver shift: $currentUserShift');
 
-      // Get all caregivers assigned to the same house
-      final houseCaregiverQuery = await FirebaseFirestore.instance
+      // Determine the previous shift based on current shift
+      String previousShiftKey = '';
+      if (currentUserShift == '1st') {
+        previousShiftKey = '3rd'; // 1st shift sees 3rd shift logs
+      } else if (currentUserShift == '2nd') {
+        previousShiftKey = '1st'; // 2nd shift sees 1st shift logs
+      } else if (currentUserShift == '3rd') {
+        previousShiftKey = '2nd'; // 3rd shift sees 2nd shift logs
+      } else {
+        print('❌ ShiftLogs: Unknown shift type: $currentUserShift');
+        return null;
+      }
+
+      print('🔄 ShiftLogs: Looking for logs from previous shift: $previousShiftKey');
+
+      // Get caregivers from the PREVIOUS shift in the same house
+      final previousShiftCaregiverQuery = await FirebaseFirestore.instance
           .collection('cg_house_assign')
           .where('house_id', isEqualTo: currentHouseId)
+          .where('shift', isEqualTo: previousShiftKey)
           .get();
 
-      final houseCaregiversIds = houseCaregiverQuery.docs
-          .map((doc) => doc.data()['caregiver_id'] as String)
-          .toList();
+      final previousShiftCaregiversIds = <String>[];
+      final dayName = getDayName(targetDate);
+      
+      // Filter caregivers by who was actually scheduled to work on this day
+      for (var doc in previousShiftCaregiverQuery.docs) {
+        final data = doc.data();
+        final caregiverId = data['caregiver_id'] as String?;
+        final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
+        
+        if (caregiverId != null && daysAssigned.contains(dayName)) {
+          previousShiftCaregiversIds.add(caregiverId);
+          print('✅ ShiftLogs: Including previous shift caregiver: $caregiverId (works on $dayName)');
+        } else if (caregiverId != null) {
+          print('❌ ShiftLogs: Skipping caregiver $caregiverId - not scheduled for $dayName');
+        }
+      }
 
-      print('🏠 ShiftLogs: Found ${houseCaregiversIds.length} caregivers in house $currentHouseId');
+      print('🏠 ShiftLogs: Found ${previousShiftCaregiversIds.length} caregivers from previous shift ($previousShiftKey) in house $currentHouseId');
+
+      if (previousShiftCaregiversIds.isEmpty) {
+        print('⚠️ ShiftLogs: No previous shift caregivers found for house $currentHouseId on $dayName');
+        return null;
+      }
 
       // Get shift logs for the selected date using the unified service
       final shiftLogsStream = CaregiverShiftLogService.getShiftLogsForDate(targetDate);
       final allShiftLogs = await shiftLogsStream.first;
 
-      // Filter logs to only include those from caregivers in the same house
-      final houseShiftLogs = allShiftLogs.where((log) {
+      // Filter logs to only include those from PREVIOUS SHIFT caregivers
+      final previousShiftLogs = allShiftLogs.where((log) {
         final logCaregiverId = log['caregiver_id'] as String?;
-        final isFromSameHouse = houseCaregiversIds.contains(logCaregiverId);
+        final isFromPreviousShift = previousShiftCaregiversIds.contains(logCaregiverId);
         
-        if (!isFromSameHouse && logCaregiverId != null) {
-          print('� ShiftLogs: Filtering out log from caregiver $logCaregiverId (not in house $currentHouseId)');
-        } else if (isFromSameHouse) {
-          print('✅ ShiftLogs: Including log from caregiver $logCaregiverId (in house $currentHouseId)');
+        if (!isFromPreviousShift && logCaregiverId != null) {
+          print('🚫 ShiftLogs: Filtering out log from caregiver $logCaregiverId (not from previous shift $previousShiftKey)');
+        } else if (isFromPreviousShift) {
+          print('✅ ShiftLogs: Including log from previous shift caregiver $logCaregiverId');
         }
         
-        return isFromSameHouse;
+        return isFromPreviousShift;
       }).toList();
 
-      print('🔍 ShiftLogs: Found ${allShiftLogs.length} total shift logs, ${houseShiftLogs.length} from house $currentHouseId for ${_formatDate(targetDate)}');
+      print('🔍 ShiftLogs: Found ${allShiftLogs.length} total shift logs, ${previousShiftLogs.length} from previous shift ($previousShiftKey) for ${_formatDate(targetDate)}');
       
-      if (houseShiftLogs.isEmpty) {
-        print('⚠️ ShiftLogs: No shift logs found for house $currentHouseId on date: ${_formatDate(targetDate)}');
+      if (previousShiftLogs.isEmpty) {
+        print('⚠️ ShiftLogs: No shift logs found from previous shift ($previousShiftKey) on date: ${_formatDate(targetDate)}');
         return null;
       }
 
       // Get unique caregiver count from the filtered logs
-      final uniqueCaregivers = houseShiftLogs
+      final uniqueCaregivers = previousShiftLogs
           .map((log) => log['caregiver_id'] as String?)
           .where((id) => id != null)
           .toSet()
           .length;
+
+      // Fetch additional logs for PREVIOUS SHIFT caregivers only
+      String combinedAdditionalLogs = '';
+      try {
+        final additionalLogsFutures = previousShiftCaregiversIds.map((caregiverId) async {
+          try {
+            // Get additional log for this caregiver for the target date
+            final dateString = DateFormat('yyyy-MM-dd').format(targetDate);
+            final documentId = '${caregiverId}_$dateString';
+            
+            final snapshot = await FirebaseFirestore.instance
+                .collection('cg_additional_logs')
+                .doc(documentId)
+                .get();
+            
+            if (snapshot.exists) {
+              final data = snapshot.data() as Map<String, dynamic>;
+              final content = data['content'] as String? ?? '';
+              final caregiverName = data['caregiver_fname'] as String? ?? 'Unknown';
+              
+              if (content.isNotEmpty) {
+                return '$caregiverName: $content';
+              }
+            }
+            return null;
+          } catch (e) {
+            print('❌ ShiftLogs: Error getting additional log for caregiver $caregiverId: $e');
+            return null;
+          }
+        }).toList();
+        
+        final additionalLogsResults = await Future.wait(additionalLogsFutures);
+        final validLogs = additionalLogsResults.where((log) => log != null).cast<String>().toList();
+        
+        if (validLogs.isNotEmpty) {
+          combinedAdditionalLogs = validLogs.join('\n\n');
+        }
+        
+        print('📝 ShiftLogs: Retrieved ${validLogs.length} additional logs from previous shift for date ${_formatDate(targetDate)}');
+      } catch (e) {
+        print('❌ ShiftLogs: Error fetching additional logs: $e');
+      }
 
       // Create a simplified shift data structure that matches what the UI expects
       return {
@@ -269,9 +349,10 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
           'total_caregivers': uniqueCaregivers,
           'shift_date': _formatDate(targetDate),
           'house_id': currentHouseId,
+          'previous_shift': previousShiftKey,
         },
-        'task_logs': houseShiftLogs, // This now includes all types from the same house only
-        'additional_log_content': '', // Can add this later if needed
+        'task_logs': previousShiftLogs, // This now includes only logs from PREVIOUS SHIFT caregivers
+        'additional_log_content': combinedAdditionalLogs,
       };
     } catch (e) {
       print('❌ ShiftLogs: Error getting shift data: $e');

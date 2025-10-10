@@ -22,188 +22,233 @@ class HouseService {
   }
 
   Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiver(String caregiverId) async {
-    // Get house assignment
-    final assignSnapshot = await _firestore
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: caregiverId)
-        .limit(1)
-        .get();
-    if (assignSnapshot.docs.isEmpty) return [];
-    
-    final houseId = assignSnapshot.docs.first.data()['house_id'] as String;
-
-    // Get house information
-    final houseSnapshot = await _firestore
-        .collection('house')
-        .where('house_id', isEqualTo: houseId)
-        .limit(1)
-        .get();
-    
-    String? houseName;
-    if (houseSnapshot.docs.isNotEmpty) {
-      houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
-    }
-
-    // Get elderly assignments for caregiver
-    final elderlyAssignSnapshot = await _firestore
-        .collection('elderly_caregiver_assign')
-        .where('caregiver_id', isEqualTo: caregiverId)
-        .get();
-    
-    final elderlyIds = elderlyAssignSnapshot.docs.map((doc) => doc.data()['elderly_id'] as String).toList();
-    if (elderlyIds.isEmpty) return [];
-
-    print('DEBUG HouseService: Found ${elderlyIds.length} elderly IDs for caregiver (before deduplication)');
-    
-    // Remove duplicates from elderly IDs to prevent duplicate records
-    final uniqueElderlyIds = elderlyIds.toSet().toList();
-    print('DEBUG HouseService: After deduplication: ${uniqueElderlyIds.length} unique elderly IDs');
-
-    // Firestore has a limit of 30 elements for 'whereIn' queries
-    // Split uniqueElderlyIds into chunks of 30 and make multiple queries
-    List<QuerySnapshot> elderlySnapshots = [];
-    
-    for (int i = 0; i < uniqueElderlyIds.length; i += 30) {
-      final chunk = uniqueElderlyIds.skip(i).take(30).toList();
-      print('DEBUG HouseService: Querying chunk ${(i ~/ 30) + 1} with ${chunk.length} IDs');
+    try {
+      print('DEBUG HouseService: Getting assigned elderly for caregiver $caregiverId');
       
-      final chunkSnapshot = await _firestore
-          .collection('elderly')
-          .where(FieldPath.documentId, whereIn: chunk)
+      // ENHANCED APPROACH: First try to get specific elderly assignments, 
+      // then fallback to house-based approach if needed
+      // HYBRID APPROACH: Try elderly_caregiver_assign first, then fall back to house-based approach
+      print('DEBUG HouseService: Querying elderly_caregiver_assign for caregiver $caregiverId...');
+      final elderlyAssignSnapshot = await _firestore
+          .collection('elderly_caregiver_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
           .get();
       
-      elderlySnapshots.add(chunkSnapshot);
-    }
-
-    // Filter by house_id and return with assignment data
-    List<Map<String, dynamic>> result = [];
-    Set<String> processedElderlyIds = {}; // Track processed elderly to avoid duplicates
-    
-    // Process all chunks
-    for (var elderlySnapshot in elderlySnapshots) {
-      for (var elderlyDoc in elderlySnapshot.docs) {
-        final elderlyId = elderlyDoc.id;
-        
-        // Skip if we've already processed this elderly
-        if (processedElderlyIds.contains(elderlyId)) {
-          continue;
-        }
-        
-        final elderlyData = elderlyDoc.data() as Map<String, dynamic>?;
-        final elderlyHouseId = elderlyData?['house_id'] as String? ?? '';
-        
-        if (elderlyHouseId == houseId) {
-          // Find the assignment data for this elderly
-          final assignmentDoc = elderlyAssignSnapshot.docs
-              .firstWhere((doc) => doc.data()['elderly_id'] == elderlyId);
-          final assignmentData = assignmentDoc.data();
-          
-          // Construct name field for consistency with grid display
-          String constructedName = '';
-          if (elderlyData?['elderly_fname'] != null || elderlyData?['elderly_lname'] != null) {
-            constructedName = '${elderlyData?['elderly_fname'] ?? ''} ${elderlyData?['elderly_lname'] ?? ''}'.trim();
-          } else if (elderlyData?['name'] != null) {
-            constructedName = elderlyData?['name'].toString() ?? '';
-          }
-
-          final profilePicUrl = elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '';
-          print('DEBUG HouseService: Profile pic for $constructedName: elderly_profilePic=${elderlyData?['elderly_profilePic']}, profile_pic=${elderlyData?['profile_pic']}, final=$profilePicUrl');
-
-          final elderlyRecord = <String, dynamic>{
-            'elderly_id': elderlyId,
-            'days_assigned': assignmentData['days_assigned'] ?? [],
-            'assign_id': assignmentData['assign_id'] ?? '',
-            // Ensure elderly_status defaults to 'Alive' to match database format
-            'elderly_status': elderlyData?['elderly_status'] as String? ?? 'Alive',
-            'name': constructedName.isNotEmpty ? constructedName : 'Name not available',
-            'house_name': houseName ?? 'Unknown House',
-            // Add birthdate field mapping for consistency
-            'birthdate': elderlyData?['elderly_bday'] ?? elderlyData?['birthdate'],
-            // Add profile picture field mapping - use elderly_profilePic from database
-            'profile_pic': profilePicUrl,
-          };
-          
-          // Add all other elderly data
-          if (elderlyData != null) {
-            elderlyRecord.addAll(elderlyData);
-          }
-          
-          result.add(elderlyRecord);
-          processedElderlyIds.add(elderlyId); // Mark as processed
-        }
-      }
-    }
-
-    print('DEBUG HouseService: Returning ${result.length} elderly records after filtering by house_id');
-
-    return result;
-  }
-
-  Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiverDay(String caregiverId, String day) async {
-    try {
-      // Use the same proven approach as upcoming_tasks_screen
-      // Query for assignments based on day - try both approaches for compatibility
-      QuerySnapshot assignSnapshot;
+      print('DEBUG HouseService: Found ${elderlyAssignSnapshot.docs.length} elderly_caregiver_assign documents');
       
-      // First, try querying by individual day field (if it exists)
-      try {
-        assignSnapshot = await _firestore
-            .collection('elderly_caregiver_assign')
-            .where('caregiver_id', isEqualTo: caregiverId)
-            .where('day', isEqualTo: day)
-            .get();
-      } catch (e) {
-        // If that fails, get all assignments and filter by days_assigned array
-        assignSnapshot = await _firestore
-            .collection('elderly_caregiver_assign')
-            .where('caregiver_id', isEqualTo: caregiverId)
-            .get();
-      }
-
-      List<QueryDocumentSnapshot> relevantAssignments;
-      
-      if (assignSnapshot.docs.isNotEmpty && assignSnapshot.docs.first.data().toString().contains('day')) {
-        // Use direct query results if day field exists
-        relevantAssignments = assignSnapshot.docs;
-        print('DEBUG HouseService: Using direct day field query - found ${relevantAssignments.length} assignments');
-      } else {
-        // Filter by days_assigned array
-        relevantAssignments = assignSnapshot.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-          return daysAssigned.contains(day);
-        }).toList();
-        print('DEBUG HouseService: Using days_assigned array filtering - found ${relevantAssignments.length} assignments for $day');
-      }
-
-      if (relevantAssignments.isEmpty) {
-        print('DEBUG HouseService: No elderly assigned for day $day');
-        return [];
-      }
-
-      // Get unique elderly IDs from filtered assignments
-      final elderlyIds = relevantAssignments
-          .map((doc) => (doc.data() as Map<String, dynamic>)['elderly_id'] as String)
-          .toSet() // Remove duplicates
-          .toList();
-
-      print('DEBUG HouseService: Found ${elderlyIds.length} unique elderly IDs for day $day');
-
-      // Get house assignment to filter by house
-      final houseAssignSnapshot = await _firestore
+      // Get house information for context (needed for both approaches)
+      print('DEBUG HouseService: Querying cg_house_assign for caregiver $caregiverId...');
+      final caregiverHouseSnapshot = await _firestore
           .collection('cg_house_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
           .limit(1)
           .get();
       
-      if (houseAssignSnapshot.docs.isEmpty) {
-        print('DEBUG HouseService: No house assignment found for caregiver');
+      if (caregiverHouseSnapshot.docs.isEmpty) {
+        print('DEBUG HouseService: ❌ No house assignment found for caregiver $caregiverId');
         return [];
       }
       
-      final houseId = houseAssignSnapshot.docs.first.data()['house_id'] as String;
+      final caregiverHouseData = caregiverHouseSnapshot.docs.first.data();
+      print('DEBUG HouseService: Caregiver house assignment data: $caregiverHouseData');
+      
+      final houseId = caregiverHouseData['house_id'] as String;
+      print('DEBUG HouseService: Caregiver assigned to house: $houseId');
+      
+      final houseSnapshot = await _firestore
+          .collection('house')
+          .where('house_id', isEqualTo: houseId)
+          .limit(1)
+          .get();
+      
+      String? houseName;
+      if (houseSnapshot.docs.isNotEmpty) {
+        houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
+        print('DEBUG HouseService: House name: $houseName');
+      }
 
-      // Get house information
+      List<Map<String, dynamic>> result = [];
+
+      if (elderlyAssignSnapshot.docs.isNotEmpty) {
+        // APPROACH 1: Use specific elderly assignments from array structure
+        print('DEBUG HouseService: Using specific elderly assignments from arrays');
+        
+        // Collect unique elderly IDs and their assigned days from arrays
+        Map<String, Set<String>> elderlyDaysMap = {};
+        
+        for (var doc in elderlyAssignSnapshot.docs) {
+          final assignData = doc.data();
+          final day = assignData['day'] as String?;
+          final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+          
+          print('DEBUG HouseService: Assignment for $day with ${elderlyIds.length} elderly: $elderlyIds');
+          
+          if (day != null && elderlyIds.isNotEmpty) {
+            for (String elderlyId in elderlyIds) {
+              elderlyDaysMap.putIfAbsent(elderlyId, () => <String>{}).add(day);
+              print('DEBUG HouseService: Elderly $elderlyId assigned on $day');
+            }
+          }
+        }
+
+        if (elderlyDaysMap.isNotEmpty) {
+          print('DEBUG HouseService: Using specific assignments for ${elderlyDaysMap.length} unique elderly');
+
+          // Fetch elderly details for the assigned elderly only
+          final elderlyIdsList = elderlyDaysMap.keys.toList();
+          for (int i = 0; i < elderlyIdsList.length; i += 30) {
+            final chunk = elderlyIdsList.skip(i).take(30).toList();
+            final elderlySnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .where('elderly_status', isEqualTo: 'Alive')
+                .get();
+
+            for (var elderlyDoc in elderlySnapshot.docs) {
+              final elderlyData = elderlyDoc.data();
+              final elderlyId = elderlyDoc.id;
+              final assignedDays = elderlyDaysMap[elderlyId]?.toList() ?? [];
+              
+              result.add(_buildElderlyRecord(elderlyData, elderlyId, assignedDays, houseName));
+              print('DEBUG HouseService: Added specifically assigned elderly: ${elderlyData['elderly_fname']} (ID: $elderlyId, days: $assignedDays)');
+            }
+          }
+        }
+      }
+      
+      if (result.isEmpty) {
+        // APPROACH 2: Intelligent fallback - show elderly in house who are NOT specifically assigned to other caregivers
+        print('DEBUG HouseService: No specific elderly assignments found, using intelligent house-based approach for house $houseId');
+        
+        // First, get all elderly who ARE specifically assigned to OTHER caregivers
+        print('DEBUG HouseService: Checking for other caregivers assignments...');
+        final otherCaregiversAssignments = await _firestore
+            .collection('elderly_caregiver_assign')
+            .get(); // Get ALL assignments, then filter in code
+        
+        print('DEBUG HouseService: Found ${otherCaregiversAssignments.docs.length} total assignments');
+        
+        Set<String> elderlyAssignedToOthers = {};
+        for (var doc in otherCaregiversAssignments.docs) {
+          final assignData = doc.data();
+          final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+          final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+          
+          // Only include assignments for OTHER caregivers
+          if (assignmentCaregiverId != null && assignmentCaregiverId != caregiverId) {
+            elderlyAssignedToOthers.addAll(elderlyIds);
+            print('DEBUG HouseService: Elderly ${elderlyIds.join(', ')} assigned to caregiver $assignmentCaregiverId (not us)');
+          }
+        }
+        
+        print('DEBUG HouseService: Total elderly assigned to other caregivers: ${elderlyAssignedToOthers.length}');
+        if (elderlyAssignedToOthers.isNotEmpty) {
+          print('DEBUG HouseService: Elderly IDs assigned to others: ${elderlyAssignedToOthers.toList()}');
+        }
+        
+        final caregiverAssignData = caregiverHouseSnapshot.docs.first.data();
+        final defaultDaysAssigned = List<String>.from(caregiverAssignData['days_assigned'] ?? []);
+        
+        print('DEBUG HouseService: Fetching all elderly in house $houseId...');
+        final elderlySnapshot = await _firestore
+            .collection('elderly')
+            .where('house_id', isEqualTo: houseId)
+            .where('elderly_status', isEqualTo: 'Alive')
+            .get();
+
+        print('DEBUG HouseService: Found ${elderlySnapshot.docs.length} elderly in house $houseId');
+
+        for (var elderlyDoc in elderlySnapshot.docs) {
+          final elderlyData = elderlyDoc.data();
+          final elderlyId = elderlyDoc.id;
+          
+          print('DEBUG HouseService: Checking elderly ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+          
+          // Only include elderly who are NOT specifically assigned to other caregivers
+          if (!elderlyAssignedToOthers.contains(elderlyId)) {
+            result.add(_buildElderlyRecord(elderlyData, elderlyId, defaultDaysAssigned, houseName));
+            print('DEBUG HouseService: ✅ Added unassigned elderly: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+          } else {
+            print('DEBUG HouseService: ❌ Skipped elderly assigned to other caregiver: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+          }
+        }
+        
+        print('DEBUG HouseService: Fallback approach added ${result.length} elderly to result');
+      }
+
+      print('DEBUG HouseService: Returning ${result.length} elderly records');
+      return result;
+      
+    } catch (e) {
+      print('DEBUG HouseService: Error in getAssignedElderlyForCaregiver: $e');
+      return [];
+    }
+  }
+
+  // Helper method to build elderly record consistently
+  Map<String, dynamic> _buildElderlyRecord(Map<String, dynamic> elderlyData, String elderlyId, List<String> daysAssigned, String? houseName) {
+    // Construct name field for consistency with grid display
+    String constructedName = '';
+    if (elderlyData['elderly_fname'] != null || elderlyData['elderly_lname'] != null) {
+      constructedName = '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'.trim();
+    } else if (elderlyData['name'] != null) {
+      constructedName = elderlyData['name'].toString();
+    }
+
+    final profilePicUrl = elderlyData['elderly_profilePic'] ?? elderlyData['profile_pic'] ?? '';
+
+    final elderlyRecord = <String, dynamic>{
+      'elderly_id': elderlyId,
+      'days_assigned': daysAssigned,
+      'assign_id': '', // Default assignment ID
+      'elderly_status': elderlyData['elderly_status'] as String? ?? 'Alive',
+      'name': constructedName.isNotEmpty ? constructedName : 'Name not available',
+      'house_name': houseName ?? 'Unknown House',
+      // Add birthdate field mapping for consistency
+      'birthdate': elderlyData['elderly_bday'] ?? elderlyData['birthdate'],
+      // Add profile picture field mapping - use elderly_profilePic from database
+      'profile_pic': profilePicUrl,
+    };
+    
+    // Add all other elderly data
+    elderlyRecord.addAll(elderlyData);
+    
+    return elderlyRecord;
+  }
+
+  Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiverDay(String caregiverId, String day) async {
+    try {
+      print('DEBUG HouseService: Starting getAssignedElderlyForCaregiverDay for caregiver $caregiverId on $day');
+      
+      // HYBRID APPROACH: Try elderly_caregiver_assign first, then fall back to house-based approach
+      final elderlyAssignSnapshot = await _firestore
+          .collection('elderly_caregiver_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .where('day', isEqualTo: day)
+          .get();
+      
+      // Get house information for context (needed for both approaches)
+      final caregiverHouseSnapshot = await _firestore
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .limit(1)
+          .get();
+      
+      if (caregiverHouseSnapshot.docs.isEmpty) {
+        print('DEBUG HouseService: No house assignment found for caregiver $caregiverId');
+        return [];
+      }
+      
+      final caregiverAssignData = caregiverHouseSnapshot.docs.first.data();
+      final houseId = caregiverAssignData['house_id'] as String;
+      final caregiverDaysAssigned = List<String>.from(caregiverAssignData['days_assigned'] ?? []);
+      
+      // Check if caregiver is assigned on the requested day
+      if (!caregiverDaysAssigned.contains(day)) {
+        print('DEBUG HouseService: Caregiver not assigned on $day (assigned days: $caregiverDaysAssigned)');
+        return [];
+      }
+      
       final houseSnapshot = await _firestore
           .collection('house')
           .where('house_id', isEqualTo: houseId)
@@ -215,83 +260,111 @@ class HouseService {
         houseName = houseSnapshot.docs.first.data()['house_name'] as String?;
       }
 
-      // Fetch elderly details in chunks of 30 (Firestore limit)
-      List<QuerySnapshot> elderlySnapshots = [];
-      
-      for (int i = 0; i < elderlyIds.length; i += 30) {
-        final chunk = elderlyIds.skip(i).take(30).toList();
-        print('DEBUG HouseService: Querying elderly chunk ${(i ~/ 30) + 1} with ${chunk.length} IDs');
-        
-        final chunkSnapshot = await _firestore
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-        elderlySnapshots.add(chunkSnapshot);
-      }
-
-      // Build result with proper day filtering
       List<Map<String, dynamic>> result = [];
-      Set<String> processedElderlyIds = {}; // Track processed elderly to avoid duplicates
 
-      for (var elderlySnapshot in elderlySnapshots) {
-        for (var elderlyDoc in elderlySnapshot.docs) {
-          final elderlyId = elderlyDoc.id;
+      if (elderlyAssignSnapshot.docs.isNotEmpty) {
+        // APPROACH 1: Use specific elderly assignments for this day from arrays
+        print('DEBUG HouseService: Using specific elderly assignments from arrays for $day');
+        
+        // Collect elderly IDs assigned on this specific day from arrays
+        Set<String> assignedElderlyIds = {};
+        
+        for (var doc in elderlyAssignSnapshot.docs) {
+          final assignData = doc.data();
+          final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
           
-          // Skip if already processed
-          if (processedElderlyIds.contains(elderlyId)) {
-            continue;
-          }
-          
-          final elderlyData = elderlyDoc.data() as Map<String, dynamic>?;
-          final elderlyHouseId = elderlyData?['house_id'] as String? ?? '';
-          
-          // Only include elderly from the same house
-          if (elderlyHouseId == houseId) {
-            // Find the assignment data for this elderly
-            final assignmentDoc = relevantAssignments
-                .firstWhere((doc) => (doc.data() as Map<String, dynamic>)['elderly_id'] == elderlyId);
-            final assignmentData = assignmentDoc.data() as Map<String, dynamic>;
-            
-            // Construct name field for consistency with grid display
-            String constructedName = '';
-            if (elderlyData?['elderly_fname'] != null || elderlyData?['elderly_lname'] != null) {
-              constructedName = '${elderlyData?['elderly_fname'] ?? ''} ${elderlyData?['elderly_lname'] ?? ''}'.trim();
-            } else if (elderlyData?['name'] != null) {
-              constructedName = elderlyData?['name'].toString() ?? '';
-            }
+          print('DEBUG HouseService: Found ${elderlyIds.length} elderly assigned on $day: $elderlyIds');
+          assignedElderlyIds.addAll(elderlyIds);
+        }
 
-            final elderlyRecord = <String, dynamic>{
-              'elderly_id': elderlyId,
-              'days_assigned': assignmentData['days_assigned'] ?? [],
-              'assign_id': assignmentData['assign_id'] ?? '',
-              'elderly_status': elderlyData?['elderly_status'] as String? ?? 'Alive',
-              'name': constructedName.isNotEmpty ? constructedName : 'Name not available',
-              'house_name': houseName ?? 'Unknown House',
-              // Add birthdate field mapping for consistency
-              'birthdate': elderlyData?['elderly_bday'] ?? elderlyData?['birthdate'],
-              // Add profile picture field mapping - use elderly_profilePic from database
-              'profile_pic': elderlyData?['elderly_profilePic'] ?? elderlyData?['profile_pic'] ?? '',
-            };
-            
-            // Add all other elderly data
-            if (elderlyData != null) {
-              elderlyRecord.addAll(elderlyData);
+        if (assignedElderlyIds.isNotEmpty) {
+          print('DEBUG HouseService: Using specific assignments for ${assignedElderlyIds.length} elderly on $day');
+
+          // Fetch elderly details for the assigned elderly only
+          final elderlyIdsList = assignedElderlyIds.toList();
+          for (int i = 0; i < elderlyIdsList.length; i += 30) {
+            final chunk = elderlyIdsList.skip(i).take(30).toList();
+            final elderlySnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .where('elderly_status', isEqualTo: 'Alive')
+                .get();
+
+            for (var elderlyDoc in elderlySnapshot.docs) {
+              final elderlyData = elderlyDoc.data();
+              final elderlyId = elderlyDoc.id;
+              
+              result.add(_buildElderlyRecord(elderlyData, elderlyId, [day], houseName));
+              print('DEBUG HouseService: Added specifically assigned elderly for $day: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
             }
-            
-            result.add(elderlyRecord);
-            processedElderlyIds.add(elderlyId);
           }
         }
       }
+      
+      if (result.isEmpty) {
+        // APPROACH 2: Intelligent fallback - show elderly in house who are NOT specifically assigned to other caregivers on this day
+        print('DEBUG HouseService: No specific elderly assignments found for $day, using intelligent house-based approach for house $houseId');
+        
+        // First, get all elderly who ARE specifically assigned to OTHER caregivers on this day
+        print('DEBUG HouseService: Checking for other caregivers assignments on $day...');
+        final otherCaregiversAssignments = await _firestore
+            .collection('elderly_caregiver_assign')
+            .where('day', isEqualTo: day)
+            .get(); // Get ALL assignments for this day, then filter in code
+        
+        print('DEBUG HouseService: Found ${otherCaregiversAssignments.docs.length} total assignments on $day');
+        
+        Set<String> elderlyAssignedToOthersOnDay = {};
+        for (var doc in otherCaregiversAssignments.docs) {
+          final assignData = doc.data();
+          final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+          final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+          
+          // Only include assignments for OTHER caregivers
+          if (assignmentCaregiverId != null && assignmentCaregiverId != caregiverId) {
+            elderlyAssignedToOthersOnDay.addAll(elderlyIds);
+            print('DEBUG HouseService: Elderly ${elderlyIds.join(', ')} assigned to caregiver $assignmentCaregiverId on $day (not us)');
+          }
+        }
+        
+        print('DEBUG HouseService: Total elderly assigned to other caregivers on $day: ${elderlyAssignedToOthersOnDay.length}');
+        if (elderlyAssignedToOthersOnDay.isNotEmpty) {
+          print('DEBUG HouseService: Elderly IDs assigned to others on $day: ${elderlyAssignedToOthersOnDay.toList()}');
+        }
+        
+        print('DEBUG HouseService: Fetching all elderly in house $houseId for $day...');
+        final elderlySnapshot = await _firestore
+            .collection('elderly')
+            .where('house_id', isEqualTo: houseId)
+            .where('elderly_status', isEqualTo: 'Alive')
+            .get();
 
-      print('DEBUG HouseService: Returning ${result.length} elderly records for day $day after house filtering');
+        print('DEBUG HouseService: Found ${elderlySnapshot.docs.length} elderly in house $houseId for $day');
+
+        for (var elderlyDoc in elderlySnapshot.docs) {
+          final elderlyData = elderlyDoc.data();
+          final elderlyId = elderlyDoc.id;
+          
+          print('DEBUG HouseService: Checking elderly ${elderlyData['elderly_fname']} (ID: $elderlyId) for $day');
+          
+          // Only include elderly who are NOT specifically assigned to other caregivers on this day
+          if (!elderlyAssignedToOthersOnDay.contains(elderlyId)) {
+            result.add(_buildElderlyRecord(elderlyData, elderlyId, [day], houseName));
+            print('DEBUG HouseService: ✅ Added unassigned elderly for $day: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+          } else {
+            print('DEBUG HouseService: ❌ Skipped elderly assigned to other caregiver on $day: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+          }
+        }
+        
+        print('DEBUG HouseService: Fallback approach added ${result.length} elderly for $day');
+      }
+
+      print('DEBUG HouseService: Returning ${result.length} elderly records for day $day');
       return result;
       
     } catch (e) {
       print('DEBUG HouseService: Error in getAssignedElderlyForCaregiverDay: $e');
-      // Fallback to showing all elderly if day filtering fails
-      print('DEBUG HouseService: Falling back to showing all assigned elderly');
-      return await getAssignedElderlyForCaregiver(caregiverId);
+      return [];
     }
   }
 

@@ -144,6 +144,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
+        print('🔴 INCIDENT: No user logged in');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -155,16 +156,19 @@ class _IncidentScreenState extends State<IncidentScreen> {
       }
 
       final caregiverId = user.uid;
+      print('🔍 INCIDENT: Checking for caregiver $caregiverId at ${now.toString()}');
 
       final houseSnapshot = await _firestore
           .collection('cg_house_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
           .where('is_current', isEqualTo: true)
-          .where('is_absent', isEqualTo: false)
           .limit(1)
           .get();
 
+      print('🔍 INCIDENT: Found ${houseSnapshot.docs.length} house assignments with is_current=true');
+
       if (houseSnapshot.docs.isEmpty) {
+        print('🔴 INCIDENT: No valid house assignment found');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -181,7 +185,15 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final startDate = (houseData['start_date'] as Timestamp).toDate();
       final endDate = (houseData['end_date'] as Timestamp).toDate();
 
+      print('🔍 INCIDENT: House assignment data:');
+      print('   - House ID: $houseId');
+      print('   - Days assigned: $daysAssigned');
+      print('   - Start date: $startDate');
+      print('   - End date: $endDate');
+      print('   - Current date: $now');
+
       if (now.isBefore(startDate) || now.isAfter(endDate)) {
+        print('🔴 INCIDENT: Current date outside assignment period');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -207,7 +219,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
       // Determine if this is an overnight shift
       final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
-      
+
       // For overnight shifts, determine which day to check based on current time
       String dayToCheck;
       if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
@@ -215,12 +227,20 @@ class _IncidentScreenState extends State<IncidentScreen> {
         // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
         final previousDay = now.subtract(const Duration(days: 1));
         dayToCheck = DateFormat('EEEE').format(previousDay);
+        print('🌙 INCIDENT: Overnight shift end period - checking previous day: $dayToCheck');
       } else {
         // Regular shift or "start period" of overnight shift or after shift ends
         dayToCheck = DateFormat('EEEE').format(now);
+        print('☀️ INCIDENT: Regular/overnight start - checking current day: $dayToCheck');
       }
 
+      print('🔍 INCIDENT: Shift times: ${startHour}:${startMinute.toString().padLeft(2, '0')} - ${endHour}:${endMinute.toString().padLeft(2, '0')}');
+      print('🔍 INCIDENT: Is overnight shift: $isOvernightShift');
+      print('🔍 INCIDENT: Day to check: $dayToCheck');
+      print('🔍 INCIDENT: Days assigned contains day? ${daysAssigned.contains(dayToCheck)}');
+
       if (!daysAssigned.contains(dayToCheck)) {
+        print('🔴 INCIDENT: Day $dayToCheck not in assigned days $daysAssigned');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -260,7 +280,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
           !(now.isBefore(calculatedShiftStart) ||
               now.isAfter(calculatedShiftEnd));
 
+      print('🔍 INCIDENT: Calculated shift start: $calculatedShiftStart');
+      print('🔍 INCIDENT: Calculated shift end: $calculatedShiftEnd');
+      print('🔍 INCIDENT: Current time: $now');
+      print('🔍 INCIDENT: Is within shift: $isWithinShift');
+
       if (!isWithinShift) {
+        print('🔴 INCIDENT: Not within shift hours');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -277,39 +303,54 @@ class _IncidentScreenState extends State<IncidentScreen> {
           .where('day', isEqualTo: dayToCheck)
           .get();
 
+      print('🔍 INCIDENT: Found ${assignSnapshot.docs.length} elderly assignment documents for day $dayToCheck');
+
       List<Map<String, dynamic>> elderlyDetails = [];
 
       if (assignSnapshot.docs.isNotEmpty) {
-        final elderlyIds = assignSnapshot.docs
-            .map((doc) => doc.data()['elderly_id'] as String)
-            .toSet()
-            .toList();
-
-        for (int i = 0; i < elderlyIds.length; i += 30) {
-          final chunk = elderlyIds.skip(i).take(30).toList();
-          final chunkSnapshot = await _firestore
-              .collection('elderly')
-              .where(FieldPath.documentId, whereIn: chunk)
-              .get();
-
-          for (var doc in chunkSnapshot.docs) {
-            final data = doc.data();
-            // Filter out deceased elderly and only include those in the same house
-            if (data['house_id'] == houseId && 
-                data['elderly_status'] != 'Deceased') {
-              elderlyDetails.add({
-                'id': doc.id,
-                'name':
-                    '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
-              });
-            }
-          }
+        // NEW STRUCTURE: Each document has elderly_ids array instead of individual elderly_id
+        Set<String> elderlyIds = {};
+        for (var doc in assignSnapshot.docs) {
+          final data = doc.data();
+          // Get elderly_ids array from the document
+          final idsFromDoc = List<String>.from(data['elderly_ids'] ?? []);
+          elderlyIds.addAll(idsFromDoc);
+          print('🔍 INCIDENT: Document has ${idsFromDoc.length} elderly IDs: $idsFromDoc');
         }
 
-        elderlyDetails.sort(
-          (a, b) => (a['name'] as String).compareTo(b['name'] as String),
-        );
+        print('🔍 INCIDENT: Total unique elderly IDs: ${elderlyIds.length}');
+
+        if (elderlyIds.isNotEmpty) {
+          // Fetch elderly details in chunks (max 30 per query due to Firestore limit)
+          final elderlyIdsList = elderlyIds.toList();
+          for (int i = 0; i < elderlyIdsList.length; i += 30) {
+            final chunk = elderlyIdsList.skip(i).take(30).toList();
+            final chunkSnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .get();
+
+            for (var doc in chunkSnapshot.docs) {
+              final data = doc.data();
+              // Filter out deceased elderly and only include those in the same house
+              if (data['house_id'] == houseId &&
+                  data['elderly_status'] != 'Deceased') {
+                elderlyDetails.add({
+                  'id': doc.id,
+                  'name':
+                      '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
+                });
+              }
+            }
+          }
+
+          elderlyDetails.sort(
+            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+          );
+        }
       }
+
+      print('🔍 INCIDENT: Final elderly list count: ${elderlyDetails.length}');
 
       if (mounted) {
         setState(() {

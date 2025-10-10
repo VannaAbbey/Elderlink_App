@@ -804,21 +804,28 @@ class _ShiftScreenState extends State<ShiftScreen> {
     Future<bool> _isCaregiverOnDuty() async {
       try {
         final currentUser = FirebaseAuth.instance.currentUser;
-        if (currentUser == null) return false;
+        if (currentUser == null) {
+          print('🔴 SHIFT: No user logged in');
+          return false;
+        }
 
         final caregiverId = currentUser.uid;
         final now = DateTime.now();
+        
+        print('🔍 SHIFT: Checking duty for $caregiverId at ${now.toString()}');
 
         // Get caregiver's house assignment
         final houseSnapshot = await FirebaseFirestore.instance
             .collection('cg_house_assign')
             .where('caregiver_id', isEqualTo: caregiverId)
             .where('is_current', isEqualTo: true)
-            .where('is_absent', isEqualTo: false)
             .limit(1)
             .get();
 
+        print('🔍 SHIFT: Found ${houseSnapshot.docs.length} house assignments');
+
         if (houseSnapshot.docs.isEmpty) {
+          print('🔴 SHIFT: No valid house assignment found');
           return false;
         }
 
@@ -827,15 +834,19 @@ class _ShiftScreenState extends State<ShiftScreen> {
         final startDate = (houseData['start_date'] as Timestamp).toDate();
         final endDate = (houseData['end_date'] as Timestamp).toDate();
 
+        print('🔍 SHIFT: Days assigned: $daysAssigned');
+        print('🔍 SHIFT: Assignment period: $startDate to $endDate');
+
         // Check if current date is within assignment period
         if (now.isBefore(startDate) || now.isAfter(endDate)) {
+          print('🔴 SHIFT: Current date outside assignment period');
           return false;
         }
 
         // Check if current time is within shift hours
         final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
         int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
-        
+
         if (timeRange.isNotEmpty) {
           final startParts = (timeRange['start'] as String).split(':');
           final endParts = (timeRange['end'] as String).split(':');
@@ -847,7 +858,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
         // Determine if this is an overnight shift
         final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
-        
+
         // For overnight shifts, determine which day to check based on current time
         String dayToCheck;
         if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
@@ -855,13 +866,20 @@ class _ShiftScreenState extends State<ShiftScreen> {
           // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
           final previousDay = now.subtract(const Duration(days: 1));
           dayToCheck = _getDayName(previousDay.weekday);
+          print('🌙 SHIFT: Overnight end period - checking previous day: $dayToCheck');
         } else {
           // Regular shift or "start period" of overnight shift or after shift ends
           dayToCheck = _getDayName(now.weekday);
+          print('☀️ SHIFT: Regular/overnight start - checking current day: $dayToCheck');
         }
+
+        print('🔍 SHIFT: Shift times: ${startHour}:${startMinute.toString().padLeft(2, '0')} - ${endHour}:${endMinute.toString().padLeft(2, '0')}');
+        print('🔍 SHIFT: Is overnight: $isOvernightShift');
+        print('🔍 SHIFT: Day to check: $dayToCheck');
 
         // Check if the determined day is an assigned day
         if (!daysAssigned.contains(dayToCheck)) {
+          print('🔴 SHIFT: Day $dayToCheck not in assigned days');
           return false;
         }
 
@@ -890,10 +908,15 @@ class _ShiftScreenState extends State<ShiftScreen> {
         }
 
         final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
-        
+
+        print('🔍 SHIFT: Shift start: $calculatedShiftStart');
+        print('🔍 SHIFT: Shift end: $calculatedShiftEnd');
+        print('🔍 SHIFT: Current time: $now');
+        print('🔍 SHIFT: Within shift: $isWithinShift');
+
         return isWithinShift;
       } catch (e) {
-        print('Error checking duty status: $e');
+        print('🔴 SHIFT Error checking duty status: $e');
         return false;
       }
     }

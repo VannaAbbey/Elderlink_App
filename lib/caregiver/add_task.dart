@@ -4,6 +4,7 @@ import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/notification_icon_button.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/house_service.dart';
 import 'upcoming_tasks_screen.dart';
 import 'complete_tasks_screen.dart';
 import 'incomplete_tasks_screen.dart';
@@ -16,28 +17,7 @@ class AddTaskScreen extends StatefulWidget {
 }
 
 class _AddTaskScreenState extends State<AddTaskScreen> {
-  // ========================================================================
-  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
-  // ========================================================================
-  // 
-  // REASON FOR REMOVAL: Date filtering was conflicting with the task grouping
-  // system and the "All Dates" UI element was no longer functional.
-  //
-  // TO RESTORE DATE FILTERING FUNCTIONALITY:
-  // 1. Uncomment the _selectedFilterDate variable below
-  // 2. Uncomment the date filter UI (Padding widget with "All Dates" text and calendar icon)
-  // 3. Uncomment the filtering logic in the _getTasks method
-  // 4. Uncomment selectedFilterDate parameters in all task screen constructors:
-  //    - UpcomingTasksScreen
-  //    - CompleteTasksScreen  
-  //    - IncompleteTasksScreen
-  //    - MissedTasksScreen
-  // 5. Uncomment the filtering logic in each task screen's getTasks method
-  // 6. Test that filtering works properly with the task grouping system
-  //
-  // DateTime? _selectedFilterDate;
-  
-  // Unified task creation logic - matches upcoming_tasks_screen.dart implementation
+
   Future<void> saveCareTask({
     required String elderlyId,
     required String caregiverId,
@@ -178,78 +158,127 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
     try {
       String weekdayStr = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][date.weekday - 1];
       
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
+      // CORRECTED APPROACH: Check elderly_caregiver_assign collection with array structure
+      print('DEBUG AddTask: Checking if elderly $elderlyId is assigned to caregiver $caregiverId on $weekdayStr');
+      
+      // Step 1: Check specific elderly assignments from array structure
+      final elderlyAssignSnapshot = await FirebaseFirestore.instance
+          .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
-          .where('elderly_id', isEqualTo: elderlyId)
+          .where('day', isEqualTo: weekdayStr)
           .get();
       
-      if (assignSnapshot.docs.isEmpty) return false;
+      if (elderlyAssignSnapshot.docs.isNotEmpty) {
+        // Check if elderly is in the assigned arrays for this day
+        for (var doc in elderlyAssignSnapshot.docs) {
+          final assignData = doc.data();
+          final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+          
+          if (elderlyIds.contains(elderlyId)) {
+            print('DEBUG AddTask: ✅ Elderly $elderlyId is specifically assigned on $weekdayStr');
+            return true;
+          }
+        }
+        
+        print('DEBUG AddTask: ❌ Elderly $elderlyId is NOT in assigned list for $weekdayStr');
+        return false;
+      }
       
-      for (var doc in assignSnapshot.docs) {
-        final data = doc.data();
-        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-        if (daysAssigned.contains(weekdayStr)) {
-          return true;
+      // Step 2: Fallback for new caregivers - use house-based approach
+      print('DEBUG AddTask: No specific assignments found, using house-based fallback for $weekdayStr');
+      
+      // Get caregiver's house assignment
+      final houseAssignSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
+          .where('caregiver_id', isEqualTo: caregiverId)
+          .limit(1)
+          .get();
+      
+      if (houseAssignSnapshot.docs.isEmpty) {
+        print('DEBUG AddTask: No house assignment found for caregiver');
+        return false;
+      }
+      
+      final houseAssignData = houseAssignSnapshot.docs.first.data();
+      final houseId = houseAssignData['house_id'] as String;
+      final caregiverAssignedDays = List<String>.from(houseAssignData['days_assigned'] ?? []);
+      
+      // Check if caregiver is assigned on this day
+      if (!caregiverAssignedDays.contains(weekdayStr)) {
+        print('DEBUG AddTask: Caregiver not assigned on $weekdayStr');
+        return false;
+      }
+      
+      // Check if elderly is in this house AND not assigned to other caregivers
+      final elderlyDoc = await FirebaseFirestore.instance
+          .collection('elderly')
+          .doc(elderlyId)
+          .get();
+      
+      if (!elderlyDoc.exists) {
+        print('DEBUG AddTask: Elderly document not found');
+        return false;
+      }
+      
+      final elderlyData = elderlyDoc.data()!;
+      final elderlyHouseId = elderlyData['house_id'] as String?;
+      
+      if (elderlyHouseId != houseId) {
+        print('DEBUG AddTask: Elderly not in caregiver\'s house');
+        return false;
+      }
+      
+      // Check if elderly is specifically assigned to OTHER caregivers on this day
+      final otherAssignments = await FirebaseFirestore.instance
+          .collection('elderly_caregiver_assign')
+          .where('day', isEqualTo: weekdayStr)
+          .get();
+      
+      for (var doc in otherAssignments.docs) {
+        final assignData = doc.data();
+        final assignmentCaregiverId = assignData['caregiver_id'] as String?;
+        final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+        
+        if (assignmentCaregiverId != caregiverId && elderlyIds.contains(elderlyId)) {
+          print('DEBUG AddTask: ❌ Elderly $elderlyId is assigned to another caregiver on $weekdayStr');
+          return false;
         }
       }
-      return false;
+      
+      print('DEBUG AddTask: ✅ Elderly $elderlyId is available (house-based) on $weekdayStr');
+      return true;
+      
     } catch (e) {
-      print('Error checking assignment on date: $e');
+      print('DEBUG AddTask: Error checking assignment on date: $e');
       return false;
     }
   }
   Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiver(String caregiverId) async {
-    final assignSnapshot = await FirebaseFirestore.instance
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: caregiverId)
-        .get();
-
-    // Collect all assigned elderly IDs
-    final assignedIds = assignSnapshot.docs
-        .map((doc) => doc.data()['elderly_id'] as String)
-        .toList();
-
-    if (assignedIds.isEmpty) return [];
-
-    // Batch fetch all elderly details in chunks of 30 (Firestore limit)
-    List<QuerySnapshot> elderlySnapshots = [];
-    
-    for (int i = 0; i < assignedIds.length; i += 30) {
-      final chunk = assignedIds.skip(i).take(30).toList();
-      final chunkSnapshot = await FirebaseFirestore.instance
-          .collection('elderly')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get();
-      elderlySnapshots.add(chunkSnapshot);
-    }
-
-    // Map elderlyId to elderly data from all chunks
-    final elderlyMap = <String, Map<String, dynamic>>{};
-    for (var snapshot in elderlySnapshots) {
-      for (var doc in snapshot.docs) {
-        elderlyMap[doc.id] = doc.data() as Map<String, dynamic>;
-      }
-    }
-
-    // Build the result list
-    List<Map<String, dynamic>> assignedElderly = [];
-    for (var doc in assignSnapshot.docs) {
-      final assignData = doc.data();
-      final elderlyId = assignData['elderly_id'];
-      final elderlyData = elderlyMap[elderlyId];
-      if (elderlyData != null) {
-        final sex = elderlyData['elderly_sex'] ?? '';
+    try {
+      // SIMPLIFIED APPROACH: Use house service to get all assigned elderly
+      // This works regardless of whether elderly_caregiver_assign exists or not
+      final houseService = HouseService();
+      final assignedElderly = await houseService.getAssignedElderlyForCaregiver(caregiverId);
+      
+      // Convert to the format expected by the task UI
+      List<Map<String, dynamic>> formattedElderly = [];
+      for (var elderly in assignedElderly) {
+        final sex = elderly['elderly_sex'] ?? '';
         final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
-        assignedElderly.add({
-          'assign_id': assignData['assign_id'],
-          'elderly_id': elderlyId,
+        
+        formattedElderly.add({
+          'assign_id': elderly['assign_id'] ?? '',
+          'elderly_id': elderly['elderly_id'],
           'caregiver_id': caregiverId,
-          'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
+          'elderly_fname': prefix + (elderly['elderly_fname'] ?? ''),
         });
       }
+      
+      return formattedElderly;
+    } catch (e) {
+      print('Error in getAssignedElderlyForCaregiver: $e');
+      return [];
     }
-    return assignedElderly;
   }
 
   Stream<List<Map<String, dynamic>>> getTasksStream(String status) {
@@ -270,57 +299,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
             'task_date': (data['task_date'] is Timestamp) ? (data['task_date'] as Timestamp).toDate() : data['task_date'],
           };
         }).toList();
-        // DATE FILTER FUNCTIONALITY - COMMENTED OUT
-        // Filter by selected date if set (frequency logic not yet working as intended)
-        // if (_selectedFilterDate != null) {
-        //   final filterDate = DateTime(_selectedFilterDate!.year, _selectedFilterDate!.month, _selectedFilterDate!.day);
-        //   List<Map<String, dynamic>> filteredTasks = [];
-        //   for (final task in tasks) {
-        //     final taskDate = task['task_date'] as DateTime?;
-        //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-        //     final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
-        //     if (taskDate == null) continue;
-        //     final startDate = DateTime(taskDate.year, taskDate.month, taskDate.day);
-        //     bool shouldShow = false;
-        //     switch (freq) {
-        //       case 'Only once':
-        //         shouldShow = filterDate.year == startDate.year && filterDate.month == startDate.month && filterDate.day == startDate.day;
-        //         break;
-        //       case 'Every Assigned Day':
-        //         // For recurring tasks, check if this date matches the next occurrence
-        //         final nextTaskDate = task['next_taskdate'] as DateTime?;
-        //         if (nextTaskDate != null) {
-        //           final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
-        //           shouldShow = filterDate.year == nextTaskDateOnly.year && 
-        //                      filterDate.month == nextTaskDateOnly.month && 
-        //                      filterDate.day == nextTaskDateOnly.day;
-        //         } else {
-        //           shouldShow = false;
-        //         }
-        //         break;
-        //       case 'Custom': {
-        //         // For custom tasks, check if this date matches the next occurrence
-        //         final nextTaskDate = task['next_taskdate'] as DateTime?;
-        //         if (nextTaskDate != null) {
-        //           final nextTaskDateOnly = DateTime(nextTaskDate.year, nextTaskDate.month, nextTaskDate.day);
-        //           shouldShow = filterDate.year == nextTaskDateOnly.year && 
-        //                      filterDate.month == nextTaskDateOnly.month && 
-        //                      filterDate.day == nextTaskDateOnly.day;
-        //         } else {
-        //           shouldShow = false;
-        //         }
-        //         break;
-        //       }
-        //       default:
-        //         shouldShow = false;
-        //     }
-        //     if (shouldShow) {
-        //       filteredTasks.add(task);
-        //     }
-        //   }
-        //   tasks = filteredTasks;
-        // }
-        // Sort by task_start ascending, closest to now first
+
         tasks.sort((a, b) {
           final aStart = a['task_start'] as DateTime? ?? now;
           final bStart = b['task_start'] as DateTime? ?? now;
@@ -429,66 +408,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                    // DATE FILTER UI - COMMENTED OUT
-                    // To restore: uncomment the Padding widget below and the _selectedFilterDate variable above
-                    // Padding(
-                    //   padding: const EdgeInsets.only(top: 8, right: 16, left: 16, bottom: 4),
-                    //   child: Row(
-                    //     mainAxisAlignment: MainAxisAlignment.end,
-                    //     children: [
-                    //       Text(
-                    //         _selectedFilterDate != null
-                    //           ? "${_selectedFilterDate!.year}-${_selectedFilterDate!.month.toString().padLeft(2, '0')}-${_selectedFilterDate!.day.toString().padLeft(2, '0')}"
-                    //           : 'All Dates',
-                    //         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF22688E)),
-                    //       ),
-                    //       IconButton(
-                    //         icon: const Icon(Icons.event, color: Color(0xFF22688E)),
-                    //         onPressed: () async {
-                    //           // Fetch caregiver assigned days from cg_house_assign
-                    //           List<String> caregiverAssignedDays = [];
-                    //           final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
-                    //           final caregiverId = user?.uid;
-                    //           if (caregiverId != null) {
-                    //             final assignSnap = await FirebaseFirestore.instance
-                    //               .collection('cg_house_assign')
-                    //               .where('caregiver_id', isEqualTo: caregiverId)
-                    //               .get();
-                    //             if (assignSnap.docs.isNotEmpty) {
-                    //               caregiverAssignedDays = List<String>.from(assignSnap.docs.first.data()['days_assigned'] ?? []);
-                    //             }
-                    //           }
-                    //           final picked = await showDatePicker(
-                    //             context: context,
-                    //             initialDate: _selectedFilterDate ?? DateTime.now(),
-                    //             firstDate: DateTime(2020),
-                    //             lastDate: DateTime(2100),
-                    //             selectableDayPredicate: (date) {
-                    //               String weekday = [
-                    //                 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-                    //               ][date.weekday - 1];
-                    //               // Only allow days where caregiver is assigned
-                    //               return caregiverAssignedDays.contains(weekday);
-                    //             },
-                    //           );
-                    //           setState(() {
-                    //             _selectedFilterDate = picked;
-                    //           });
-                    //         },
-                    //       ),
-                    //       if (_selectedFilterDate != null)
-                    //         IconButton(
-                    //           icon: const Icon(Icons.clear, color: Color(0xFFD32F2F)),
-                    //           tooltip: 'Clear date filter',
-                    //           onPressed: () {
-                    //             setState(() {
-                    //               _selectedFilterDate = null;
-                    //             });
-                    //           },
-                    //         ),
-                    //     ],
-                    //   ),
-                    // ),
+
                     Expanded(
                       child: Stack(
                         children: [

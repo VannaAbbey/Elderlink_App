@@ -346,7 +346,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         .snapshots()
         .asyncMap((snapshot) async {
           final now = DateTime.now();
-          final today = DateTime(now.year, now.month, now.day);
           List<Map<String, dynamic>> tasks = [];
 
           for (var doc in snapshot.docs) {
@@ -389,9 +388,18 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             // Determine the actual scheduled execution date
             final effectiveDateTime = taskDate ?? taskStart ?? freqOnceDate;
 
-            // Only include tasks from today onwards
-            if (effectiveDateTime != null &&
-                effectiveDateTime.isAfter(today.subtract(Duration(days: 1)))) {
+            // Include tasks from today onwards (more inclusive approach for "Upcoming")
+            // This allows caregivers to see tasks scheduled for today even if the specific time has passed
+            bool shouldInclude = false;
+            if (effectiveDateTime != null) {
+              final taskDay = DateTime(effectiveDateTime.year, effectiveDateTime.month, effectiveDateTime.day);
+              final currentDay = DateTime(now.year, now.month, now.day);
+              
+              // Include tasks from today onwards
+              shouldInclude = taskDay.isAfter(currentDay) || taskDay.isAtSameMomentAs(currentDay);
+            }
+
+            if (shouldInclude) {
               tasks.add({
                 // Basic task info for display
                 'elderly_fname': data['elderly_fname'] ?? '',
@@ -421,6 +429,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
 
           // Sort by closest to current date and time (chronological order)
           // This prioritizes date first, then time within the same date
+          final currentDateTime = DateTime.now();
+          
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime?;
             final bStart = b['task_start'] as DateTime?;
@@ -430,10 +440,12 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             final bFreqOnce = b['freq_once_date'] as DateTime?;
 
             // Use the same priority as in filtering: task_date -> task_start -> freq_once_date
-            final aDateTime = aDate ?? aStart ?? aFreqOnce ?? now;
-            final bDateTime = bDate ?? bStart ?? bFreqOnce ?? now;
+            final aDateTime = aDate ?? aStart ?? aFreqOnce ?? currentDateTime;
+            final bDateTime = bDate ?? bStart ?? bFreqOnce ?? currentDateTime;
 
-            // Compare full DateTime objects - automatically prioritizes date then time
+            // Compare full DateTime objects - this naturally prioritizes:
+            // 1. Tasks due earlier (closer to current time)
+            // 2. Date first, then time within the same date
             return aDateTime.compareTo(bDateTime);
           });
           return tasks;

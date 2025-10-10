@@ -8,30 +8,8 @@ import 'package:intl/intl.dart';
 import '../services/task_reminder_service.dart';
 import '../services/caregiver_shift_log_service.dart';
 import '../services/notification_service.dart';
+import '../services/house_service.dart';
 import '../models/notification_model.dart';
-
-/*
- * TASK FREQUENCY SYSTEM - Updated Implementation
- * 
- * This system now supports three frequency options that always respect current assignments:
- * 
- * 1. "Only once" - Task appears only on the selected date, only if caregiver is assigned to elderly that day
- * 2. "Every Assigned Day" - Task appears every day the caregiver is currently assigned to the elderly
- * 3. "Custom" - Task appears on selected custom days, only when caregiver is assigned to elderly
- * 
- * Key Features:
- * - All frequency types check current assignments dynamically (no static assignment storage)
- * - Tasks automatically adapt to assignment changes
- * - Tasks never appear when caregiver is not assigned to elderly
- * - Simple, predictable behavior for caregivers
- * 
- * Database Fields:
- * - task_frequency: ['Only once'] | ['Every Assigned Day'] | ['Custom']
- * - custom_days: [] (for Custom frequency only)
- * - freq_once_date: DateTime (for Only once frequency only)
- * 
- * Note: 'everyday_days' field is deprecated but kept for backward compatibility
- */
 
 // Helper function to create a new task and set 'created_by' to the current caregiver's UID
 Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
@@ -54,41 +32,6 @@ Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
 }
 
 // Firestore helper/service class for task updates
-
-/*
- * 🔧 3RD SHIFT MIDNIGHT CROSSOVER FIXES
- * 
- * This TaskService class includes comprehensive fixes for 3rd shift caregivers (10 PM - 6 AM)
- * to properly handle midnight crossover scenarios:
- * 
- * 🚫 PROBLEMS SOLVED:
- * 1. Tasks created at 11:55 PM were immediately marked as missed after 12:10 AM
- * 2. Tasks were incorrectly progressed to next occurrence at midnight
- * 3. Elderly assignments disappeared after midnight for ongoing 3rd shifts
- * 4. System treated calendar days as shift boundaries instead of actual shift periods
- * 
- * ✅ FIXES IMPLEMENTED:
- * 
- * FIX 1: Shift-Aware Task Progression (checkAndProgressRecurringTasks)
- * - Enhanced logic to detect true shift end vs midnight crossover
- * - Prevents premature task progression during ongoing 3rd shifts
- * 
- * FIX 2: Shift-Aware Missed Task Detection (getTasksStream)
- * - Tasks are only marked as missed after actual shift end, not calendar day change
- * - Considers shift boundaries for overnight shifts (22:00-06:00)
- * 
- * FIX 3: Shift-Based Assignment Logic (_getShiftDay, _isAssignedOnDateShiftAware)
- * - Determines correct assignment day based on shift periods
- * - For 3rd shift, 12:01 AM - 6:00 AM checks previous day's assignments
- * 
- * FIX 4: Task Creation Date Logic (_getTaskShiftDate)
- * - Tasks created during overnight shifts use correct shift date
- * - Maintains assignment continuity across midnight
- * 
- * 💡 KEY INSIGHT: 3rd shift (10 PM - 6 AM) spans two calendar days but represents 
- * one continuous work period. All logic now respects shift periods over calendar days.
- */
-
 class TaskService {
   // Reference to the 'care_tasks' collection in Firestore
   static final _tasksRef = FirebaseFirestore.instance.collection('care_tasks');
@@ -518,22 +461,29 @@ class TaskService {
   /// Calculate the next occurrence of a recurring task based on user-selected start date
   static DateTime? _calculateNextOccurrence(DateTime currentTaskDate, DateTime recurringStartDate, String frequency, List<String> customDays, DateTime taskStart, {List<String>? assignedDays}) {
     print('🔧 _calculateNextOccurrence: currentTaskDate=$currentTaskDate, recurringStartDate=$recurringStartDate, frequency=$frequency');
+    print('🔧 assignedDays provided: $assignedDays');
 
     if (frequency == 'Every Assigned Day') {
       // For "Every Assigned Day", find the next occurrence of ANY assigned day
       // If assignedDays are provided, use them; otherwise fall back to original logic for compatibility
       if (assignedDays != null && assignedDays.isNotEmpty) {
+        print('✅ Using assignedDays logic for Every Assigned Day');
         DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
         
         // Look for the next occurrence within the next 14 days
         for (int i = 0; i < 14; i++) {
           final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextDate.weekday - 1];
+          print('🔍 Checking day ${i + 1}: ${nextDate.toString().split(' ')[0]} ($dayOfWeek) - matches assigned days? ${assignedDays.contains(dayOfWeek)}');
           if (assignedDays.contains(dayOfWeek)) {
-            return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+            final result = DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+            print('✅ Found next assigned day: $result ($dayOfWeek)');
+            return result;
           }
           nextDate = nextDate.add(const Duration(days: 1));
         }
+        print('❌ No matching assigned day found in next 14 days');
       } else {
+        print('⚠️ WARNING: Falling back to same-weekday logic because assignedDays is ${assignedDays == null ? "null" : "empty"}');
         // Fallback to original logic (find next occurrence of same weekday)
         final startDayOfWeek = recurringStartDate.weekday; // 1=Monday, 7=Sunday
         DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
@@ -543,6 +493,7 @@ class TaskService {
           nextDate = nextDate.add(const Duration(days: 1));
         }
         
+        print('⚠️ Fallback result: finding next ${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][startDayOfWeek - 1]} = $nextDate');
         return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
       }
     } else if (frequency == 'Custom' && customDays.isNotEmpty) {
@@ -568,32 +519,35 @@ class TaskService {
     try {
       print('🔍 DEBUG: Getting assigned days for caregiverId=$caregiverId, elderlyId=$elderlyId');
       
-      // First, check if there's a relationship between caregiver and elderly
+      // Query elderly_caregiver_assign collection for all days when this caregiver is assigned
       final elderlyAssignSnapshot = await FirebaseFirestore.instance
           .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
-          .where('elderly_id', isEqualTo: elderlyId)
           .get();
 
-      print('🔍 DEBUG: Found ${elderlyAssignSnapshot.docs.length} assignment documents');
+      print('🔍 DEBUG: Found ${elderlyAssignSnapshot.docs.length} assignment documents for this caregiver');
 
       if (elderlyAssignSnapshot.docs.isEmpty) {
-        print('🔍 DEBUG: No assignments found for this elderly-caregiver pair');
+        print('🔍 DEBUG: No assignments found for this caregiver');
         return [];
       }
 
-      // Extract all unique days from the assignment documents
+      // Extract all unique days where this specific elderly is assigned to this caregiver
       Set<String> assignedDaysSet = {};
       for (var doc in elderlyAssignSnapshot.docs) {
         final data = doc.data();
+        final elderlyIds = List<String>.from(data['elderly_ids'] ?? []);
         final day = data['day'] as String?;
-        if (day != null && day.isNotEmpty) {
+        
+        // If this elderly is in the elderly_ids array for this day, add the day
+        if (elderlyIds.contains(elderlyId) && day != null && day.isNotEmpty) {
           assignedDaysSet.add(day);
+          print('🔍 DEBUG: Found assignment: elderly $elderlyId assigned on $day');
         }
       }
 
       List<String> assignedDays = assignedDaysSet.toList();
-      print('🔍 DEBUG: Assigned days: $assignedDays');
+      print('🔍 DEBUG: Final assigned days for elderly $elderlyId: $assignedDays');
       
       return assignedDays;
     } catch (e) {
@@ -725,38 +679,51 @@ class TaskService {
       
       print('  🔍 Shift-aware check: checking assignment for $dayToCheck (original date: ${DateFormat('EEEE').format(date)})');
       
-      // Use elderly_caregiver_assign collection for caregiver-elderly assignments
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
+      // SIMPLIFIED APPROACH: Check if elderly is in caregiver's assigned house on that day
+      // Step 1: Get caregiver's house assignment
+      final houseAssignSnapshot = await FirebaseFirestore.instance
+          .collection('cg_house_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
-          .where('elderly_id', isEqualTo: elderlyId)
+          .limit(1)
           .get();
       
-      if (assignSnapshot.docs.isEmpty) {
-        print('  ❌ No assignments found');
+      if (houseAssignSnapshot.docs.isEmpty) {
+        print('  ❌ No house assignment found for caregiver');
         return false;
       }
       
-      for (var doc in assignSnapshot.docs) {
-        final data = doc.data();
-        
-        // Check individual 'day' field first (your data structure)
-        final individualDay = data['day'] as String?;
-        if (individualDay == dayToCheck) {
-          print('  ✅ Found shift-aware assignment for $dayToCheck');
-          return true;
-        }
-        
-        // Fallback to 'days_assigned' array
-        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-        if (daysAssigned.contains(dayToCheck)) {
-          print('  ✅ Found shift-aware assignment for $dayToCheck');
-          return true;
-        }
+      final houseAssignData = houseAssignSnapshot.docs.first.data();
+      final houseId = houseAssignData['house_id'] as String;
+      final caregiverAssignedDays = List<String>.from(houseAssignData['days_assigned'] ?? []);
+      
+      // Step 2: Check if caregiver is assigned on the requested day
+      if (!caregiverAssignedDays.contains(dayToCheck)) {
+        print('  ❌ Caregiver not assigned on $dayToCheck');
+        return false;
       }
       
-      print('  ❌ No shift-aware assignment found for $dayToCheck');
-      return false;
+      // Step 3: Check if elderly is in this house
+      final elderlyDoc = await FirebaseFirestore.instance
+          .collection('elderly')
+          .doc(elderlyId)
+          .get();
+      
+      if (!elderlyDoc.exists) {
+        print('  ❌ Elderly document not found');
+        return false;
+      }
+      
+      final elderlyData = elderlyDoc.data()!;
+      final elderlyHouseId = elderlyData['house_id'] as String?;
+      
+      if (elderlyHouseId != houseId) {
+        print('  ❌ Elderly not in caregiver\'s assigned house (elderly house: $elderlyHouseId)');
+        return false;
+      }
+      
+      print('  ✅ Found shift-aware assignment for $dayToCheck - elderly is in caregiver\'s house');
+      return true;
+      
     } catch (e) {
       print('Error in shift-aware assignment check: $e');
       return false;
@@ -1305,8 +1272,12 @@ class _EditTaskDialogState extends State<EditTaskDialog> {
                     'everyday_days': selectedFrequency == 'Every Assigned Day' ? [] : [], // No longer storing static assignment days
                   };
                   await tasksRef.doc(docId).update(updateData);
-                  Navigator.of(context).pop();
-                  Navigator.of(widget.parentContext).pop();
+                  if (context.mounted) {
+                    Navigator.of(context).pop();
+                  }
+                  if (widget.parentContext.mounted) {
+                    Navigator.of(widget.parentContext).pop();
+                  }
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Color(0xFF22688E),
@@ -1874,13 +1845,15 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           if (progressedTasks > 0) {
             print('✅ Progressive Task System: $progressedTasks recurring tasks updated to next occurrence dates');
             // Show a brief notification that tasks were updated
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('$progressedTasks recurring tasks updated to next occurrence dates'),
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('$progressedTasks recurring tasks updated to next occurrence dates'),
                 backgroundColor: Colors.green,
                 duration: Duration(seconds: 3),
               ),
             );
+            }
           } else {
             print('ℹ️ No tasks were progressed by automatic system');
           }
@@ -1894,216 +1867,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       print('❌ Error triggering progressive task system: $e');
     }
   }
-
-  // COMMENTED OUT: COMPREHENSIVE TASK DIAGNOSTICS TOOL (kept for future debugging)
-  /*
-  void _runTaskDiagnostics(BuildContext context) async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) {
-      print('❌ No current user found');
-      return;
-    }
-
-    final caregiverId = currentUser.uid;
-    print('\n🔍 === COMPREHENSIVE TASK DIAGNOSTICS ===');
-    print('👤 Caregiver ID: $caregiverId');
-    print('📅 Current Date/Time: ${DateTime.now()}');
-
-    try {
-      // 1. Get ALL tasks in the database to understand the structure
-      print('\n📊 1. ANALYZING ALL TASKS IN DATABASE...');
-      final allTasksSnapshot = await FirebaseFirestore.instance.collection('care_tasks').get();
-      print('   Total tasks in database: ${allTasksSnapshot.docs.length}');
-
-      // Analyze task structure from first few tasks
-      if (allTasksSnapshot.docs.isNotEmpty) {
-        print('\n🔬 2. TASK STRUCTURE ANALYSIS (first 3 tasks):');
-        for (int i = 0; i < 3 && i < allTasksSnapshot.docs.length; i++) {
-          final taskData = allTasksSnapshot.docs[i].data();
-          print('   Task ${i + 1} fields: ${taskData.keys.toList()}');
-          if (taskData.containsKey('task_description')) {
-            print('   - Description: ${taskData['task_description']}');
-          }
-          if (taskData.containsKey('caregiver_id')) {
-            print('   - caregiver_id: ${taskData['caregiver_id']}');
-          }
-          if (taskData.containsKey('created_by')) {
-            print('   - created_by: ${taskData['created_by']}');
-          }
-          if (taskData.containsKey('assigned_to')) {
-            print('   - assigned_to: ${taskData['assigned_to']}');
-          }
-          if (taskData.containsKey('task_status')) {
-            print('   - task_status: ${taskData['task_status']}');
-          }
-          if (taskData.containsKey('task_frequency')) {
-            print('   - task_frequency: ${taskData['task_frequency']}');
-          }
-          print('   ---');
-        }
-      }
-
-      // 3. Test different query strategies
-      print('\n🎯 3. TESTING DIFFERENT QUERY STRATEGIES...');
-      
-      // Strategy 1: caregiver_id
-      final strategy1 = await FirebaseFirestore.instance.collection('care_tasks')
-          .where('caregiver_id', isEqualTo: caregiverId).get();
-      print('   Strategy 1 (caregiver_id = $caregiverId): ${strategy1.docs.length} tasks');
-
-      // Strategy 2: created_by
-      final strategy2 = await FirebaseFirestore.instance.collection('care_tasks')
-          .where('created_by', isEqualTo: caregiverId).get();
-      print('   Strategy 2 (created_by = $caregiverId): ${strategy2.docs.length} tasks');
-
-      // Strategy 3: Look for tasks containing Testing
-      final strategy3 = await FirebaseFirestore.instance.collection('care_tasks').get();
-      final testingTasks = strategy3.docs.where((doc) {
-        final data = doc.data();
-        final description = data['task_description']?.toString() ?? '';
-        return description.toLowerCase().contains('testing');
-      }).toList();
-      print('   Strategy 3 (tasks containing "testing"): ${testingTasks.length} tasks');
-
-      // 4. Analyze the Testing tasks specifically
-      if (testingTasks.isNotEmpty) {
-        print('\n🧪 4. ANALYZING "TESTING" TASKS:');
-        for (var testTask in testingTasks) {
-          final data = testTask.data();
-          print('   📝 Task: ${data['task_description']}');
-          print('      - ID: ${testTask.id}');
-          print('      - caregiver_id: ${data['caregiver_id']}');
-          print('      - created_by: ${data['created_by']}');
-          print('      - task_status: ${data['task_status']}');
-          print('      - task_frequency: ${data['task_frequency']}');
-          print('      - task_date: ${data['task_date']}');
-          print('      - next_taskdate: ${data['next_taskdate']}');
-          print('      - All fields: ${data.keys.toList()}');
-          print('   ---');
-        }
-
-        // 5. Test manual progression on Testing tasks
-        print('\n⚡ 5. TESTING MANUAL PROGRESSION ON TESTING TASKS...');
-        for (var testTask in testingTasks) {
-          final data = testTask.data();
-          final frequency = (data['task_frequency'] as List<dynamic>?)?.first ?? 'Only once';
-          
-          if (frequency == 'Every Assigned Day' || frequency == 'Custom') {
-            print('   🔄 Attempting to progress: ${data['task_description']}');
-            
-            final taskDate = (data['task_date'] as Timestamp?)?.toDate();
-            final nextTaskDate = (data['next_taskdate'] as Timestamp?)?.toDate();
-            
-            if (taskDate != null && nextTaskDate != null) {
-              // Force update this task
-              await FirebaseFirestore.instance.collection('care_tasks').doc(testTask.id).update({
-                'task_date': nextTaskDate,
-                'next_taskdate': Timestamp.fromDate(nextTaskDate.add(Duration(days: 1))), // Simple +1 day for testing
-                'updated_at': FieldValue.serverTimestamp(),
-                'diagnostic_update': 'Updated by diagnostic tool at ${DateTime.now()}',
-              });
-              print('   ✅ Successfully updated task dates!');
-            } else {
-              print('   ❌ Missing task_date or next_taskdate');
-            }
-          } else {
-            print('   ⏭️ Skipping non-recurring task');
-          }
-        }
-      }
-
-      print('\n🎉 DIAGNOSTICS COMPLETE - Check console output above!');
-      
-      // Show summary in UI
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Diagnostics complete! Check console for detailed analysis.'),
-          backgroundColor: Colors.blue,
-          duration: Duration(seconds: 5),
-        ),
-      );
-
-    } catch (e) {
-      print('❌ Error in diagnostics: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Diagnostics error: $e'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 5),
-        ),
-      );
-    }
-  }
-  */
-
-  // COMMENTED OUT: FORCE TASK PROGRESSION - Bypasses all time checks (kept for future debugging)
-  /*
-  void _forceTaskProgression(BuildContext context) async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
-
-    try {
-      print('\n🚀 === FORCING TASK PROGRESSION ===');
-      
-      // Get all tasks with "Testing" in description
-      final allTasks = await FirebaseFirestore.instance.collection('care_tasks').get();
-      final testingTasks = allTasks.docs.where((doc) {
-        final data = doc.data();
-        final description = data['task_description']?.toString().toLowerCase() ?? '';
-        return description.contains('testing');
-      }).toList();
-
-      print('Found ${testingTasks.length} testing tasks to force progress');
-
-      int progressedCount = 0;
-      for (var taskDoc in testingTasks) {
-        final data = taskDoc.data();
-        final description = data['task_description'] ?? 'Unknown';
-        final frequency = (data['task_frequency'] as List<dynamic>?)?.first ?? 'Only once';
-        
-        if (frequency == 'Every Assigned Day' || frequency == 'Custom') {
-          print('🔄 Force progressing: $description');
-          
-          final taskDate = (data['task_date'] as Timestamp?)?.toDate();
-          if (taskDate != null) {
-            // Calculate next occurrence (simple: add 1 day for testing)
-            final nextOccurrence = taskDate.add(Duration(days: 1));
-            final futureOccurrence = nextOccurrence.add(Duration(days: 1));
-            
-            await FirebaseFirestore.instance.collection('care_tasks').doc(taskDoc.id).update({
-              'task_date': Timestamp.fromDate(nextOccurrence),
-              'next_taskdate': Timestamp.fromDate(futureOccurrence),
-              'task_status': ['Upcoming'],
-              'updated_at': FieldValue.serverTimestamp(),
-              'force_progressed': 'Force progressed at ${DateTime.now()}',
-            });
-            
-            progressedCount++;
-            print('✅ Successfully force progressed $description');
-          }
-        }
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Force progressed $progressedCount tasks! Check Upcoming tab.'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 5),
-        ),
-      );
-
-    } catch (e) {
-      print('❌ Error in force progression: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Force progression error: $e'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-  */
 
   // Utility to parse "HH:mm" string to TimeOfDay
   TimeOfDay _parseTimeOfDay(String timeStr) {
@@ -2134,12 +1897,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     }
   }
   
-  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
-  // To restore: uncomment the lines below and implement UI elements for date selection
-  // final DateTime? selectedFilterDate;
-
-
-
   Future<void> _onRefresh() async {
     // Trigger progressive task system when user pulls to refresh
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -2252,37 +2009,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         return SizedBox.expand(
           child: Column(
             children: [
-              // COMMENTED OUT: Diagnostic and Force Progress buttons (kept for future debugging if needed)
-              // if (true) // Set to true if you need diagnostic tools again
-              // Container(
-              //   margin: EdgeInsets.all(8),
-              //   child: Row(
-              //     children: [
-              //       Expanded(
-              //         child: ElevatedButton(
-              //           style: ElevatedButton.styleFrom(
-              //             backgroundColor: Colors.orange,
-              //             foregroundColor: Colors.white,
-              //           ),
-              //           onPressed: () => _runTaskDiagnostics(context),
-              //           child: Text('🔍 Diagnostics'),
-              //         ),
-              //       ),
-              //       SizedBox(width: 8),
-              //       Expanded(
-              //         child: ElevatedButton(
-              //           style: ElevatedButton.styleFrom(
-              //             backgroundColor: Colors.red,
-              //             foregroundColor: Colors.white,
-              //           ),
-              //           onPressed: () => _forceTaskProgression(context),
-              //           child: Text('🚀 Force Progress'),
-              //         ),
-              //       ),
-              //     ],
-              //   ),
-              // ),
-              // Only one set of Add/Delete Task buttons at the top
               Expanded(
                 child: tasks.isEmpty
                   ? const Center(child: Text('No Upcoming Tasks', style: TextStyle(fontSize: 18, color: Color(0xFF22688E), fontWeight: FontWeight.bold)))
@@ -2306,7 +2032,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF22688E)),
                                   ),
                                 ),
-                                for (final task in (grouped[key]!..sort((a, b) {
+                                for (final task in ((grouped[key] ?? [])..sort((a, b) {
                                   final aStart = a['task_start'] as DateTime? ?? DateTime.now();
                                   final bStart = b['task_start'] as DateTime? ?? DateTime.now();
                                   return aStart.compareTo(bStart);
@@ -3026,18 +2752,21 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                             for (var elderly in assignedElderly) {
                               print('🔍 DEBUG: Elderly: ${elderly['elderly_fname']} (ID: ${elderly['elderly_id']})');
                             }
-                            final rangeStart = _parseTimeOfDay(caregiverTimeRange['start']!);
-                            final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end']!);
+                            final rangeStart = _parseTimeOfDay(caregiverTimeRange['start'] ?? '00:00');
+                            final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end'] ?? '23:59');
                             
                             // Close loading dialog
-                            Navigator.of(context).pop();
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                            }
                             
-                          showDialog(
-                            context: context,
-                            barrierDismissible: false,
-                            builder: (BuildContext ctx) {
-                              String? selectedElderly;
-                              String? selectedFrequency = 'Only once';
+                          if (context.mounted) {
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (BuildContext ctx) {
+                                String? selectedElderly;
+                                String? selectedFrequency = 'Only once';
                               TimeOfDay? startTime;
                               TimeOfDay? endTime;
                               TextEditingController activityController = TextEditingController();
@@ -3418,21 +3147,53 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     return;
                                                   }
 
-                                                  // Get assigned days for validation
-                                                  final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
-                                                  final elderlyAssignedDays = List<String>.from(elderlyData['days_assigned'] ?? []);
-                                                  
+                                                  // Get assigned days for validation - query elderly_caregiver_assign directly
                                                   print('🔍 DEBUG: Every Assigned Day date picker validation');
                                                   print('🔍 DEBUG: selectedElderly = $selectedElderly');
-                                                  print('🔍 DEBUG: elderlyData = $elderlyData');
-                                                  print('🔍 DEBUG: elderlyAssignedDays = $elderlyAssignedDays'); 
+                                                  print('🔍 DEBUG: caregiverId = $caregiverId');
+                                                  
+                                                  List<String> elderlyAssignedDays = [];
+                                                  
+                                                  try {
+                                                    // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+                                                    final assignmentSnapshot = await FirebaseFirestore.instance
+                                                        .collection('elderly_caregiver_assign')
+                                                        .where('caregiver_id', isEqualTo: caregiverId)
+                                                        .get();
+                                                    
+                                                    print('🔍 DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
+                                                    
+                                                    // Look through all assignments to find days when this elderly is assigned to this caregiver
+                                                    for (var doc in assignmentSnapshot.docs) {
+                                                      final assignData = doc.data();
+                                                      final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+                                                      final day = assignData['day'] as String?;
+                                                      
+                                                      // If this elderly is assigned to this caregiver on this day
+                                                      if (elderlyIds.contains(selectedElderly) && day != null) {
+                                                        elderlyAssignedDays.add(day);
+                                                        print('🔍 DEBUG: Found assignment: $selectedElderly assigned on $day');
+                                                      }
+                                                    }
+                                                    
+                                                    // Remove duplicates and sort
+                                                    elderlyAssignedDays = elderlyAssignedDays.toSet().toList();
+                                                    elderlyAssignedDays.sort((a, b) {
+                                                      const weekdayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                                                      return weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b));
+                                                    });
+                                                    
+                                                    print('🔍 DEBUG: Final elderlyAssignedDays = $elderlyAssignedDays');
+                                                  } catch (e) {
+                                                    print('🔍 ERROR: Failed to get assignment days: $e');
+                                                  }
                                                   
                                                   if (elderlyAssignedDays.isEmpty) {
                                                     showDialog(
                                                       context: ctx,
                                                       builder: (BuildContext context) => AlertDialog(
                                                         title: const Text('No Assigned Days'),
-                                                        content: const Text('No assigned days found for selected elderly.'),
+                                                        content: Text('No assigned days found for selected elderly.\n\nDebugging info:\nElderly ID: $selectedElderly\nCaregiver ID: $caregiverId\n\nPlease check with your administrator about your schedule assignments.'),
                                                         actions: [
                                                           TextButton(
                                                             onPressed: () => Navigator.of(context).pop(),
@@ -3781,33 +3542,41 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                   // Get comprehensive assignment days for this elderly across all their assignments
                                                   List<String> elderlyAssignedDays = [];
                                                   
-                                                  // First, try to get from current assignedElderly data (which we know works)
-                                                  final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
-                                                  elderlyAssignedDays = List<String>.from(elderlyData['days_assigned'] ?? []);
-                                                  
                                                   print('DEBUG: Selected elderly ID: $selectedElderly');
-                                                  print('DEBUG: Elderly data found: ${elderlyData.isNotEmpty}');
-                                                  print('DEBUG: Assigned days from elderly data: $elderlyAssignedDays');
+                                                  print('DEBUG: Caregiver ID: $caregiverId');
                                                   
-                                                  // If empty, try to fetch from Firestore for comprehensive data
-                                                  if (elderlyAssignedDays.isEmpty) {
-                                                    try {
-                                                      final assignSnapshot = await FirebaseFirestore.instance
-                                                          .collection('cg_house_assign')
-                                                          .where('caregiver_id', isEqualTo: caregiverId)
-                                                          .where('elderly_id', isEqualTo: selectedElderly)
-                                                          .get();
+                                                  try {
+                                                    // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+                                                    final assignmentSnapshot = await FirebaseFirestore.instance
+                                                        .collection('elderly_caregiver_assign')
+                                                        .where('caregiver_id', isEqualTo: caregiverId)
+                                                        .get();
+                                                    
+                                                    print('DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
+                                                    
+                                                    // Look through all assignments to find days when this elderly is assigned to this caregiver
+                                                    for (var doc in assignmentSnapshot.docs) {
+                                                      final assignData = doc.data();
+                                                      final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+                                                      final day = assignData['day'] as String?;
                                                       
-                                                      Set<String> allAssignedDays = {};
-                                                      for (var doc in assignSnapshot.docs) {
-                                                        final data = doc.data();
-                                                        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-                                                        allAssignedDays.addAll(daysAssigned);
+                                                      // If this elderly is assigned to this caregiver on this day
+                                                      if (elderlyIds.contains(selectedElderly) && day != null) {
+                                                        elderlyAssignedDays.add(day);
+                                                        print('DEBUG: Found assignment: $selectedElderly assigned on $day');
                                                       }
-                                                      elderlyAssignedDays = allAssignedDays.toList();
-                                                    } catch (e) {
-                                                      print('Error fetching assignment days: $e');
                                                     }
+                                                    
+                                                    // Remove duplicates and sort
+                                                    elderlyAssignedDays = elderlyAssignedDays.toSet().toList();
+                                                    elderlyAssignedDays.sort((a, b) {
+                                                      const weekdayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                                                      return weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b));
+                                                    });
+                                                    
+                                                    print('DEBUG: Final elderlyAssignedDays = $elderlyAssignedDays');
+                                                  } catch (e) {
+                                                    print('DEBUG: Error fetching assignment days: $e');
                                                   }
                                                   
                                                   if (elderlyAssignedDays.isEmpty) {
@@ -3898,23 +3667,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                 ),
                                               ),
                                               const SizedBox(height: 8),
-                                              if (selectedElderly != null)
-                                                FutureBuilder<List<String>>(
-                                                  future: _getElderlyAssignedDays(selectedElderly!),
-                                                  builder: (context, snapshot) {
-                                                    if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                                                      return Text(
-                                                        'Available days: ${snapshot.data!.join(', ')}',
-                                                        style: TextStyle(
-                                                          fontSize: 12,
-                                                          color: Colors.grey[600],
-                                                          fontStyle: FontStyle.italic,
-                                                        ),
-                                                      );
-                                                    }
-                                                    return const SizedBox.shrink();
-                                                  },
-                                                ),
                                             ],
                                             const SizedBox(height: 20),
                                             Row(
@@ -3949,7 +3701,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                 onPressed: () async {
                                                   bool valid = selectedElderly != null && startTime != null && endTime != null && selectedFrequency != null && activityController.text.isNotEmpty;
                                                   DateTime? saveDate;
-                                                  List<String> saveFrequency = [selectedFrequency!];
+                                                  List<String> saveFrequency = selectedFrequency != null ? [selectedFrequency!] : [];
                                                   Map<String, dynamic> extraFields = {};
                                                   if (selectedFrequency == 'Only once') {
                                                     valid = valid && selectedDate != null;
@@ -3968,8 +3720,19 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     extraFields['recurring_start_date'] = selectedRecurringStartDate;
                                                   }
                                                   if (valid) {
+                                                    // Additional safety checks - return early if any required field is null
+                                                    if (saveDate == null || startTime == null || endTime == null || selectedElderly == null) {
+                                                      if (context.mounted) {
+                                                        ScaffoldMessenger.of(context).showSnackBar(
+                                                          const SnackBar(content: Text('Missing required fields'), backgroundColor: Color(0xFFD32F2F)),
+                                                        );
+                                                      }
+                                                      return;
+                                                    }
+                                                    
+                                                    // At this point all required fields are verified non-null, safe to use ! operator
                                                     // TIME VALIDATION: Check if task time has passed for today's date
-                                                    bool hasTimePassed = _hasTaskTimePassedToday(saveDate!, startTime!);
+                                                    bool hasTimePassed = _hasTaskTimePassedToday(saveDate, startTime!);
                                                     
                                                     if (hasTimePassed) {
                                                       // Handle time validation based on frequency type
@@ -4052,16 +3815,21 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               );
                             },
                           );
+                          }
                           } catch (e) {
                             // Close loading dialog if still open
-                            Navigator.of(context).pop();
+                            if (Navigator.canPop(context)) {
+                              Navigator.of(context).pop();
+                            }
                             // Show error message
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Error loading task data: $e'),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error loading task data: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
                           }
                         },
                         style: ElevatedButton.styleFrom(
@@ -4108,48 +3876,39 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     try {
       print('🔍 DEBUG: Getting assigned days for caregiverId=$caregiverId, elderlyId=$elderlyId');
       
-      // First, check if there's a relationship between caregiver and elderly
-      final elderlyAssignSnapshot = await FirebaseFirestore.instance
+      List<String> elderlyAssignedDays = [];
+      
+      // Query elderly_caregiver_assign collection for all days this elderly is assigned to this caregiver
+      final assignmentSnapshot = await FirebaseFirestore.instance
           .collection('elderly_caregiver_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
-          .where('elderly_id', isEqualTo: elderlyId)
           .get();
-
-      print('🔍 DEBUG: Found ${elderlyAssignSnapshot.docs.length} elderly-caregiver relationships');
       
-      if (elderlyAssignSnapshot.docs.isEmpty) {
-        print('🔍 DEBUG: No relationship found between caregiver and elderly');
-        return [];
-      }
-
-      // Extract specific days from elderly_caregiver_assign documents
-      Set<String> elderlySpecificDays = {};
-      for (var doc in elderlyAssignSnapshot.docs) {
-        final data = doc.data();
-        print('🔍 DEBUG: Elderly-caregiver assignment doc: $data');
+      print('🔍 DEBUG: Found ${assignmentSnapshot.docs.length} assignment documents');
+      
+      // Look through all assignments to find days when this elderly is assigned to this caregiver
+      for (var doc in assignmentSnapshot.docs) {
+        final assignData = doc.data();
+        final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+        final day = assignData['day'] as String?;
         
-        // Check for individual 'day' field (your data structure)
-        final individualDay = data['day'] as String?;
-        if (individualDay != null && individualDay.isNotEmpty) {
-          elderlySpecificDays.add(individualDay);
-          print('🔍 DEBUG: Found individual day: $individualDay');
-        }
-        
-        // Also check for 'days_assigned' array (fallback)
-        final daysAssignedArray = List<String>.from(data['days_assigned'] ?? []);
-        if (daysAssignedArray.isNotEmpty) {
-          elderlySpecificDays.addAll(daysAssignedArray);
-          print('🔍 DEBUG: Found days_assigned array: $daysAssignedArray');
+        // If this elderly is assigned to this caregiver on this day
+        if (elderlyIds.contains(elderlyId) && day != null) {
+          elderlyAssignedDays.add(day);
+          print('🔍 DEBUG: Found assignment: $elderlyId assigned on $day');
         }
       }
-
-      // Sort days in proper order
-      const weekOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-      final sortedDays = elderlySpecificDays.toList();
-      sortedDays.sort((a, b) => weekOrder.indexOf(a).compareTo(weekOrder.indexOf(b)));
       
-      print('🔍 DEBUG: Final assigned days for this elderly: $sortedDays');
-      return sortedDays;
+      // Remove duplicates and sort
+      elderlyAssignedDays = elderlyAssignedDays.toSet().toList();
+      elderlyAssignedDays.sort((a, b) {
+        const weekdayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        return weekdayOrder.indexOf(a).compareTo(weekdayOrder.indexOf(b));
+      });
+      
+      print('🔍 DEBUG: Final elderlyAssignedDays = $elderlyAssignedDays');
+      return elderlyAssignedDays;
+      
     } catch (e) {
       print('Error getting assigned days for elderly and caregiver: $e');
       return [];
@@ -4168,90 +3927,35 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         elderlyByDay[day] = [];
       }
       
-      // Get ALL assignments for this caregiver (single query)
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
-          .get();
-
-      print('🚀 OPTIMIZATION: Found ${assignSnapshot.docs.length} total assignment documents');
-
-      if (assignSnapshot.docs.isEmpty) return elderlyByDay;
-
-      // Group elderly IDs by day and collect all unique elderly IDs
-      Map<String, Set<String>> elderlyIdsByDay = {};
-      Set<String> allElderlyIds = {};
+      // SIMPLIFIED APPROACH: Use house service to get all elderly for each day
+      // This works regardless of whether elderly_caregiver_assign exists or not
+      final houseService = HouseService();
       
-      for (var doc in assignSnapshot.docs) {
-        final assignData = doc.data();
-        final elderlyId = assignData['elderly_id'] as String?;
-        final day = assignData['day'] as String?;
-        
-        if (elderlyId != null && day != null && assignedDays.contains(day)) {
-          allElderlyIds.add(elderlyId);
-          elderlyIdsByDay.putIfAbsent(day, () => {}).add(elderlyId);
-        }
-      }
-
-      print('🚀 OPTIMIZATION: Found ${allElderlyIds.length} unique elderly IDs across all days');
-
-      if (allElderlyIds.isEmpty) return elderlyByDay;
-
-      // Fetch ALL elderly details at once (in chunks of 30 due to Firestore limit)
-      Map<String, Map<String, dynamic>> elderlyDataMap = {};
-      final elderlyIds = allElderlyIds.toList();
-      
-      for (int i = 0; i < elderlyIds.length; i += 30) {
-        final chunk = elderlyIds.skip(i).take(30).toList();
-        final chunkSnapshot = await FirebaseFirestore.instance
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-            
-        for (var doc in chunkSnapshot.docs) {
-          final elderlyData = doc.data();
-          // Only include elderly who are not deceased
-          final elderlyStatus = elderlyData['elderly_status'] as String?;
-          if (elderlyStatus != 'Deceased') {
-            elderlyDataMap[doc.id] = elderlyData;
-          }
-        }
-      }
-
-      print('🚀 OPTIMIZATION: Loaded data for ${elderlyDataMap.length} elderly');
-
-      // Build the result map - organize elderly by day
       for (String day in assignedDays) {
-        final elderlyIdsForDay = elderlyIdsByDay[day] ?? {};
+        final elderlyForDay = await houseService.getAssignedElderlyForCaregiverDay(caregiverId, day);
         
-        for (String elderlyId in elderlyIdsForDay) {
-          final elderlyData = elderlyDataMap[elderlyId];
-          if (elderlyData != null) {
-            final sex = elderlyData['elderly_sex'] ?? '';
-            final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
-            
-            // Get ALL assigned days for this elderly-caregiver pair (from our preloaded data)
-            final allAssignedDaysForElderly = elderlyIdsByDay.entries
-                .where((entry) => entry.value.contains(elderlyId))
-                .map((entry) => entry.key)
-                .toList();
-            
-            elderlyByDay[day]!.add({
-              'elderly_id': elderlyId,
-              'caregiver_id': caregiverId,
-              'elderly_fname': prefix + (elderlyData['elderly_fname'] ?? ''),
-              'days_assigned': allAssignedDaysForElderly,
-            });
-          }
+        // Convert to the format expected by the UI
+        List<Map<String, dynamic>> formattedElderly = [];
+        for (var elderly in elderlyForDay) {
+          final sex = elderly['elderly_sex'] ?? '';
+          final prefix = (sex == 'Male') ? 'Lolo ' : (sex == 'Female') ? 'Lola ' : '';
+          
+          formattedElderly.add({
+            'elderly_id': elderly['elderly_id'],
+            'caregiver_id': caregiverId,
+            'elderly_fname': prefix + (elderly['elderly_fname'] ?? ''),
+            'days_assigned': elderly['days_assigned'] ?? [day], // Use the caregiver's assigned days
+          });
         }
         
         // Sort elderly by name for consistent ordering
-        elderlyByDay[day]!.sort((a, b) => 
+        formattedElderly.sort((a, b) => 
           (a['elderly_fname'] ?? '').toString().toLowerCase()
               .compareTo((b['elderly_fname'] ?? '').toString().toLowerCase())
         );
         
-        print('🚀 OPTIMIZATION: Day $day has ${elderlyByDay[day]!.length} elderly');
+        elderlyByDay[day] = formattedElderly;
+        print('🚀 OPTIMIZATION: Day $day has ${formattedElderly.length} elderly');
       }
 
       return elderlyByDay;
@@ -4646,38 +4350,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     return null;
   }
 
-  // Helper function to get all assigned days for an elderly-caregiver pair
-  Future<List<String>> _getElderlyAssignedDays(String elderlyId) async {
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return [];
-      
-      // Use the same collection as the dropdown for consistency
-      final assignSnapshot = await FirebaseFirestore.instance
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: currentUser.uid)
-          .where('elderly_id', isEqualTo: elderlyId)
-          .get();
-      
-      Set<String> allAssignedDays = {};
-      for (var doc in assignSnapshot.docs) {
-        final data = doc.data();
-        final daysAssigned = List<String>.from(data['days_assigned'] ?? []);
-        allAssignedDays.addAll(daysAssigned);
-      }
-      
-      // Sort days in proper order
-      const weekOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-      final sortedDays = allAssignedDays.toList();
-      sortedDays.sort((a, b) => weekOrder.indexOf(a).compareTo(weekOrder.indexOf(b)));
-      
-      return sortedDays;
-    } catch (e) {
-      print('Error getting elderly assigned days: $e');
-      return [];
-    }
-  }
-
   // Helper function to get the next valid date for date picker initialization
   DateTime _getNextValidDate(List<String> assignedDays) {
     if (assignedDays.isEmpty) return DateTime.now();
@@ -4926,7 +4598,6 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           .collection('cg_house_assign')
           .where('caregiver_id', isEqualTo: caregiverId)
           .where('is_current', isEqualTo: true)
-          .where('is_absent', isEqualTo: false)
           .limit(1)
           .get();
 
@@ -4947,7 +4618,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       // Check if current time is within shift hours
       final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
-      
+
       if (timeRange.isNotEmpty) {
         final startParts = (timeRange['start'] as String).split(':');
         final endParts = (timeRange['end'] as String).split(':');
@@ -4959,8 +4630,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
 
       // Determine if this is an overnight shift
       final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
-      
-      // 🔧 FIX 3: Enhanced overnight shift day checking
+
       // For overnight shifts, determine which day to check based on current time
       String dayToCheck;
       if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
@@ -4968,11 +4638,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
         final previousDay = now.subtract(const Duration(days: 1));
         dayToCheck = DateFormat('EEEE').format(previousDay);
-        print('🌙 Overnight shift end period: checking previous day assignment ($dayToCheck)');
       } else {
         // Regular shift or "start period" of overnight shift or after shift ends
         dayToCheck = DateFormat('EEEE').format(now);
-        print('☀️ Regular shift or overnight start period: checking current day assignment ($dayToCheck)');
       }
 
       // Check if the determined day is an assigned day
@@ -5005,7 +4673,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       }
 
       final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
-      
+
       return isWithinShift;
     } catch (e) {
       print('Error checking duty status: $e');
