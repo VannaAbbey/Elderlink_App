@@ -301,198 +301,235 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
                   // Emergency Cards
                   Expanded(
-                    child: ListView.builder(
-                      itemCount: emergencies.length,
-                      itemBuilder: (context, index) {
-                        final em = emergencies[index];
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 16),
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: em['verified']
-                                ? const Color.fromARGB(255, 220, 247, 220)
-                                : const Color.fromARGB(255, 255, 248, 220),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Top row with incident icon, house name, time
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 50,
-                                    height: 50,
-                                    decoration: BoxDecoration(
-                                      color: em['verified']
-                                          ? Colors.green
-                                          : Colors.orange,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Icon(
-                                      em['verified']
-                                          ? Icons.verified
-                                          : Icons.report_problem,
-                                      color: Colors.white,
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      em['house'],
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 20,
-                                        color: em['verified']
-                                            ? Colors.green
-                                            : Colors.orange,
-                                      ),
-                                    ),
-                                  ),
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Text(
-                                        em['time'],
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Color.fromARGB(
-                                            255,
-                                            82,
-                                            81,
-                                            81,
-                                          ),
-                                        ),
-                                      ),
-                                      Text(
-                                        em['verified'] ? 'Verified' : 'Pending',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: em['verified']
-                                              ? Colors.green
-                                              : Colors.orange,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-
-                              const SizedBox(height: 8),
-                              // Elderly and caregiver info in separate rows
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Elderly: ",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      em['elderly'],
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.normal,
-                                        color: Colors.black,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Submitted by: ",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      em['submitted_by'],
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.normal,
-                                        color: Colors.black,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              // What happened label
-                              const Text(
-                                "What happened?",
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black,
+                    child: emergencies.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.report_outlined,
+                                  size: 64,
+                                  color: Colors.grey[400],
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              // Centered description box
-                              Center(
-                                child: Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: em['verified']
-                                        ? Colors.green[50]
-                                        : Colors.orange[50],
-                                    borderRadius: BorderRadius.circular(12),
+                                const SizedBox(height: 16),
+                                Text(
+                                  "No incident report yet.",
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      // Incident Type (Main description)
-                                      Text(
-                                        em['incident_type'].isNotEmpty
-                                            ? em['incident_type']
-                                            : 'No incident type specified',
-                                        textAlign: TextAlign.justify,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black87,
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: emergencies.length,
+                            itemBuilder: (context, index) {
+                              final em = emergencies[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: em['verified']
+                                      ? const Color.fromARGB(255, 220, 247, 220)
+                                      : const Color.fromARGB(
+                                          255,
+                                          255,
+                                          248,
+                                          220,
                                         ),
-                                      ),
-                                      // Additional Info (Optional)
-                                      if (em['additional_info'].isNotEmpty) ...[
-                                        const SizedBox(height: 12),
-                                        const Text(
-                                          'Additional Information:',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Top row with incident icon, house name, time
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 50,
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            color: em['verified']
+                                                ? Colors.green
+                                                : Colors.orange,
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          child: Icon(
+                                            em['verified']
+                                                ? Icons.verified
+                                                : Icons.report_problem,
+                                            color: Colors.white,
+                                            size: 28,
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          em['additional_info'],
-                                          textAlign: TextAlign.justify,
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.normal,
-                                            color: Colors.black54,
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            em['house'],
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 20,
+                                              color: em['verified']
+                                                  ? Colors.green
+                                                  : Colors.orange,
+                                            ),
+                                          ),
+                                        ),
+                                        Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              em['time'],
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                color: Color.fromARGB(
+                                                  255,
+                                                  82,
+                                                  81,
+                                                  81,
+                                                ),
+                                              ),
+                                            ),
+                                            Text(
+                                              em['verified']
+                                                  ? 'Verified'
+                                                  : 'Pending',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                                color: em['verified']
+                                                    ? Colors.green
+                                                    : Colors.orange,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+
+                                    const SizedBox(height: 8),
+                                    // Elderly and caregiver info in separate rows
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          "Elderly: ",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            em['elderly'],
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.normal,
+                                              color: Colors.black,
+                                            ),
                                           ),
                                         ),
                                       ],
-                                    ],
-                                  ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          "Submitted by: ",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            em['submitted_by'],
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.normal,
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    // What happened label
+                                    const Text(
+                                      "What happened?",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    // Centered description box
+                                    Center(
+                                      child: Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(16),
+                                        decoration: BoxDecoration(
+                                          color: em['verified']
+                                              ? Colors.green[50]
+                                              : Colors.orange[50],
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            // Incident Type (Main description)
+                                            Text(
+                                              em['incident_type'].isNotEmpty
+                                                  ? em['incident_type']
+                                                  : 'No incident type specified',
+                                              textAlign: TextAlign.justify,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
+                                            // Additional Info (Optional)
+                                            if (em['additional_info']
+                                                .isNotEmpty) ...[
+                                              const SizedBox(height: 12),
+                                              const Text(
+                                                'Additional Information:',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.black54,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                em['additional_info'],
+                                                textAlign: TextAlign.justify,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.normal,
+                                                  color: Colors.black54,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
+                              );
+                            },
                           ),
-                        );
-                      },
-                    ),
                   ),
                 ],
               ),

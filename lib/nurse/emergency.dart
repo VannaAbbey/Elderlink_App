@@ -157,8 +157,26 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           );
                         }
                         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                          return const Center(
-                            child: Text('No emergency alerts yet.'),
+                          return Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 64,
+                                  color: Colors.grey[400],
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'No emergency alerts yet.',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
                           );
                         }
 

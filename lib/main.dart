@@ -50,8 +50,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
             final ai = (d['additional_info'] ?? '').toString().trim();
             String composed = '';
             if (et.isNotEmpty) composed = et;
-            if (ai.isNotEmpty)
+            if (ai.isNotEmpty) {
               composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+            }
             if (composed.isNotEmpty) body = composed;
           }
         } catch (e) {
@@ -71,8 +72,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               final ai = (d['additional_info'] ?? '').toString().trim();
               String composed = '';
               if (it.isNotEmpty) composed = it;
-              if (ai.isNotEmpty)
+              if (ai.isNotEmpty) {
                 composed = composed.isNotEmpty ? '$composed - $ai' : ai;
+              }
               if (composed.isNotEmpty) body = composed;
             }
           } catch (e) {

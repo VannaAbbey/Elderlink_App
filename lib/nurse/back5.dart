@@ -1201,21 +1201,21 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                                                                           1,
                                                                           0,
                                                                         ]),
-                                                                        child: Image.network(imageUrl, fit: BoxFit.cover),
+                                                                        child: Image.network(imageUrl, fit = BoxFit.cover),
                                                                       )
-                                                                    : Image.network(imageUrl, fit: BoxFit.cover))
-                                                                : Image.asset('assets/images/people_icon.png', fit: BoxFit.cover),
+                                                                    : Image.network(imageUrl, fit = BoxFit.cover))
+                                                                : Image.asset('assets/images/people_icon.png', fit = BoxFit.cover),
                                                           ),
                                                         ),
-                                                        const SizedBox(height: 8),
+                                                        SizedBox(height = 8),
                                                         Padding(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                                                          child: Text(fullName, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                                          padding = const EdgeInsets.symmetric(horizontal: 8.0),
+                                                          child = Text(fullName, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
                                                         ),
-                                                        const SizedBox(height: 6),
+                                                        SizedBox(height = 6),
                                                         Padding(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                                                          child: Text((e['elderly_condition'] ?? '').toString(), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                                                          padding = const EdgeInsets.symmetric(horizontal: 8.0),
+                                                          child = Text((e['elderly_condition'] ?? '').toString(), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.black54)),
                                                         ),
                                                       ],
                                                     ),

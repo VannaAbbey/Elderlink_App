@@ -21,7 +21,7 @@ class VitalMonitoringScreen extends StatefulWidget {
 class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  String _search = '';
+  final String _search = '';
   String? nurseName;
   bool isSidebarOpen = false;
   String? selectedHouseId; // track selected house
@@ -297,14 +297,15 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
           ),
 
           // Sidebar overlay
-          if (isSidebarOpen)
+          if (isSidebarOpen) {
             NurseSidebar(
               isSidebarOpen: isSidebarOpen,
               toggleSidebar: toggleSidebar,
               parentContext: context,
-            ),
+            )
+          },
         ],
       ),
-    );
+    )
   }
 }

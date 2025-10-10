@@ -380,14 +380,14 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
       children: [
         GestureDetector(
-          onTap: toggleSidebar,
-          child: Container(color: Colors.black54),
+          onTap = toggleSidebar,
+          child = Container(color: Colors.black54),
         ),
         Positioned(
-          top: 0,
-          bottom: 0,
-          left: 0,
-          child: Material(
+          top = 0,
+          bottom = 0,
+          left = 0,
+          child = Material(
             elevation: 5,
             borderRadius: const BorderRadius.only(
               topRight: Radius.circular(10),
