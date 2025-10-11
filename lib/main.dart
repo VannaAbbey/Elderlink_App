@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
-import 'providers/auth_provider.dart';
 import 'widgets/auth_wrapper.dart';
+import 'providers/cg_providers/absence_provider.dart';
+import 'providers/auth_provider.dart';
 import 'auth/get_started.dart'; 
 import 'auth/login.dart';
 import 'auth/register_choose_role.dart';
@@ -11,7 +12,7 @@ import 'auth/forgot_pass.dart';
 import 'auth/register_success.dart';
 import 'caregiver/home.dart';
 import 'nurse/home.dart';
-import 'services/task_reminder_service.dart';
+import 'services/cg_services/task_reminder_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +51,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => AbsenceProvider()),
       ],
       child: const MyApp(),
     ),

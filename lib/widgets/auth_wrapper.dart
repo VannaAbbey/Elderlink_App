@@ -1,19 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/cg_providers/absence_provider.dart';
+import '../services/cg_services/leave_notification_listener.dart';
 import '../auth/get_started.dart';
 import '../caregiver/home.dart';
 import '../nurse/home.dart';
 
-class AuthWrapper extends StatelessWidget {
+class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
 
   @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+  bool _absenceInitialized = false;
+  bool _leaveListenerInitialized = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, child) {
+    return Consumer2<AuthProvider, AbsenceProvider>(
+      builder: (context, authProvider, absenceProvider, child) {
         // If user is not authenticated, show get started page
         if (!authProvider.isAuthenticated) {
+          _absenceInitialized = false; // Reset flag on logout
+          _leaveListenerInitialized = false; // Reset leave listener flag
           return const GetStartedPage();
         }
 
@@ -26,8 +38,28 @@ class AuthWrapper extends StatelessWidget {
           );
         }
 
-        // User is authenticated and has data, navigate based on role
+        // Initialize absence tracking once user data is loaded
+        final userId = authProvider.currentUser?.uid;
+        if (userId != null && !_absenceInitialized) {
+          _absenceInitialized = true;
+          // Initialize absence tracking in the background
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            absenceProvider.initializeAbsenceTracking(userId);
+          });
+        }
+
+        // User is authenticated, has data - navigate based on role
+        // (Removed absence blocking - absent caregivers can now access the app with limited functionality)
         final userRole = authProvider.userRole;
+        
+        // Initialize leave notification listener for caregivers
+        if (userId != null && !_leaveListenerInitialized && userRole == 'caregiver') {
+          _leaveListenerInitialized = true;
+          // Initialize leave notification listener in the background
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            LeaveNotificationListener().initialize();
+          });
+        }
         
         switch (userRole) {
           case 'administrator':

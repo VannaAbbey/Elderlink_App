@@ -10,6 +10,13 @@ class AliveProfilesGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     print('DEBUG AliveProfilesGrid: Received ${profiles.length} profiles');
+    
+    // Debug: Print details of each profile to check is_temporary_assignment flag
+    for (int i = 0; i < profiles.length; i++) {
+      final profile = profiles[i];
+      print('DEBUG AliveProfilesGrid: Profile $i - Name: ${profile['name']}, is_temporary_assignment: ${profile['is_temporary_assignment']}');
+    }
+    
     print('DEBUG AliveProfilesGrid: About to show grid with ${profiles.length} items');
     
     return GridView.builder(
@@ -60,75 +67,115 @@ class AliveProfilesGrid extends StatelessWidget {
             ),
             color: Color(0xFFC1E5E9),
             elevation: 2,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                    ),
-                    child: ClipOval(
-                      child: profilePic != null && profilePic.isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: profilePic,
-                              width: 80,
-                              height: 80,
-                              fit: BoxFit.cover,
-                              placeholder: (context, url) => Container(
-                                width: 80,
-                                height: 80,
-                                color: Colors.grey[300],
-                                child: const Icon(
-                                  Icons.person,
-                                  color: Colors.grey,
-                                  size: 40,
-                                ),
-                              ),
-                              errorWidget: (context, url, error) => Image.asset(
-                                'assets/images/people_icon.png',
-                                width: 80,
-                                height: 80,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          : Image.asset(
-                              'assets/images/people_icon.png',
-                              width: 80,
-                              height: 80,
-                              fit: BoxFit.cover,
+            child: Stack(
+              children: [
+                // Main content - positioned to fill the card
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 80,
+                          height: 80,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                          ),
+                          child: ClipOval(
+                            child: profilePic != null && profilePic.isNotEmpty
+                                ? CachedNetworkImage(
+                                    imageUrl: profilePic,
+                                    width: 80,
+                                    height: 80,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => Container(
+                                      width: 80,
+                                      height: 80,
+                                      color: Colors.grey[300],
+                                      child: const Icon(
+                                        Icons.person,
+                                        color: Colors.grey,
+                                        size: 40,
+                                      ),
+                                    ),
+                                    errorWidget: (context, url, error) => Image.asset(
+                                      'assets/images/people_icon.png',
+                                      width: 80,
+                                      height: 80,
+                                      fit: BoxFit.cover,
+                                    ),
+                                  )
+                                : Image.asset(
+                                    'assets/images/people_icon.png',
+                                    width: 80,
+                                    height: 80,
+                                    fit: BoxFit.cover,
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          profile['name'] ?? '',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Color(0xFF00588e),
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (age != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Age: $age',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF00588e),
+                              fontWeight: FontWeight.w500,
                             ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    profile['name'] ?? '',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: Color(0xFF00588e),
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                ),
+                // Temporary assignment indicator - orange dot in top right
+                if (profile['is_temporary_assignment'] == true) ...[
+                  // Debug print
+                  Builder(
+                    builder: (context) {
+                      print('🟠🟠🟠 RENDERING ORANGE DOT for ${profile['name']}');
+                      return const SizedBox.shrink();
+                    },
                   ),
-                  if (age != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      'Age: $age',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF00588e),
-                        fontWeight: FontWeight.w500,
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.orange,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 3,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         );

@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../models/notification_model.dart';
+import '../../models/cg_models/notification_model.dart';
 import 'notification_deduplication_service.dart';
 
 class NotificationService {
@@ -359,33 +359,6 @@ class NotificationService {
     });
   }
 
-  /// Create leave request notifications
-  /// 
-  /// Example usage for caregiver:
-  /// ```dart
-  /// await NotificationService().createLeaveNotification(
-  ///   userId: 'caregiver123',
-  ///   userType: 'caregiver',
-  ///   leaveRequestId: 'leave_abc123',
-  ///   type: NotificationType.leaveApproved,
-  ///   leaveDates: 'Dec 25-26, 2025',
-  ///   leaveType: 'vacation',
-  ///   approverName: 'Admin Sarah',
-  ///   priority: NotificationPriority.high,
-  /// );
-  /// ```
-  /// 
-  /// Example usage for nurse:
-  /// ```dart
-  /// await NotificationService().createLeaveNotification(
-  ///   userId: 'nurse456',
-  ///   userType: 'nurse',
-  ///   leaveRequestId: 'leave_def789',
-  ///   type: NotificationType.leaveApproved,
-  ///   leaveDates: 'Jan 15-16, 2026',
-  ///   leaveType: 'sick_leave',
-  /// );
-  /// ```
   Future<void> createLeaveNotification({
     required String userId,
     String userType = 'caregiver',
@@ -394,6 +367,7 @@ class NotificationService {
     required String leaveDates,
     required String leaveType,
     String? approverName,
+    String? reviewerComments,
     String? previousStatus,
     String? newStatus,
     NotificationPriority priority = NotificationPriority.normal,
@@ -412,12 +386,20 @@ class NotificationService {
         if (approverName != null) {
           message += ' by $approverName';
         }
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          message += '.\n\n💬 Comment: $reviewerComments';
+        }
         break;
       case NotificationType.leaveDenied:
         title = 'Leave Request Denied';
         message = 'Your $leaveType leave request for $leaveDates has been denied';
         if (approverName != null) {
           message += ' by $approverName';
+        }
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          message += '.\n\n💬 Reason: $reviewerComments';
+        } else {
+          message += '.\n\nPlease contact your supervisor for more details.';
         }
         break;
       case NotificationType.leaveModified:
@@ -450,6 +432,7 @@ class NotificationService {
         'leave_dates': leaveDates,
         'leave_type': leaveType,
         'approver_name': approverName,
+        'reviewer_comments': reviewerComments,
         'previous_status': previousStatus,
         'new_status': newStatus,
       },

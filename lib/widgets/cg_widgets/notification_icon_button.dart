@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/notification_service.dart';
-import '../caregiver/notifications.dart';
+import '../../services/cg_services/notification_service.dart';
+import '../../caregiver/notifications.dart';
 
 /// A reusable notification icon button with red dot indicator for unread notifications
 class NotificationIconButton extends StatelessWidget {

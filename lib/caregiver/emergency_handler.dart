@@ -2,12 +2,70 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import 'emergency_modal.dart'; // <-- UI layout ng modal
-import '../services/caregiver_shift_log_service.dart'; // <-- New unified logging service
+import '../services/cg_services/caregiver_shift_log_service.dart'; // <-- New unified logging service
+import '../providers/cg_providers/absence_provider.dart';
+
+// Helper function to show absence dialog
+void _showAbsenceDialog(BuildContext context, String absenceType) {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext dialogContext) {
+      return AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              absenceType == 'leave' ? Icons.event_busy : Icons.cancel_outlined,
+              color: Colors.orange,
+              size: 32,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'You are currently Absent/On Leave for the day, come back soon!',
+          style: TextStyle(fontSize: 16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop(); // Close dialog
+            },
+            child: const Text(
+              'OK',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
 
 /// Main entry para sa Emergency button
 Future<void> openEmergencyIfAllowed(BuildContext context) async {
+  // Check if caregiver is absent first
+  final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+  if (absenceProvider.isAbsentToday) {
+    _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+    return;
+  }
+
   final user = FirebaseAuth.instance.currentUser;
 
   if (user == null) {
@@ -92,7 +150,7 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     if (context.mounted) {
       _showError(
         context,
-        "It is not your shift right now.\n\n✅ Your shift: $shift (${_formatToAMPM(startTime)} - ${_formatToAMPM(endTime)})",
+        "It is not your shift right now.\n\nYour shift: $shift (${_formatToAMPM(startTime)} - ${_formatToAMPM(endTime)})",
       );
     }
     return;
@@ -192,9 +250,144 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     // Don't fail the entire operation if logging fails
   }
 
+  // Fetch nurse names to display in dialog
+  List<String> nurseNames = [];
+  for (String nurseId in activeNurseIds) {
+    try {
+      final nurseDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(nurseId)
+          .get();
+      if (nurseDoc.exists) {
+        final nurseFname = nurseDoc['user_fname'] ?? '';
+        final nurseLname = nurseDoc['user_lname'] ?? '';
+        final fullName = '$nurseFname $nurseLname'.trim();
+        if (fullName.isNotEmpty) {
+          nurseNames.add(fullName);
+        }
+      }
+    } catch (e) {
+      print('❌ Error fetching nurse name: $e');
+    }
+  }
+
+  // Show success dialog with nurse names
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("🚨 Emergency alert sent to ${activeNurseIds.length} nurse(s)!")),
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 32,
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Alert Sent',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF00588e),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your emergency alert has been sent to:',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              SizedBox(height: 12),
+              if (nurseNames.isEmpty)
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No nurses currently on shift',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  constraints: BoxConstraints(
+                    maxHeight: 200,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: nurseNames.map((name) {
+                        return Padding(
+                          padding: EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.person,
+                                size: 20,
+                                color: Color(0xFF00588e),
+                              ),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xFF00588e),
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'OK',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

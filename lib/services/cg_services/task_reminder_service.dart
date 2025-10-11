@@ -3,14 +3,13 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
-// Removed flutter_ringtone_player - using notification sound instead
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
 import 'notification_service.dart';
-import '../models/notification_model.dart';
+import '../../models/cg_models/notification_model.dart';
 
 class TaskReminderService {
   static final TaskReminderService _instance = TaskReminderService._internal();

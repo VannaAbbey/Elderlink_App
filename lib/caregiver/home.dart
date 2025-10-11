@@ -2,16 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../providers/auth_provider.dart';
+import '../providers/cg_providers/absence_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile.dart';
 import 'leave_form.dart' as app_leave_form;
 import 'add_task.dart';
 import 'incident.dart';
 import 'shift.dart';
-import '../widgets/notification_icon_button.dart';
+import '../widgets/cg_widgets/notification_icon_button.dart';
 import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
-import '../services/house_service.dart';
+import '../services/cg_services/house_service.dart';
 import 'emergency_handler.dart';
 
 void main() {
@@ -456,13 +457,19 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   bool isSidebarOpen = false;
   int selectedIndex = 0;
 
+  void resetToHome() {
+    setState(() {
+      selectedIndex = 0;
+    });
+  }
+
   // Add the list of screens for navigation
-  final List<Widget> _screens = [
+  List<Widget> get _screens => [
     SizedBox.shrink(), // Home
-    const AddTaskScreen(),
+    AddTaskScreen(onResetToHome: resetToHome),
     // Emergency is now a modal, not a screen
-    const IncidentScreen(),
-    const ShiftScreen(),
+    IncidentScreen(onResetToHome: resetToHome),
+    ShiftScreen(onResetToHome: resetToHome),
   ];
 
   void toggleSidebar() {
@@ -1148,6 +1155,390 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                               ),
                                             ],
                                           ),
+                                        ),
+                                        
+                                        const SizedBox(height: 15),
+                                        
+                                        // Absence Status & Temporary Assignments
+                                        Consumer<AbsenceProvider>(
+                                          builder: (context, absenceProvider, child) {
+                                            // Show absence status if absent
+                                            if (absenceProvider.isAbsentToday) {
+                                              return Container(
+                                                padding: const EdgeInsets.all(16),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.orange[100],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(
+                                                    color: Colors.orange,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      absenceProvider.absenceType == 'leave'
+                                                          ? Icons.event_busy
+                                                          : Icons.cancel_outlined,
+                                                      color: Colors.orange,
+                                                      size: 40,
+                                                    ),
+                                                    const SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: const [
+                                                          Text(
+                                                            'Not Present at Work',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.black87,
+                                                            ),
+                                                          ),
+                                                          SizedBox(height: 4),
+                                                          Text(
+                                                            'You are marked absent/on leave for today',
+                                                            style: TextStyle(
+                                                              fontSize: 14,
+                                                              color: Colors.black54,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+                                            
+                                            // Show temporary assignments if any
+                                            final tempCount = absenceProvider.temporaryElderlyIds.length;
+                                            print('🏠 Home.dart: Temporary elderly count = $tempCount');
+                                            print('🏠 Home.dart: hasTemporaryAssignments = ${absenceProvider.hasTemporaryAssignments}');
+                                            
+                                            if (absenceProvider.hasTemporaryAssignments && tempCount > 0) {
+                                              return Container(
+                                                padding: const EdgeInsets.all(16),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue[50],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(
+                                                    color: Colors.blue,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    const Icon(
+                                                      Icons.people,
+                                                      color: Colors.blue,
+                                                      size: 40,
+                                                    ),
+                                                    const SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          const Text(
+                                                            'Temporary Assignments',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.black87,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(height: 4),
+                                                          Text(
+                                                            'You have ${absenceProvider.temporaryElderlyIds.length} temporary elderly today',
+                                                            style: const TextStyle(
+                                                              fontSize: 14,
+                                                              color: Colors.black54,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+                                            
+                                            // Check if caregiver is scheduled for today
+                                            final now = DateTime.now();
+                                            final daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                                            final todayName = daysOfWeek[now.weekday % 7]; // Convert weekday to day name
+                                            final isScheduledToday = daysAssigned.contains(todayName);
+                                            
+                                            // Show not on duty status if not scheduled for today
+                                            if (!isScheduledToday) {
+                                              return Container(
+                                                padding: const EdgeInsets.all(16),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.red[50],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(
+                                                    color: Colors.red,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: const [
+                                                    Icon(
+                                                      Icons.event_busy,
+                                                      color: Colors.red,
+                                                      size: 40,
+                                                    ),
+                                                    SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            'Not On Duty',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.black87,
+                                                            ),
+                                                          ),
+                                                          SizedBox(height: 4),
+                                                          Text(
+                                                            'You are not on duty for today',
+                                                            style: TextStyle(
+                                                              fontSize: 14,
+                                                              color: Colors.black54,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+                                            
+                                            // Check if shift has started or ended
+                                            bool shiftNotStarted = false;
+                                            bool shiftEnded = false;
+                                            
+                                            if (startTime.isNotEmpty && endTime.isNotEmpty) {
+                                              try {
+                                                final now = DateTime.now();
+                                                
+                                                // Parse shift times
+                                                final startParts = startTime.split(':');
+                                                final shiftStartHour = int.parse(startParts[0]);
+                                                final shiftStartMinute = int.parse(startParts[1]);
+                                                
+                                                final endParts = endTime.split(':');
+                                                final shiftEndHour = int.parse(endParts[0]);
+                                                final shiftEndMinute = int.parse(endParts[1]);
+                                                
+                                                DateTime shiftStartDateTime = DateTime(
+                                                  now.year,
+                                                  now.month,
+                                                  now.day,
+                                                  shiftStartHour,
+                                                  shiftStartMinute,
+                                                );
+                                                
+                                                DateTime shiftEndDateTime = DateTime(
+                                                  now.year,
+                                                  now.month,
+                                                  now.day,
+                                                  shiftEndHour,
+                                                  shiftEndMinute,
+                                                );
+                                                
+                                                // Determine if it's an overnight shift
+                                                final isOvernightShift = shiftEndHour < shiftStartHour || 
+                                                    (shiftEndHour == shiftStartHour && shiftEndMinute <= shiftStartMinute);
+                                                
+                                                if (isOvernightShift) {
+                                                  // Overnight shift logic
+                                                  if (now.hour < shiftEndHour || (now.hour == shiftEndHour && now.minute < shiftEndMinute)) {
+                                                    // Current time is in the "end period" (before shift end) - shift is active
+                                                    shiftNotStarted = false;
+                                                    shiftEnded = false;
+                                                  } else if (now.hour >= shiftStartHour || (now.hour == shiftStartHour && now.minute >= shiftStartMinute)) {
+                                                    // Current time is in the "start period" (after shift start) - shift is active
+                                                    shiftNotStarted = false;
+                                                    shiftEnded = false;
+                                                  } else {
+                                                    // Time is between end and start
+                                                    // Check if we're before start or after end
+                                                    if (now.hour < shiftStartHour) {
+                                                      shiftNotStarted = true;
+                                                      shiftEnded = false;
+                                                    } else {
+                                                      shiftNotStarted = false;
+                                                      shiftEnded = true;
+                                                    }
+                                                  }
+                                                } else {
+                                                  // Regular shift (not overnight)
+                                                  if (now.isBefore(shiftStartDateTime)) {
+                                                    shiftNotStarted = true;
+                                                    shiftEnded = false;
+                                                  } else if (now.isAfter(shiftEndDateTime)) {
+                                                    shiftNotStarted = false;
+                                                    shiftEnded = true;
+                                                  } else {
+                                                    // Currently within shift hours
+                                                    shiftNotStarted = false;
+                                                    shiftEnded = false;
+                                                  }
+                                                }
+                                              } catch (e) {
+                                                print('Error checking shift times: $e');
+                                                shiftNotStarted = false;
+                                                shiftEnded = false;
+                                              }
+                                            }
+                                            
+                                            // Show shift not started status
+                                            if (shiftNotStarted) {
+                                              return Container(
+                                                padding: const EdgeInsets.all(16),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.amber[50],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(
+                                                    color: Colors.amber,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: const [
+                                                    Icon(
+                                                      Icons.schedule,
+                                                      color: Colors.amber,
+                                                      size: 40,
+                                                    ),
+                                                    SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            'Shift Not Started',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.black87,
+                                                            ),
+                                                          ),
+                                                          SizedBox(height: 4),
+                                                          Text(
+                                                            'Your shift hasn\'t started yet for today',
+                                                            style: TextStyle(
+                                                              fontSize: 14,
+                                                              color: Colors.black54,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+                                            
+                                            // Show shift ended status
+                                            if (shiftEnded) {
+                                              return Container(
+                                                padding: const EdgeInsets.all(16),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey[200],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(
+                                                    color: Colors.grey,
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: const [
+                                                    Icon(
+                                                      Icons.work_off,
+                                                      color: Colors.grey,
+                                                      size: 40,
+                                                    ),
+                                                    SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            'Shift Ended',
+                                                            style: TextStyle(
+                                                              fontSize: 16,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.black87,
+                                                            ),
+                                                          ),
+                                                          SizedBox(height: 4),
+                                                          Text(
+                                                            'Your shift has ended for today',
+                                                            style: TextStyle(
+                                                              fontSize: 14,
+                                                              color: Colors.black54,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            }
+                                            
+                                            // Show normal status (on duty)
+                                            return Container(
+                                              padding: const EdgeInsets.all(16),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green[50],
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(
+                                                  color: Colors.green,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                              child: Row(
+                                                children: const [
+                                                  Icon(
+                                                    Icons.check_circle,
+                                                    color: Colors.green,
+                                                    size: 40,
+                                                  ),
+                                                  SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          'On Duty',
+                                                          style: TextStyle(
+                                                            fontSize: 16,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Colors.black87,
+                                                          ),
+                                                        ),
+                                                        SizedBox(height: 4),
+                                                        Text(
+                                                          'You are on duty today',
+                                                          style: TextStyle(
+                                                            fontSize: 14,
+                                                            color: Colors.black54,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
                                         ),
                                       ],
                                     );

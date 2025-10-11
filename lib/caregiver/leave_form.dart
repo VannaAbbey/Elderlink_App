@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/auth_provider.dart';
 import '../services/leave_request_service.dart';
 
@@ -34,6 +35,10 @@ class _LeaveFormState extends State<LeaveForm> {
   DateTime? _startDate;
   DateTime? _endDate;
   bool _isSubmitting = false;
+  
+  // Caregiver's assigned working days
+  List<String> _assignedDays = [];
+  String? _shiftStartTime; // Store shift start time (e.g., "08:00")
 
   @override
   void initState() {
@@ -46,6 +51,134 @@ class _LeaveFormState extends State<LeaveForm> {
     _contactInfoController = TextEditingController(
       text: authProvider.userContactNum
     );
+    
+    // Load caregiver's assigned days
+    _loadCaregiverSchedule();
+  }
+  
+  /// Load caregiver's assigned working days from Firestore
+  Future<void> _loadCaregiverSchedule() async {
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final caregiverId = authProvider.currentUser?.uid;
+      
+      if (caregiverId == null) {
+        print('⚠️ LeaveForm: No caregiver ID found');
+        setState(() {
+        });
+        return;
+      }
+      
+      print('🔍 LeaveForm: Loading schedule for caregiver: $caregiverId');
+      
+      // Query house_shift_assignments to get assigned days
+      final assignSnapshot = await FirebaseFirestore.instance
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .limit(1)
+          .get();
+      
+      if (assignSnapshot.docs.isNotEmpty) {
+        final assignData = assignSnapshot.docs.first.data();
+        final daysAssigned = List<String>.from(assignData['days_assigned'] ?? []);
+        final startTime = assignData['start_time'] as String? ?? '00:00';
+        
+        setState(() {
+          _assignedDays = daysAssigned;
+          _shiftStartTime = startTime;
+        });
+        
+        print('✅ LeaveForm: Assigned days loaded: $_assignedDays');
+        print('✅ LeaveForm: Shift start time: $_shiftStartTime');
+      } else {
+        print('⚠️ LeaveForm: No assignment found for caregiver');
+        setState(() {
+        });
+      }
+    } catch (e) {
+      print('❌ LeaveForm: Error loading caregiver schedule: $e');
+      setState(() {
+      });
+    }
+  }
+  
+  /// Check if a date falls on one of the caregiver's assigned working days
+  bool _isWorkingDay(DateTime date) {
+    if (_assignedDays.isEmpty) {
+      // If no assigned days loaded, allow all dates (fallback)
+      return true;
+    }
+    
+    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final dayName = weekdays[date.weekday - 1];
+    
+    return _assignedDays.contains(dayName);
+  }
+  
+  /// Check if the caregiver's duty has already started for today
+  bool _hasDutyStartedToday(DateTime date) {
+    final now = DateTime.now();
+    
+    // Only check for today
+    if (date.year != now.year || date.month != now.month || date.day != now.day) {
+      return false; // Not today, so duty hasn't started
+    }
+    
+    // Check if today is a working day
+    if (!_isWorkingDay(date)) {
+      return false; // Not a working day, so no duty
+    }
+    
+    // Parse shift start time
+    if (_shiftStartTime == null || _shiftStartTime!.isEmpty) {
+      return false; // No start time defined, allow selection
+    }
+    
+    try {
+      final timeParts = _shiftStartTime!.split(':');
+      if (timeParts.length != 2) {
+        return false; // Invalid format
+      }
+      
+      final shiftHour = int.parse(timeParts[0]);
+      final shiftMinute = int.parse(timeParts[1]);
+      
+      final shiftStartDateTime = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        shiftHour,
+        shiftMinute,
+      );
+      
+      // If current time is past shift start time, duty has started
+      final dutyStarted = now.isAfter(shiftStartDateTime) || now.isAtSameMomentAs(shiftStartDateTime);
+      
+      if (dutyStarted) {
+        print('⏰ LeaveForm: Duty has already started today at $_shiftStartTime (current: ${now.hour}:${now.minute})');
+      }
+      
+      return dutyStarted;
+    } catch (e) {
+      print('❌ LeaveForm: Error parsing shift start time: $e');
+      return false; // On error, allow selection
+    }
+  }
+  
+  /// Check if a date is selectable in the date picker
+  bool _isDateSelectable(DateTime date) {
+    // First check if it's a working day
+    if (!_isWorkingDay(date)) {
+      return false;
+    }
+    
+    // Then check if duty has already started for today
+    if (_hasDutyStartedToday(date)) {
+      return false;
+    }
+    
+    return true;
   }
 
   @override
@@ -187,6 +320,71 @@ class _LeaveFormState extends State<LeaveForm> {
                             required: true,
                           ),
                           const SizedBox(height: 20),
+                          // Info message about working days
+                          if (_assignedDays.isNotEmpty) ...[
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00588e).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(0xFF00588e).withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Icon(
+                                        Icons.info_outline,
+                                        color: Color(0xFF00588e),
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'You can only request leave for your assigned working days: ${_assignedDays.join(", ")}',
+                                          style: const TextStyle(
+                                            color: Color(0xFF00588e),
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  // Check if today is a working day and duty has started
+                                  if (_hasDutyStartedToday(DateTime.now())) ...[
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Icon(
+                                          Icons.schedule,
+                                          color: Colors.orange,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Your duty has already started today. You cannot select today for leave.',
+                                            style: const TextStyle(
+                                              color: Colors.orange,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                           Row(
                             children: [
                               Expanded(
@@ -488,11 +686,38 @@ class _LeaveFormState extends State<LeaveForm> {
             suffixIcon: const Icon(Icons.calendar_today, color: Color(0xFF00588e)),
           ),
           onTap: () async {
+            // Find the initial date for the picker
+            DateTime initialPickerDate = selectedDate ?? DateTime.now();
+            
+            // If the initial date is not selectable, find the next selectable date
+            if (!_isDateSelectable(initialPickerDate)) {
+              DateTime candidate = initialPickerDate;
+              bool found = false;
+              // Search up to 60 days ahead for the next selectable date
+              for (int i = 1; i <= 60; i++) {
+                candidate = initialPickerDate.add(Duration(days: i));
+                if (_isDateSelectable(candidate)) {
+                  initialPickerDate = candidate;
+                  found = true;
+                  break;
+                }
+              }
+              // If no selectable date found in 60 days, use today anyway (will be disabled)
+              if (!found) {
+                print('⚠️ LeaveForm: No selectable date found in next 60 days');
+                initialPickerDate = DateTime.now();
+              }
+            }
+            
             final DateTime? picked = await showDatePicker(
               context: context,
-              initialDate: selectedDate ?? DateTime.now(),
+              initialDate: initialPickerDate,
               firstDate: DateTime.now(),
               lastDate: DateTime.now().add(const Duration(days: 365)),
+              selectableDayPredicate: (DateTime date) {
+                // Check if date is selectable (working day + duty not started)
+                return _isDateSelectable(date);
+              },
               builder: (context, child) {
                 return Theme(
                   data: Theme.of(context).copyWith(

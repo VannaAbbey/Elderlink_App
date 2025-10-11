@@ -2,21 +2,101 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart';
-import '../widgets/notification_icon_button.dart';
+import '../providers/cg_providers/absence_provider.dart';
+import '../widgets/cg_widgets/notification_icon_button.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/house_service.dart';
+import '../services/cg_services/house_service.dart';
 import 'upcoming_tasks_screen.dart';
 import 'complete_tasks_screen.dart';
 import 'incomplete_tasks_screen.dart';
 import 'missed_tasks_screen.dart';
 
 class AddTaskScreen extends StatefulWidget {
-  const AddTaskScreen({super.key});
+  final VoidCallback? onResetToHome;
+  
+  const AddTaskScreen({super.key, this.onResetToHome});
+  
   @override
   State<AddTaskScreen> createState() => _AddTaskScreenState();
 }
 
 class _AddTaskScreenState extends State<AddTaskScreen> {
+  bool _dialogShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check absence status after frame is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAbsenceStatus();
+      // Set up listener for absence status changes
+      _setupAbsenceListener();
+    });
+  }
+  
+  void _setupAbsenceListener() {
+    print('👂 [AddTask] Setting up absence listener');
+    // Listen to absence provider changes
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    absenceProvider.addListener(_onAbsenceStatusChanged);
+    print('✅ [AddTask] Absence listener attached');
+  }
+  
+  void _onAbsenceStatusChanged() {
+    print('🔔 [AddTask] Absence status changed callback fired');
+    print('   mounted: $mounted, _dialogShown: $_dialogShown');
+    
+    if (!mounted) {
+      print('⚠️ [AddTask] Widget not mounted, ignoring');
+      return;
+    }
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    print('   isAbsentToday: ${absenceProvider.isAbsentToday}');
+    print('   absenceType: ${absenceProvider.absenceType}');
+    
+    // If caregiver becomes absent and dialog not yet shown
+    if (absenceProvider.isAbsentToday && !_dialogShown) {
+      print('✅ [AddTask] Will show absence dialog');
+      _dialogShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          print('📱 [AddTask] Showing absence dialog now');
+          _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+        } else {
+          print('⚠️ [AddTask] Widget unmounted before showing dialog');
+        }
+      });
+    }
+    
+    // If caregiver is no longer absent, reset dialog flag
+    if (!absenceProvider.isAbsentToday && _dialogShown) {
+      print('✅ [AddTask] Resetting dialog flag (no longer absent)');
+      _dialogShown = false;
+    }
+  }
+  
+  @override
+  void dispose() {
+    // Remove listener to prevent memory leaks
+    try {
+      final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+      absenceProvider.removeListener(_onAbsenceStatusChanged);
+    } catch (e) {
+      // Context might be invalid during disposal, ignore
+    }
+    super.dispose();
+  }
+
+  void _checkAbsenceStatus() {
+    if (_dialogShown) return;
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    if (absenceProvider.isAbsentToday) {
+      _dialogShown = true;
+      _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+    }
+  }
 
   Future<void> saveCareTask({
     required String elderlyId,
@@ -322,6 +402,84 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
   final List<String> _tabs = ['Upcoming', 'Complete', 'Incomplete', 'Missed'];
   bool isSidebarOpen = false;
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
+
+  void _showAbsenceDialog(BuildContext context, String absenceType) {
+    print('📱 [AddTask] _showAbsenceDialog called, absenceType: $absenceType');
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  absenceType == 'leave' ? Icons.event_busy : Icons.cancel_outlined,
+                  color: Colors.orange,
+                  size: 28,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: const Text(
+              'You are currently Absent/On Leave for the day, come back soon!',
+              style: TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  print('🔘 [AddTask] Dialog OK button clicked');
+                  Navigator.of(dialogContext).pop(); // Close dialog only
+                  print('✅ [AddTask] Dialog closed');
+                },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) {
+      print('🔙 [AddTask] Dialog dismissed, attempting to reset to home');
+      print('   mounted: $mounted, onResetToHome: ${widget.onResetToHome != null}');
+      // After dialog closes, reset to home tab
+      // Use post frame callback to avoid crashes during build/dispose
+      if (mounted && widget.onResetToHome != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            try {
+              print('🏠 [AddTask] Calling onResetToHome');
+              widget.onResetToHome?.call();
+              print('✅ [AddTask] Successfully reset to home');
+            } catch (e) {
+              print('❌ [AddTask] Error resetting to home: $e');
+            }
+          } else {
+            print('⚠️ [AddTask] Widget unmounted, cannot reset to home');
+          }
+        });
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

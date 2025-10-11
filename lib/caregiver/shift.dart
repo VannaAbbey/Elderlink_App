@@ -2,15 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
 import '../providers/auth_provider.dart' as app_auth;
+import '../providers/cg_providers/absence_provider.dart';
 import 'shift_logs.dart';
-import '../services/caregiver_shift_log_service.dart';
-import '../services/additional_log_service.dart';
-import '../widgets/notification_icon_button.dart';
+import '../services/cg_services/caregiver_shift_log_service.dart';
+import '../services/cg_services/additional_log_service.dart';
+import '../widgets/cg_widgets/notification_icon_button.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class ShiftScreen extends StatefulWidget {
-  const ShiftScreen({super.key});
+  final VoidCallback? onResetToHome;
+  
+  const ShiftScreen({super.key, this.onResetToHome});
+  
   @override
   State<ShiftScreen> createState() => _ShiftScreenState();
 }
@@ -18,6 +22,139 @@ class ShiftScreen extends StatefulWidget {
 class _ShiftScreenState extends State<ShiftScreen> {
   DateTime selectedDate = DateTime.now();
   final ScrollController _additionalLogsScrollController = ScrollController();
+  bool _dialogShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check absence status after frame is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAbsenceStatus();
+      // Set up listener for absence status changes
+      _setupAbsenceListener();
+    });
+  }
+  
+  void _setupAbsenceListener() {
+    print('👂 [Shift] Setting up absence listener');
+    // Listen to absence provider changes
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    absenceProvider.addListener(_onAbsenceStatusChanged);
+    print('✅ [Shift] Absence listener attached');
+  }
+  
+  void _onAbsenceStatusChanged() {
+    print('🔔 [Shift] Absence status changed callback fired');
+    print('   mounted: $mounted, _dialogShown: $_dialogShown');
+    
+    if (!mounted) {
+      print('⚠️ [Shift] Widget not mounted, ignoring');
+      return;
+    }
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    print('   isAbsentToday: ${absenceProvider.isAbsentToday}');
+    print('   absenceType: ${absenceProvider.absenceType}');
+    
+    // If caregiver becomes absent and dialog not yet shown
+    if (absenceProvider.isAbsentToday && !_dialogShown) {
+      print('✅ [Shift] Will show absence dialog');
+      _dialogShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          print('📱 [Shift] Showing absence dialog now');
+          _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+        } else {
+          print('⚠️ [Shift] Widget unmounted before showing dialog');
+        }
+      });
+    }
+    
+    // If caregiver is no longer absent, reset dialog flag
+    if (!absenceProvider.isAbsentToday && _dialogShown) {
+      print('✅ [Shift] Resetting dialog flag (no longer absent)');
+      _dialogShown = false;
+    }
+  }
+
+  void _checkAbsenceStatus() {
+    if (_dialogShown) return;
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    if (absenceProvider.isAbsentToday) {
+      _dialogShown = true;
+      _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+    }
+  }
+
+  void _showAbsenceDialog(BuildContext context, String absenceType) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  absenceType == 'leave' ? Icons.event_busy : Icons.cancel_outlined,
+                  color: Colors.orange,
+                  size: 28,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: const Text(
+              'You are currently Absent/On Leave for the day, come back soon!',
+              style: TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(); // Close dialog only
+                },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) {
+      // After dialog closes, reset to home tab
+      // Use post frame callback to avoid crashes during build/dispose
+      if (mounted && widget.onResetToHome != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            try {
+              widget.onResetToHome?.call();
+            } catch (e) {
+              print('Error resetting to home: $e');
+            }
+          }
+        });
+      }
+    });
+  }
 
   void _showAdditionalLogModal(BuildContext context) async {
     // Load existing content for today's log
@@ -352,6 +489,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
   @override
   void dispose() {
+    // Remove listener to prevent memory leaks
+    try {
+      final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+      absenceProvider.removeListener(_onAbsenceStatusChanged);
+    } catch (e) {
+      // Context might be invalid during disposal, ignore
+    }
     _additionalLogsScrollController.dispose();
     super.dispose();
   }
@@ -852,17 +996,22 @@ class _ShiftScreenState extends State<ShiftScreen> {
         final startDate = startDateTimestamp.toDate();
         final endDate = endDateTimestamp.toDate();
 
+        // Normalize dates to compare only date parts (ignore time)
+        final nowDate = DateTime(now.year, now.month, now.day);
+        final normalizedStartDate = DateTime(startDate.year, startDate.month, startDate.day);
+        final normalizedEndDate = DateTime(endDate.year, endDate.month, endDate.day);
+
         print('🔍 SHIFT: ========== HOUSE ASSIGNMENT DATA ==========');
         print('🔍 SHIFT: Days assigned: $daysAssigned');
         print('🔍 SHIFT: Start date: ${startDate.toString()}');
         print('🔍 SHIFT: End date: ${endDate.toString()}');
         print('🔍 SHIFT: Current date/time: ${now.toString()}');
-        print('🔍 SHIFT: now.isBefore(startDate): ${now.isBefore(startDate)}');
-        print('🔍 SHIFT: now.isAfter(endDate): ${now.isAfter(endDate)}');
+        print('🔍 SHIFT: nowDate.isBefore(normalizedStartDate): ${nowDate.isBefore(normalizedStartDate)}');
+        print('🔍 SHIFT: nowDate.isAfter(normalizedEndDate): ${nowDate.isAfter(normalizedEndDate)}');
         print('🔍 SHIFT: ==================================================');
 
         // Check if current date is within assignment period
-        if (now.isBefore(startDate) || now.isAfter(endDate)) {
+        if (nowDate.isBefore(normalizedStartDate) || nowDate.isAfter(normalizedEndDate)) {
           print('🔴 SHIFT: Current date outside assignment period');
           return false;
         }
@@ -898,7 +1047,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
           print('☀️ SHIFT: Regular/overnight start - checking current day: $dayToCheck');
         }
 
-        print('🔍 SHIFT: Shift times: ${startHour}:${startMinute.toString().padLeft(2, '0')} - ${endHour}:${endMinute.toString().padLeft(2, '0')}');
+        print('🔍 SHIFT: Shift times: $startHour:${startMinute.toString().padLeft(2, '0')} - $endHour:${endMinute.toString().padLeft(2, '0')}');
         print('🔍 SHIFT: Is overnight: $isOvernightShift');
         print('🔍 SHIFT: Day to check: $dayToCheck');
 

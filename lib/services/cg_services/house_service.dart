@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'absence_service.dart';
 
 
 class HouseService {
@@ -212,21 +213,21 @@ class HouseService {
 
     final profilePicUrl = elderlyData['elderly_profilePic'] ?? elderlyData['profile_pic'] ?? '';
 
-    final elderlyRecord = <String, dynamic>{
-      'elderly_id': elderlyId,
-      'days_assigned': daysAssigned,
-      'assign_id': '', // Default assignment ID
-      'elderly_status': elderlyData['elderly_status'] as String? ?? 'Alive',
-      'name': constructedName.isNotEmpty ? constructedName : 'Name not available',
-      'house_name': houseName ?? 'Unknown House',
-      // Add birthdate field mapping for consistency
-      'birthdate': elderlyData['elderly_bday'] ?? elderlyData['birthdate'],
-      // Add profile picture field mapping - use elderly_profilePic from database
-      'profile_pic': profilePicUrl,
-    };
-    
-    // Add all other elderly data
+    // Start with all elderly data
+    final elderlyRecord = <String, dynamic>{};
     elderlyRecord.addAll(elderlyData);
+    
+    // Then set/override specific fields
+    elderlyRecord['elderly_id'] = elderlyId;
+    elderlyRecord['days_assigned'] = daysAssigned;
+    elderlyRecord['assign_id'] = ''; // Default assignment ID
+    elderlyRecord['elderly_status'] = elderlyData['elderly_status'] as String? ?? 'Alive';
+    elderlyRecord['name'] = constructedName.isNotEmpty ? constructedName : 'Name not available';
+    elderlyRecord['house_name'] = houseName ?? 'Unknown House';
+    // Add birthdate field mapping for consistency
+    elderlyRecord['birthdate'] = elderlyData['elderly_bday'] ?? elderlyData['birthdate'];
+    // Add profile picture field mapping - use elderly_profilePic from database
+    elderlyRecord['profile_pic'] = profilePicUrl;
     
     return elderlyRecord;
   }
@@ -499,5 +500,96 @@ class HouseService {
     
     print('DEBUG HouseService: Sorted ${sortedList.length} elderly by first name (ascending: $ascending)');
     return sortedList;
+  }
+
+  /// Get assigned elderly for a caregiver including temporary assignments from absent caregivers
+  /// This method combines regular assignments with temporary assignments for the current day
+  Future<List<Map<String, dynamic>>> getAssignedElderlyIncludingTemporary(
+    String caregiverId,
+    String day,
+  ) async {
+    try {
+      print('DEBUG HouseService: Getting assigned elderly including temporary for caregiver $caregiverId on $day');
+      
+      // Get regular assigned elderly
+      final regularElderly = await getAssignedElderlyForCaregiverDay(caregiverId, day);
+      print('DEBUG HouseService: Found ${regularElderly.length} regular elderly');
+      
+      // Ensure regular elderly are NOT marked as temporary
+      for (var elderly in regularElderly) {
+        elderly['is_temporary_assignment'] = false;
+      }
+      
+      // Get temporary elderly assignments (from absent caregivers)
+      final temporaryElderlyIds = await AbsenceService.getTodayTemporaryElderlyIds(caregiverId);
+      print('DEBUG HouseService: Found ${temporaryElderlyIds.length} temporary elderly IDs');
+      
+      // If no temporary elderly, return regular assignments
+      if (temporaryElderlyIds.isEmpty) {
+        print('DEBUG HouseService: No temporary elderly, returning ${regularElderly.length} regular elderly');
+        return regularElderly;
+      }
+      
+      // Fetch temporary elderly details
+      final Set<String> regularElderlyIds = regularElderly
+          .map((e) => e['elderly_id'] as String? ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      
+      // Only fetch elderly that are not already in regular assignments
+      final elderlyIdsToFetch = temporaryElderlyIds
+          .where((id) => !regularElderlyIds.contains(id))
+          .toList();
+      
+      if (elderlyIdsToFetch.isEmpty) {
+        print('DEBUG HouseService: All temporary elderly already in regular list');
+        return regularElderly;
+      }
+      
+      print('DEBUG HouseService: Fetching ${elderlyIdsToFetch.length} additional temporary elderly');
+      
+      // Fetch temporary elderly details from Firestore (in chunks of 30)
+      final List<Map<String, dynamic>> temporaryElderly = [];
+      for (int i = 0; i < elderlyIdsToFetch.length; i += 30) {
+        final chunk = elderlyIdsToFetch.skip(i).take(30).toList();
+        final elderlySnapshot = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .where('elderly_status', isEqualTo: 'Alive')
+            .get();
+        
+        for (var doc in elderlySnapshot.docs) {
+          final elderlyData = doc.data();
+          final elderlyId = doc.id;
+          
+          // Build the elderly record first
+          final elderlyRecord = _buildElderlyRecord(elderlyData, elderlyId, [day], null);
+          
+          // Mark this elderly as temporary assignment AFTER _buildElderlyRecord
+          // This ensures the flag won't be overwritten by addAll(elderlyData)
+          elderlyRecord['is_temporary_assignment'] = true;
+          elderlyRecord['temporary_assignment_note'] = 'Temporarily assigned (covering absent caregiver)';
+          
+          temporaryElderly.add(elderlyRecord);
+          print('DEBUG HouseService: Added temporary elderly: ${elderlyData['elderly_fname']} (ID: $elderlyId) with is_temporary_assignment=${elderlyRecord['is_temporary_assignment']}');
+        }
+      }
+      
+      // Combine and return
+      final combinedList = [...regularElderly, ...temporaryElderly];
+      print('DEBUG HouseService: Returning ${combinedList.length} total elderly (${regularElderly.length} regular + ${temporaryElderly.length} temporary)');
+      
+      // Final verification: log each elderly's temporary status
+      for (var elderly in combinedList) {
+        print('DEBUG HouseService: ${elderly['name']} - is_temporary_assignment: ${elderly['is_temporary_assignment']}');
+      }
+      
+      return combinedList;
+      
+    } catch (e) {
+      print('DEBUG HouseService: Error in getAssignedElderlyIncludingTemporary: $e');
+      // Return regular assignments as fallback
+      return await getAssignedElderlyForCaregiverDay(caregiverId, day);
+    }
   }
 }

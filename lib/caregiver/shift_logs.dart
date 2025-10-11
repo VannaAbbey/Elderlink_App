@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/caregiver_shift_log_service.dart';
+import '../services/cg_services/caregiver_shift_log_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';

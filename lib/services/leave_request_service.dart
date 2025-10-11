@@ -1,8 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+import 'cg_services/notification_service.dart';
+import '../models/cg_models/notification_model.dart';
 
 class LeaveRequestService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final NotificationService _notificationService = NotificationService();
 
   /// Submits a leave request to the database
   static Future<String> submitLeaveRequest({
@@ -119,6 +123,20 @@ class LeaveRequestService {
     String? reviewerComments,
   }) async {
     try {
+      // First, get the leave request data to extract caregiver info
+      final leaveRequestDoc = await _firestore.collection('leave_requests').doc(requestId).get();
+      
+      if (!leaveRequestDoc.exists) {
+        throw Exception('Leave request not found');
+      }
+      
+      final leaveData = leaveRequestDoc.data()!;
+      final caregiverId = leaveData['caregiver_id'] as String;
+      final leaveType = leaveData['leave_type'] as String? ?? 'Leave';
+      final startDate = (leaveData['start_date'] as Timestamp?)?.toDate();
+      final endDate = (leaveData['end_date'] as Timestamp?)?.toDate();
+      
+      // Update the leave request status
       await _firestore.collection('leave_requests').doc(requestId).update({
         'status': status,
         'reviewed_at': FieldValue.serverTimestamp(),
@@ -128,6 +146,60 @@ class LeaveRequestService {
       });
 
       print('✅ Leave request $requestId status updated to: $status');
+      
+      // Create notification for the caregiver
+      String notificationTitle;
+      String notificationMessage;
+      NotificationType notificationType;
+      
+      if (status.toLowerCase() == 'approved') {
+        notificationTitle = 'Leave Request Approved';
+        notificationMessage = 'Your $leaveType request';
+        if (startDate != null && endDate != null) {
+          final dateFormat = DateFormat('MMM dd, yyyy');
+          notificationMessage += ' from ${dateFormat.format(startDate)} to ${dateFormat.format(endDate)}';
+        }
+        notificationMessage += ' has been approved.';
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          notificationMessage += '\n\nReviewer\'s comment: $reviewerComments';
+        }
+        notificationType = NotificationType.leaveApproved;
+      } else {
+        notificationTitle = 'Leave Request Denied';
+        notificationMessage = 'Your $leaveType request';
+        if (startDate != null && endDate != null) {
+          final dateFormat = DateFormat('MMM dd, yyyy');
+          notificationMessage += ' from ${dateFormat.format(startDate)} to ${dateFormat.format(endDate)}';
+        }
+        notificationMessage += ' has been denied.';
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          notificationMessage += '\n\nReason: $reviewerComments';
+        } else {
+          notificationMessage += ' Please contact your supervisor for more details.';
+        }
+        notificationType = NotificationType.leaveDenied;
+      }
+      
+      // Send notification to the caregiver
+      await _notificationService.createNotification(
+        title: notificationTitle,
+        message: notificationMessage,
+        userId: caregiverId,
+        userType: 'caregiver',
+        type: notificationType,
+        referenceId: requestId,
+        referenceType: 'leave_request',
+        priority: NotificationPriority.high,
+        category: 'Leave Management',
+        metadata: {
+          'leave_type': leaveType,
+          'status': status,
+          'reviewed_by': reviewerId,
+          'reviewer_comments': reviewerComments ?? '',
+        },
+      );
+      
+      print('✅ Notification sent to caregiver for leave request $status');
     } catch (e) {
       print('❌ Error updating leave request status: $e');
       rethrow;

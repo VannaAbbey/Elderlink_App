@@ -164,14 +164,6 @@ class ElderlyDetailScreen extends StatelessWidget {
     
     // Common fields for both alive and deceased
     cards.addAll([
-      // Testing field - will be removed upon deployment
-      _buildInfoCard(
-        icon: Icons.fingerprint,
-        title: 'Elderly ID (Testing)',
-        content: elderlyData['elderly_id'] ?? 'Not specified',
-      ),
-      const SizedBox(height: 16),
-      
       _buildInfoCard(
         icon: Icons.person,
         title: 'Full Name',

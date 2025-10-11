@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'houses_grids.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../services/house_service.dart';
+import '../providers/cg_providers/absence_provider.dart';
+import '../services/cg_services/house_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HousesScreen extends StatefulWidget {
@@ -76,9 +77,21 @@ class _HousesScreenState extends State<HousesScreen> {
     
     try {
       final houseService = HouseService();
-      print('DEBUG houses.dart: Calling house service for $selectedDay');
-      final assignedElderly = await houseService.getAssignedElderlyForCaregiverDay(caregiverId, selectedDay);
-      print('DEBUG houses.dart: House service returned ${assignedElderly.length} elderly for $selectedDay');
+      print('DEBUG houses.dart: Getting elderly including temporary assignments for $selectedDay');
+      
+      // Use the new method that includes temporary assignments from absent caregivers
+      final assignedElderly = await houseService.getAssignedElderlyIncludingTemporary(
+        caregiverId, 
+        selectedDay
+      );
+      
+      print('DEBUG houses.dart: House service returned ${assignedElderly.length} total elderly for $selectedDay');
+      
+      // Count temporary assignments for logging
+      final tempCount = assignedElderly.where((e) => e['is_temporary_assignment'] == true).length;
+      if (tempCount > 0) {
+        print('DEBUG houses.dart: ✨ Including $tempCount temporary elderly from absent caregivers');
+      }
       
       return assignedElderly;
     } catch (e) {
@@ -114,6 +127,106 @@ class _HousesScreenState extends State<HousesScreen> {
       );
     }
 
+    // Check if caregiver is absent today
+    return Consumer<AbsenceProvider>(
+      builder: (context, absenceProvider, child) {
+        if (absenceProvider.isAbsentToday) {
+          // Show redistribution message for absent caregivers
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: Image.asset(
+                  'assets/images/background1.png',
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Scaffold(
+                backgroundColor: Colors.transparent,
+                appBar: AppBar(
+                  backgroundColor: Colors.white,
+                  elevation: 0,
+                  centerTitle: true,
+                  surfaceTintColor: Colors.white,
+                  scrolledUnderElevation: 0,
+                  title: const Text(
+                    'Elderly Houses',
+                    style: TextStyle(
+                      color: Color(0xFF00588e),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Color(0xFF00588e)),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+                body: SafeArea(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          margin: const EdgeInsets.all(32),
+                          padding: const EdgeInsets.all(32),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 10,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.people_outline,
+                                size: 80,
+                                color: Colors.orange.withOpacity(0.8),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                absenceProvider.absenceType == 'leave'
+                                    ? 'On Leave Today'
+                                    : 'Marked Absent Today',
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Elderly assigned for you today was redistributed.\nCome back soon!',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.black87,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+
+        // Normal houses display for non-absent caregivers
+        return _buildHousesContent(context);
+      },
+    );
+  }
+
+  Widget _buildHousesContent(BuildContext context) {
     return Stack(
       children: [
         Positioned.fill(
@@ -250,6 +363,13 @@ class _HousesScreenState extends State<HousesScreen> {
                     print('DEBUG houses.dart: Processing ${aliveElderlyList.length} alive elderly records');
                     print('DEBUG houses.dart: Processing ${deceasedElderlyList.length} deceased elderly records');
                     
+                    // Debug: Check temporary flags before mapping
+                    for (var elderly in aliveElderlyList) {
+                      if (elderly['is_temporary_assignment'] == true) {
+                        print('DEBUG houses.dart: BEFORE mapping - ${elderly['name']} has is_temporary_assignment: ${elderly['is_temporary_assignment']}');
+                      }
+                    }
+                    
                     final aliveProfiles = aliveElderlyList
                         .where((e) {
                           final status = e['elderly_status'];
@@ -275,8 +395,20 @@ class _HousesScreenState extends State<HousesScreen> {
                               'elderly_mobilityStatus': e['elderly_mobilityStatus'],
                               'elderly_dietNotes': e['elderly_dietNotes'],
                               'elderly_condition': e['elderly_condition'],
+                              // ⭐ IMPORTANT: Include temporary assignment flag
+                              'is_temporary_assignment': e['is_temporary_assignment'] ?? false,
+                              'temporary_assignment_note': e['temporary_assignment_note'],
                             })
                         .toList();
+                    
+                    // Debug: Check temporary flags after mapping
+                    for (var profile in aliveProfiles) {
+                      if (profile['is_temporary_assignment'] == true) {
+                        print('DEBUG houses.dart: AFTER mapping - ${profile['name']} has is_temporary_assignment: ${profile['is_temporary_assignment']}');
+                      }
+                    }
+                    
+                    print('DEBUG houses.dart: Passing ${aliveProfiles.length} alive profiles to grid');
                         
                     final deceasedProfiles = deceasedElderlyList
                         .map((e) => {

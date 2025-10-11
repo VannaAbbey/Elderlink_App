@@ -5,11 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
-import '../services/task_reminder_service.dart';
-import '../services/caregiver_shift_log_service.dart';
-import '../services/notification_service.dart';
-import '../services/house_service.dart';
-import '../models/notification_model.dart';
+import '../services/cg_services/task_reminder_service.dart';
+import '../services/cg_services/caregiver_shift_log_service.dart';
+import '../services/cg_services/notification_service.dart';
+import '../services/cg_services/house_service.dart';
+import '../models/cg_models/notification_model.dart';
 
 // Helper function to create a new task and set 'created_by' to the current caregiver's UID
 Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
@@ -1028,11 +1028,6 @@ class _EditTaskDialogState extends State<EditTaskDialog> {
   late TextEditingController activityController;
   TimeOfDay? startTime;
   TimeOfDay? endTime;
-  String? selectedFrequency;
-  DateTime? selectedDate;
-  List<String> selectedDaysBox = [];
-  DateTime? selectedRecurringStartDate;
-  List<String> everydayDays = [];
 
   @override
   void initState() {
@@ -1040,10 +1035,6 @@ class _EditTaskDialogState extends State<EditTaskDialog> {
     activityController = TextEditingController(text: widget.task['task_description'] ?? '');
     startTime = widget.task['task_start'] != null ? TimeOfDay.fromDateTime(widget.task['task_start']) : null;
     endTime = widget.task['task_end'] != null ? TimeOfDay.fromDateTime(widget.task['task_end']) : null;
-    selectedFrequency = (widget.task['task_frequency'] is List && widget.task['task_frequency'].isNotEmpty) ? widget.task['task_frequency'][0] : 'Only once';
-    selectedDate = widget.task['freq_once_date'] is DateTime ? widget.task['freq_once_date'] : null;
-    selectedDaysBox = List<String>.from(widget.task['custom_days'] ?? []);
-    everydayDays = List<String>.from(widget.task['everyday_days'] ?? []);
   }
 
   @override
@@ -1153,132 +1144,21 @@ class _EditTaskDialogState extends State<EditTaskDialog> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Icon(Icons.date_range, color: Color(0xFF22688E)),
-                  const SizedBox(width: 8),
-                  const Text('Frequency', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
-                ],
-              ),
-              const SizedBox(height: 8),
-              DropdownButton<String>(
-                value: selectedFrequency,
-                isExpanded: true,
-                items: ['Only once', 'Every Assigned Day', 'Custom'].map((freq) {
-                  return DropdownMenuItem<String>(
-                    value: freq,
-                    child: Text(freq),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    selectedFrequency = value;
-                  });
-                },
-              ),
-              if (selectedFrequency == 'Custom') ...[
-                const SizedBox(height: 8),
-                Text('Selected Days: ${selectedDaysBox.join(", ")}', style: const TextStyle(fontSize: 15)),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  onPressed: () async {
-                    const allDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-                    List<String> tempSelectedDays = List<String>.from(selectedDaysBox);
-                    await showDialog(
-                      context: context,
-                      builder: (BuildContext daysCtx) {
-                        return AlertDialog(
-                          title: const Text('Select Days'),
-                          content: SizedBox(
-                            width: double.maxFinite,
-                            child: ListView(
-                              shrinkWrap: true,
-                              children: allDays.map((day) {
-                                return CheckboxListTile(
-                                  title: Text(day),
-                                  value: tempSelectedDays.contains(day),
-                                  onChanged: (checked) {
-                                    if (checked == true) {
-                                      tempSelectedDays.add(day);
-                                    } else {
-                                      tempSelectedDays.remove(day);
-                                    }
-                                    (daysCtx as Element).markNeedsBuild();
-                                  },
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () {
-                                Navigator.of(daysCtx).pop();
-                              },
-                              child: const Text('Cancel'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  selectedDaysBox = List<String>.from(tempSelectedDays);
-                                });
-                                Navigator.of(daysCtx).pop();
-                              },
-                              child: const Text('OK'),
-                            ),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                  style: TextButton.styleFrom(
-                    backgroundColor: Color(0xFFE6F3FA),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text('Pick Days', style: TextStyle(color: Color(0xFF000000))),
-                ),
-              ],
-              if (selectedFrequency == 'Only once') ...[
-                const SizedBox(height: 8),
-                InkWell(
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: selectedDate ?? DateTime.now(),
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        selectedDate = picked;
-                      });
-                    }
-                  },
-                  child: Container(
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Color(0xFFE6F3FA),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(selectedDate != null ? formatDate(selectedDate!) : 'Select Date', style: const TextStyle(fontSize: 16)),
-                  ),
-                ),
-              ],
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: () async {
                   final docId = widget.task['task_id'];
                   final tasksRef = FirebaseFirestore.instance.collection('care_tasks');
+                  
+                  // Get the current task date to preserve it
+                  final taskDate = widget.task['task_date'] is Timestamp 
+                      ? (widget.task['task_date'] as Timestamp).toDate() 
+                      : (widget.task['task_date'] is DateTime ? widget.task['task_date'] : DateTime.now());
+                  
                   final updateData = {
                     'task_description': activityController.text,
-                    'task_start': startTime != null ? DateTime(selectedDate?.year ?? DateTime.now().year, selectedDate?.month ?? DateTime.now().month, selectedDate?.day ?? DateTime.now().day, startTime!.hour, startTime!.minute) : widget.task['task_start'],
-                    'task_end': endTime != null ? DateTime(selectedDate?.year ?? DateTime.now().year, selectedDate?.month ?? DateTime.now().month, selectedDate?.day ?? DateTime.now().day, endTime!.hour, endTime!.minute) : widget.task['task_end'],
-                    'task_frequency': [selectedFrequency ?? 'Only once'],
-                    'freq_once_date': selectedFrequency == 'Only once' ? selectedDate : null,
-                    'custom_days': selectedFrequency == 'Custom' ? selectedDaysBox : [],
-                    'everyday_days': selectedFrequency == 'Every Assigned Day' ? [] : [], // No longer storing static assignment days
+                    if (startTime != null) 'task_start': DateTime(taskDate.year, taskDate.month, taskDate.day, startTime!.hour, startTime!.minute),
+                    if (endTime != null) 'task_end': DateTime(taskDate.year, taskDate.month, taskDate.day, endTime!.hour, endTime!.minute),
                   };
                   await tasksRef.doc(docId).update(updateData);
                   if (context.mounted) {
@@ -2008,13 +1888,12 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           final key = "${displayDate.year}-${displayDate.month.toString().padLeft(2, '0')}-${displayDate.day.toString().padLeft(2, '0')}";
           grouped.putIfAbsent(key, () => []).add(task);
         }
-        // Sort dates closest to today first
-        final now = DateTime.now();
+        // Sort dates chronologically (earliest date first, prioritizing today and upcoming dates)
         final sortedKeys = grouped.keys.toList()
           ..sort((a, b) {
             final ad = DateTime.parse(a.replaceAll('-', ''));
             final bd = DateTime.parse(b.replaceAll('-', ''));
-            return (ad.difference(now).inDays).abs().compareTo((bd.difference(now).inDays).abs());
+            return ad.compareTo(bd); // Simple chronological sort
           });
         return SizedBox.expand(
           child: Column(
@@ -2780,6 +2659,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               builder: (BuildContext ctx) {
                                 String? selectedElderly;
                                 String? selectedFrequency = 'Only once';
+                                bool isTemporaryAssignment = false; // Track if selected elderly is temporary
                               TimeOfDay? startTime;
                               TimeOfDay? endTime;
                               TextEditingController activityController = TextEditingController();
@@ -2789,6 +2669,29 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               DateTime? selectedRecurringStartDate;
                               return StatefulBuilder(
                                 builder: (context, setState) {
+                                  // Check if initial/auto-selected elderly is temporary
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    if (selectedElderly != null && assignedElderly.isNotEmpty) {
+                                      final elderlyData = assignedElderly.firstWhere(
+                                        (e) => e['elderly_id'] == selectedElderly,
+                                        orElse: () => {},
+                                      );
+                                      
+                                      final isTemp = elderlyData['is_temporary_assignment'] == true;
+                                      
+                                      if (isTemp != isTemporaryAssignment) {
+                                        setState(() {
+                                          isTemporaryAssignment = isTemp;
+                                          if (isTemp) {
+                                            selectedFrequency = 'Only once';
+                                            selectedDate = DateTime.now();
+                                            selectedRecurringStartDate = DateTime.now();
+                                          }
+                                        });
+                                      }
+                                    }
+                                  });
+                                  
                                   // OPTIMIZATION: Instant day switching using preloaded data
                                   void updateElderlyList(String newDay) {
                                     setState(() {
@@ -2923,15 +2826,61 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                           .where((e) => e['elderly_id'] != null && seen.add(e['elderly_id'])).toList();
                                                         sortedElderly.sort((a, b) => (a['elderly_fname'] ?? '').toString().toLowerCase().compareTo((b['elderly_fname'] ?? '').toString().toLowerCase()));
                                                         return sortedElderly.map((elderly) {
+                                                          final isTemporary = elderly['is_temporary_assignment'] == true;
                                                           return DropdownMenuItem<String>(
                                                             value: elderly['elderly_id'],
-                                                            child: Text(elderly['elderly_fname'], style: const TextStyle(color: Color.fromARGB(255, 0, 0, 0))),
+                                                            child: Row(
+                                                              children: [
+                                                                Expanded(
+                                                                  child: Text(
+                                                                    elderly['elderly_fname'],
+                                                                    style: const TextStyle(color: Color.fromARGB(255, 0, 0, 0)),
+                                                                  ),
+                                                                ),
+                                                                if (isTemporary)
+                                                                  Container(
+                                                                    width: 10,
+                                                                    height: 10,
+                                                                    margin: const EdgeInsets.only(left: 8),
+                                                                    decoration: BoxDecoration(
+                                                                      color: Colors.orange,
+                                                                      shape: BoxShape.circle,
+                                                                      border: Border.all(
+                                                                        color: Colors.white,
+                                                                        width: 1,
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                              ],
+                                                            ),
                                                           );
                                                         }).toList();
                                                       })(),
                                                       onChanged: (value) {
                                                         setState(() {
                                                           selectedElderly = value;
+                                                          
+                                                          // Check if this elderly is temporarily assigned
+                                                          if (value != null) {
+                                                            final elderlyData = assignedElderly.firstWhere(
+                                                              (e) => e['elderly_id'] == value,
+                                                              orElse: () => {},
+                                                            );
+                                                            
+                                                            // Check if marked as temporary assignment
+                                                            final isTemp = elderlyData['is_temporary_assignment'] == true;
+                                                            
+                                                            isTemporaryAssignment = isTemp;
+                                                            if (isTemp) {
+                                                              // Auto-set to "Only once" for temporary elderly
+                                                              selectedFrequency = 'Only once';
+                                                              selectedDate = DateTime.now();
+                                                              selectedRecurringStartDate = DateTime.now();
+                                                            } else {
+                                                              // Reset when switching back to regular elderly
+                                                              // Keep current frequency but enable changes
+                                                            }
+                                                          }
                                                         });
                                                       },
                                                     ),
@@ -3164,7 +3113,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                             Container(
                                               height: 40,
                                               decoration: BoxDecoration(
-                                                color: const Color(0xFFE6F3FA),
+                                                color: isTemporaryAssignment ? const Color(0xFFE0E0E0) : const Color(0xFFE6F3FA),
                                                 borderRadius: BorderRadius.circular(20),
                                               ),
                                               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -3172,14 +3121,20 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                 child: DropdownButton<String>(
                                                   value: selectedFrequency,
                                                   isExpanded: true,
-                                                  icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF22688E)),
+                                                  icon: Icon(Icons.arrow_drop_down, color: isTemporaryAssignment ? Colors.grey : const Color(0xFF22688E)),
                                                   items: frequencyList.map((freq) {
                                                     return DropdownMenuItem<String>(
                                                       value: freq,
-                                                      child: Text(freq, overflow: TextOverflow.ellipsis),
+                                                      child: Text(
+                                                        freq,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: TextStyle(
+                                                          color: isTemporaryAssignment ? Colors.grey : Colors.black,
+                                                        ),
+                                                      ),
                                                     );
                                                   }).toList(),
-                                                  onChanged: (value) {
+                                                  onChanged: isTemporaryAssignment ? null : (value) {
                                                     setState(() {
                                                       selectedFrequency = value;
                                                     });
@@ -3218,12 +3173,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     return;
                                                   }
 
-                                                  // Get assigned days for validation - query elderly_assignments directly
+                                                  // Get assigned days for validation - query elderly_assignments AND temporary_assignments
                                                   print('🔍 DEBUG: Every Assigned Day date picker validation');
                                                   print('🔍 DEBUG: selectedElderly = $selectedElderly');
                                                   print('🔍 DEBUG: caregiverId = $caregiverId');
                                                   
                                                   List<String> elderlyAssignedDays = [];
+                                                  bool isTemporaryAssignment = false;
                                                   
                                                   try {
                                                     // Query elderly_assignments collection for all days this elderly is assigned to this caregiver
@@ -3244,7 +3200,38 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                       // If this elderly is assigned to this caregiver on this day
                                                       if (elderlyIds.contains(selectedElderly) && day != null) {
                                                         elderlyAssignedDays.add(day);
-                                                        print('🔍 DEBUG: Found assignment: $selectedElderly assigned on $day');
+                                                        print('🔍 DEBUG: Found regular assignment: $selectedElderly assigned on $day');
+                                                      }
+                                                    }
+                                                    
+                                                    // WORKAROUND: Check temporary_assignments for today
+                                                    // If this elderly is temporarily assigned, allow creating task for today only
+                                                    if (elderlyAssignedDays.isEmpty) {
+                                                      print('🔍 DEBUG: No regular assignments found, checking temporary assignments...');
+                                                      
+                                                      final now = DateTime.now();
+                                                      final todayDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+                                                      final todayWeekday = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][now.weekday - 1];
+                                                      
+                                                      final tempAssignmentSnapshot = await FirebaseFirestore.instance
+                                                          .collection('temporary_assignments')
+                                                          .where('to_user_id', isEqualTo: caregiverId)
+                                                          .where('date', isEqualTo: todayDate)
+                                                          .where('status', isEqualTo: 'active')
+                                                          .get();
+                                                      
+                                                      print('🔍 DEBUG: Found ${tempAssignmentSnapshot.docs.length} temporary assignment documents for today');
+                                                      
+                                                      for (var doc in tempAssignmentSnapshot.docs) {
+                                                        final tempData = doc.data();
+                                                        final tempElderlyIds = List<String>.from(tempData['elderly_ids'] ?? []);
+                                                        
+                                                        if (tempElderlyIds.contains(selectedElderly)) {
+                                                          elderlyAssignedDays.add(todayWeekday);
+                                                          isTemporaryAssignment = true;
+                                                          print('🔍 DEBUG: Found TEMPORARY assignment: $selectedElderly temporarily assigned for today ($todayWeekday)');
+                                                          break;
+                                                        }
                                                       }
                                                     }
                                                     
@@ -3256,6 +3243,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     });
                                                     
                                                     print('🔍 DEBUG: Final elderlyAssignedDays = $elderlyAssignedDays');
+                                                    print('🔍 DEBUG: Is temporary assignment = $isTemporaryAssignment');
                                                   } catch (e) {
                                                     print('🔍 ERROR: Failed to get assignment days: $e');
                                                   }
@@ -3300,7 +3288,14 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     firstDate: DateTime.now(),
                                                     lastDate: DateTime.now().add(const Duration(days: 365)),
                                                     selectableDayPredicate: (DateTime date) {
-                                                      // Only allow dates that match assigned days
+                                                      // For temporary assignments, only allow today
+                                                      if (isTemporaryAssignment) {
+                                                        final now = DateTime.now();
+                                                        return date.year == now.year && 
+                                                               date.month == now.month && 
+                                                               date.day == now.day;
+                                                      }
+                                                      // For regular assignments, allow dates that match assigned days
                                                       final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.weekday - 1];
                                                       return elderlyAssignedDays.contains(dayOfWeek);
                                                     },
@@ -3689,7 +3684,14 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     firstDate: DateTime.now(), // Don't allow past dates
                                                     lastDate: DateTime.now().add(const Duration(days: 365)), // One year ahead
                                                     selectableDayPredicate: (DateTime date) {
-                                                      // Only allow dates where elderly is assigned to caregiver
+                                                      // For temporary assignments, only allow today
+                                                      if (isTemporaryAssignment) {
+                                                        final now = DateTime.now();
+                                                        return date.year == now.year && 
+                                                               date.month == now.month && 
+                                                               date.day == now.day;
+                                                      }
+                                                      // For regular assignments, only allow dates where elderly is assigned to caregiver
                                                       String weekday = [
                                                         'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
                                                       ][date.weekday - 1];
@@ -3772,6 +3774,70 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                               height: 48,
                                               child: ElevatedButton(
                                                 onPressed: () async {
+                                                  // Show warning dialog if this is a temporary assignment
+                                                  if (isTemporaryAssignment) {
+                                                    final confirmTemp = await showDialog<bool>(
+                                                      context: ctx,
+                                                      builder: (BuildContext context) => AlertDialog(
+                                                        shape: RoundedRectangleBorder(
+                                                          borderRadius: BorderRadius.circular(16),
+                                                        ),
+                                                        title: Row(
+                                                          children: const [
+                                                            Icon(
+                                                              Icons.info_outline,
+                                                              color: Colors.orange,
+                                                              size: 28,
+                                                            ),
+                                                            SizedBox(width: 8),
+                                                            Flexible(
+                                                              child: Text(
+                                                                'Temporary Assignment',
+                                                                style: TextStyle(
+                                                                  color: Colors.orange,
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        content: const Text(
+                                                          'This elderly is temporarily assigned to you for today only.\n\n'
+                                                          'The task will be created for TODAY and will be set as "Only once" frequency.\n\n'
+                                                          'Do you want to continue?',
+                                                          style: TextStyle(fontSize: 16),
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(false),
+                                                            style: TextButton.styleFrom(
+                                                              foregroundColor: Colors.grey,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                            ),
+                                                            child: const Text('Cancel'),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(context).pop(true),
+                                                            style: TextButton.styleFrom(
+                                                              backgroundColor: Colors.orange,
+                                                              foregroundColor: Colors.white,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                            ),
+                                                            child: const Text('Continue'),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    
+                                                    if (confirmTemp != true) {
+                                                      return; // User cancelled
+                                                    }
+                                                  }
+                                                  
                                                   bool valid = selectedElderly != null && startTime != null && endTime != null && selectedFrequency != null && activityController.text.isNotEmpty;
                                                   DateTime? saveDate;
                                                   List<String> saveFrequency = selectedFrequency != null ? [selectedFrequency!] : [];
@@ -4006,7 +4072,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       final houseService = HouseService();
       
       for (String day in assignedDays) {
-        final elderlyForDay = await houseService.getAssignedElderlyForCaregiverDay(caregiverId, day);
+        // Use getAssignedElderlyIncludingTemporary to include temporary elderly from absent caregivers
+        final elderlyForDay = await houseService.getAssignedElderlyIncludingTemporary(caregiverId, day);
         
         // Convert to the format expected by the UI
         List<Map<String, dynamic>> formattedElderly = [];
@@ -4019,6 +4086,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
             'caregiver_id': caregiverId,
             'elderly_fname': prefix + (elderly['elderly_fname'] ?? ''),
             'days_assigned': elderly['days_assigned'] ?? [day], // Use the caregiver's assigned days
+            'is_temporary_assignment': elderly['is_temporary_assignment'] ?? false, // ← CRITICAL: Include temporary flag
           });
         }
         
@@ -4700,8 +4768,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       final startDate = startDateTimestamp.toDate();
       final endDate = endDateTimestamp.toDate();
 
+      // Normalize dates to compare only date parts (ignore time)
+      final nowDate = DateTime(now.year, now.month, now.day);
+      final normalizedStartDate = DateTime(startDate.year, startDate.month, startDate.day);
+      final normalizedEndDate = DateTime(endDate.year, endDate.month, endDate.day);
+
       // Check if current date is within assignment period
-      if (now.isBefore(startDate) || now.isAfter(endDate)) {
+      if (nowDate.isBefore(normalizedStartDate) || nowDate.isAfter(normalizedEndDate)) {
         return false;
       }
 

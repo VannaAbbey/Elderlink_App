@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-import '../services/notification_service.dart';
-import '../models/notification_model.dart';
+import '../services/cg_services/notification_service.dart';
+import '../models/cg_models/notification_model.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -234,6 +234,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           break;
         case 'Task Deleted':
           type = NotificationType.taskDeleted;
+          break;
+        case 'Leave Approved':
+          type = NotificationType.leaveApproved;
+          break;
+        case 'Leave Denied':
+          type = NotificationType.leaveDenied;
+          break;
+        case 'Shift Reminder':
+          type = NotificationType.shiftReminder;
           break;
       }
       

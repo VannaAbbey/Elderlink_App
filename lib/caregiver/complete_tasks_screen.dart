@@ -445,44 +445,7 @@ class _CompleteTasksScreenState extends State<CompleteTasksScreen> with WidgetsB
               'elderly_profilePic': profilePicUrl,
             });
           }
-          // DATE FILTER FUNCTIONALITY - COMMENTED OUT
-          // Filter by selected date if set
-          // if (selectedFilterDate != null) {
-          //   final filterDate = DateTime(
-          //     selectedFilterDate!.year,
-          //     selectedFilterDate!.month,
-          //     selectedFilterDate!.day,
-          //   );
-          //   tasks = tasks.where((task) {
-          //     final taskDate = task['task_date'] as DateTime?;
-          //     final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-          //     final freq = freqList.isNotEmpty
-          //         ? freqList[0] as String
-          //         : 'Only once';
-          //     if (taskDate == null) return false;
-          //     final startDate = DateTime(
-          //       taskDate.year,
-          //       taskDate.month,
-          //       taskDate.day,
-          //     );
-          //     switch (freq) {
-          //       case 'Only once':
-          //         return filterDate.year == startDate.year &&
-          //             filterDate.month == startDate.month &&
-          //             filterDate.day == startDate.day;
-          //       case 'Every Assigned Day':
-          //         return filterDate.year == startDate.year &&
-          //             filterDate.month == startDate.month &&
-          //             filterDate.day == startDate.day;
-          //       case 'Custom':
-          //         return filterDate.year == startDate.year &&
-          //             filterDate.month == startDate.month &&
-          //             filterDate.day == startDate.day;
-          //       default:
-          //         return false;
-          //     }
-          //   }).toList();
-          // }
+
           // Sort by task_start ascending
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime? ?? now;
@@ -775,6 +738,5 @@ class _CompleteTasksScreenState extends State<CompleteTasksScreen> with WidgetsB
       },
     ),
     );
-    // Removed duplicate/leftover widget tree after main build method
   }
 }

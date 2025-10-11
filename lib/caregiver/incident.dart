@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
-import '../widgets/notification_icon_button.dart';
-import '../services/caregiver_shift_log_service.dart';
+import '../widgets/cg_widgets/notification_icon_button.dart';
+import '../services/cg_services/caregiver_shift_log_service.dart';
+import '../services/cg_services/absence_service.dart';
+import '../providers/cg_providers/absence_provider.dart';
 
 // Helper function to show error modal
 void _showErrorModal(BuildContext context, String message) {
@@ -54,7 +57,9 @@ void _showErrorModal(BuildContext context, String message) {
 }
 
 class IncidentScreen extends StatefulWidget {
-  const IncidentScreen({super.key});
+  final VoidCallback? onResetToHome;
+  
+  const IncidentScreen({super.key, this.onResetToHome});
 
   @override
   State<IncidentScreen> createState() => _IncidentScreenState();
@@ -97,12 +102,140 @@ class _IncidentScreenState extends State<IncidentScreen> {
   
   // Save reference to ScaffoldMessenger to avoid context issues
   ScaffoldMessengerState? _scaffoldMessenger;
+  bool _dialogShown = false;
+
+  void _showAbsenceDialog(BuildContext context, String absenceType) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  absenceType == 'leave' ? Icons.event_busy : Icons.cancel_outlined,
+                  color: Colors.orange,
+                  size: 28,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: const Text(
+              'You are currently Absent/On Leave for the day, come back soon!',
+              style: TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(); // Close dialog only
+                },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) {
+      // After dialog closes, reset to home tab
+      // Use post frame callback to avoid crashes during build/dispose
+      if (mounted && widget.onResetToHome != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            try {
+              widget.onResetToHome?.call();
+            } catch (e) {
+              print('Error resetting to home: $e');
+            }
+          }
+        });
+      }
+    });
+  }
+
+  void _checkAbsenceStatus() {
+    if (_dialogShown) return;
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    if (absenceProvider.isAbsentToday) {
+      _dialogShown = true;
+      _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _loadElderlyAssignments();
     _loadCaregiverName();
+    // Check absence status after frame is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAbsenceStatus();
+      // Set up listener for absence status changes
+      _setupAbsenceListener();
+    });
+  }
+  
+  void _setupAbsenceListener() {
+    print('👂 [Incident] Setting up absence listener');
+    // Listen to absence provider changes
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    absenceProvider.addListener(_onAbsenceStatusChanged);
+    print('✅ [Incident] Absence listener attached');
+  }
+  
+  void _onAbsenceStatusChanged() {
+    print('🔔 [Incident] Absence status changed callback fired');
+    print('   mounted: $mounted, _dialogShown: $_dialogShown');
+    
+    if (!mounted) {
+      print('⚠️ [Incident] Widget not mounted, ignoring');
+      return;
+    }
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    print('   isAbsentToday: ${absenceProvider.isAbsentToday}');
+    print('   absenceType: ${absenceProvider.absenceType}');
+    
+    // If caregiver becomes absent and dialog not yet shown
+    if (absenceProvider.isAbsentToday && !_dialogShown) {
+      print('✅ [Incident] Will show absence dialog');
+      _dialogShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          print('📱 [Incident] Showing absence dialog now');
+          _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+        } else {
+          print('⚠️ [Incident] Widget unmounted before showing dialog');
+        }
+      });
+    }
+    
+    // If caregiver is no longer absent, reset dialog flag
+    if (!absenceProvider.isAbsentToday && _dialogShown) {
+      print('✅ [Incident] Resetting dialog flag (no longer absent)');
+      _dialogShown = false;
+    }
   }
 
   @override
@@ -119,6 +252,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   @override
   void dispose() {
+    // Remove listener to prevent memory leaks
+    try {
+      final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+      absenceProvider.removeListener(_onAbsenceStatusChanged);
+    } catch (e) {
+      // Provider might not be available, ignore
+    }
     reportController.dispose();
     _scaffoldMessenger = null;
     super.dispose();
@@ -236,17 +376,22 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final endDate = endDateTimestamp.toDate();
       print('🔍 INCIDENT: Dates parsed - start: $startDate, end: $endDate');
 
+      // Normalize dates to compare only date parts (ignore time)
+      final nowDate = DateTime(now.year, now.month, now.day);
+      final normalizedStartDate = DateTime(startDate.year, startDate.month, startDate.day);
+      final normalizedEndDate = DateTime(endDate.year, endDate.month, endDate.day);
+
       print('🔍 INCIDENT: ========== HOUSE ASSIGNMENT DATA ==========');
       print('🔍 INCIDENT: House ID: $houseId');
       print('🔍 INCIDENT: Days assigned: $daysAssigned');
       print('🔍 INCIDENT: Start date: ${startDate.toString()}');
       print('🔍 INCIDENT: End date: ${endDate.toString()}');
       print('🔍 INCIDENT: Current date/time: ${now.toString()}');
-      print('🔍 INCIDENT: now.isBefore(startDate): ${now.isBefore(startDate)}');
-      print('🔍 INCIDENT: now.isAfter(endDate): ${now.isAfter(endDate)}');
+      print('🔍 INCIDENT: nowDate.isBefore(normalizedStartDate): ${nowDate.isBefore(normalizedStartDate)}');
+      print('🔍 INCIDENT: nowDate.isAfter(normalizedEndDate): ${nowDate.isAfter(normalizedEndDate)}');
       print('🔍 INCIDENT: ================================================');
 
-      if (now.isBefore(startDate) || now.isAfter(endDate)) {
+      if (nowDate.isBefore(normalizedStartDate) || nowDate.isAfter(normalizedEndDate)) {
         print('🔴 INCIDENT: Current date outside assignment period');
         if (mounted) {
           setState(() {
@@ -289,7 +434,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
         print('☀️ INCIDENT: Regular/overnight start - checking current day: $dayToCheck');
       }
 
-      print('🔍 INCIDENT: Shift times: ${startHour}:${startMinute.toString().padLeft(2, '0')} - ${endHour}:${endMinute.toString().padLeft(2, '0')}');
+      print('🔍 INCIDENT: Shift times: $startHour:${startMinute.toString().padLeft(2, '0')} - $endHour:${endMinute.toString().padLeft(2, '0')}');
       print('🔍 INCIDENT: Is overnight shift: $isOvernightShift');
       print('🔍 INCIDENT: Day to check: $dayToCheck');
       print('🔍 INCIDENT: Days assigned contains day? ${daysAssigned.contains(dayToCheck)}');
@@ -412,6 +557,50 @@ class _IncidentScreenState extends State<IncidentScreen> {
             (a, b) => (a['name'] as String).compareTo(b['name'] as String),
           );
         }
+      }
+
+      // Fetch temporary elderly assignments from absent caregivers
+      print('🔍 INCIDENT: Fetching temporary elderly assignments...');
+      try {
+        final temporaryElderlyIds = await AbsenceService.getTodayTemporaryElderlyIds(caregiverId);
+        print('🔍 INCIDENT: Found ${temporaryElderlyIds.length} temporary elderly IDs');
+        
+        if (temporaryElderlyIds.isNotEmpty) {
+          // Fetch temporary elderly details in chunks (max 30 per query due to Firestore limit)
+          for (int i = 0; i < temporaryElderlyIds.length; i += 30) {
+            final chunk = temporaryElderlyIds.skip(i).take(30).toList();
+            final chunkSnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .get();
+
+            for (var doc in chunkSnapshot.docs) {
+              final data = doc.data();
+              // Filter out deceased elderly and only include those in the same house
+              if (data['house_id'] == houseId &&
+                  data['elderly_status'] != 'Deceased') {
+                // Check if this elderly is not already in the list (avoid duplicates)
+                final alreadyExists = elderlyDetails.any((e) => e['id'] == doc.id);
+                if (!alreadyExists) {
+                  elderlyDetails.add({
+                    'id': doc.id,
+                    'name':
+                        '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''} (TEMP)',
+                  });
+                  print('🔍 INCIDENT: Added temporary elderly: ${data['elderly_fname']} ${data['elderly_lname']}');
+                }
+              }
+            }
+          }
+
+          // Re-sort after adding temporary elderly
+          elderlyDetails.sort(
+            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+          );
+        }
+      } catch (e) {
+        print('🔴 INCIDENT: Error fetching temporary elderly: $e');
+        // Continue even if temporary fetch fails - regular elderly will still be shown
       }
 
       print('🔍 INCIDENT: Final elderly list count: ${elderlyDetails.length}');
@@ -760,7 +949,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   @override
   Widget build(BuildContext context) {
-
     Future<void> handleLogout() async {
       Navigator.pushNamedAndRemoveUntil(
         context,
@@ -840,7 +1028,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                       ? 'Loading...'
                                       : (isOnDuty
                                             ? 'Select Elderly'
-                                            : 'Not your schedule today/shift'),
+                                            : 'Shift ended/Not scheduled today'),
                                 ),
                                 isExpanded: true,
                                 icon: const Icon(
@@ -849,9 +1037,35 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                 ),
                                 menuMaxHeight: 200,
                                 items: elderlyList.map((elderly) {
+                                  // Check if this elderly has (TEMP) in the name
+                                  final elderlyName = elderly['name'] as String;
+                                  final isTemporary = elderlyName.contains('(TEMP)');
+                                  // Remove (TEMP) from display name
+                                  final displayName = elderlyName.replaceAll(' (TEMP)', '');
+                                  
                                   return DropdownMenuItem<String>(
                                     value: elderly['id'],
-                                    child: Text(elderly['name']),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(displayName),
+                                        ),
+                                        if (isTemporary)
+                                          Container(
+                                            width: 10,
+                                            height: 10,
+                                            margin: const EdgeInsets.only(left: 8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.orange,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 1,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   );
                                 }).toList(),
                                 onChanged: isOnDuty
@@ -900,7 +1114,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                       ? 'Loading...'
                                       : (isOnDuty
                                             ? 'Select incident type'
-                                            : 'Not your schedule today/shift'),
+                                            : 'Shift ended/Not scheduled today'),
                                 ),
                                 isExpanded: true,
                                 icon: const Icon(
@@ -1055,7 +1269,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                 ),
                                                                 onPressed: () =>
                                                                     Navigator.of(
-                                                                      context,
+                                                                      ctx,
                                                                     ).pop(),
                                                               ),
                                                             ),
@@ -1412,10 +1626,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             .trim()
                                                                             .isNotEmpty)
                                                                     ? () async {
-                                                                        Navigator.of(
-                                                                          ctx,
-                                                                        ).pop(); // Close modal first
-
                                                                         // Safety check: ensure the main widget is still mounted before proceeding
                                                                         if (!mounted) return;
 
@@ -1585,6 +1795,151 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               print('❌ Error logging incident report to shift logs: $e');
                                                                               // Don't fail the entire operation if logging fails
                                                                             }
+
+                                                                            // 📋 Fetch nurse names to display in dialog
+                                                                            List<String> nurseNames = [];
+                                                                            for (String nurseId in nurseIdsToSend) {
+                                                                              try {
+                                                                                final nurseDoc = await _firestore
+                                                                                    .collection('users')
+                                                                                    .doc(nurseId)
+                                                                                    .get();
+                                                                                if (nurseDoc.exists) {
+                                                                                  final nurseFname = nurseDoc['user_fname'] ?? '';
+                                                                                  final nurseLname = nurseDoc['user_lname'] ?? '';
+                                                                                  final fullName = '$nurseFname $nurseLname'.trim();
+                                                                                  if (fullName.isNotEmpty) {
+                                                                                    nurseNames.add(fullName);
+                                                                                  }
+                                                                                }
+                                                                              } catch (e) {
+                                                                                print('❌ Error fetching nurse name: $e');
+                                                                              }
+                                                                            }
+                                                                            
+                                                                            // Final safety check before showing dialog
+                                                                            if (!mounted) return;
+
+                                                                            // Show success dialog with nurse names
+                                                                            showDialog(
+                                                                              context: ctx,
+                                                                              barrierDismissible: false,
+                                                                              builder: (BuildContext dialogContext) {
+                                                                                return AlertDialog(
+                                                                                  shape: RoundedRectangleBorder(
+                                                                                    borderRadius: BorderRadius.circular(20),
+                                                                                  ),
+                                                                                  title: Row(
+                                                                                    children: [
+                                                                                      Icon(
+                                                                                        Icons.check_circle,
+                                                                                        color: Colors.green,
+                                                                                        size: 32,
+                                                                                      ),
+                                                                                      SizedBox(width: 12),
+                                                                                      Expanded(
+                                                                                        child: Text(
+                                                                                          'Report Submitted',
+                                                                                          style: TextStyle(
+                                                                                            fontSize: 20,
+                                                                                            fontWeight: FontWeight.bold,
+                                                                                            color: Color(0xFF00588e),
+                                                                                          ),
+                                                                                        ),
+                                                                                      ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  content: Column(
+                                                                                    mainAxisSize: MainAxisSize.min,
+                                                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                                                    children: [
+                                                                                      Text(
+                                                                                        'Your incident report has been sent to:',
+                                                                                        style: TextStyle(
+                                                                                          fontSize: 14,
+                                                                                          fontWeight: FontWeight.w500,
+                                                                                        ),
+                                                                                      ),
+                                                                                      SizedBox(height: 12),
+                                                                                      if (nurseNames.isEmpty)
+                                                                                        Padding(
+                                                                                          padding: EdgeInsets.symmetric(vertical: 8),
+                                                                                          child: Text(
+                                                                                            'No nurses currently on shift',
+                                                                                            style: TextStyle(
+                                                                                              fontSize: 14,
+                                                                                              fontStyle: FontStyle.italic,
+                                                                                              color: Colors.grey[600],
+                                                                                            ),
+                                                                                          ),
+                                                                                        )
+                                                                                      else
+                                                                                        Container(
+                                                                                          constraints: BoxConstraints(
+                                                                                            maxHeight: 200,
+                                                                                          ),
+                                                                                          child: SingleChildScrollView(
+                                                                                            child: Column(
+                                                                                              children: nurseNames.map((name) {
+                                                                                                return Padding(
+                                                                                                  padding: EdgeInsets.symmetric(vertical: 6),
+                                                                                                  child: Row(
+                                                                                                    children: [
+                                                                                                      Icon(
+                                                                                                        Icons.person,
+                                                                                                        size: 20,
+                                                                                                        color: Color(0xFF00588e),
+                                                                                                      ),
+                                                                                                      SizedBox(width: 8),
+                                                                                                      Expanded(
+                                                                                                        child: Text(
+                                                                                                          name,
+                                                                                                          style: TextStyle(
+                                                                                                            fontSize: 16,
+                                                                                                            fontWeight: FontWeight.w600,
+                                                                                                          ),
+                                                                                                        ),
+                                                                                                      ),
+                                                                                                    ],
+                                                                                                  ),
+                                                                                                );
+                                                                                              }).toList(),
+                                                                                            ),
+                                                                                          ),
+                                                                                        ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  actions: [
+                                                                                    SizedBox(
+                                                                                      width: double.infinity,
+                                                                                      child: ElevatedButton(
+                                                                                        onPressed: () {
+                                                                                          // Close the dialog first
+                                                                                          Navigator.of(dialogContext).pop();
+                                                                                          // Then close the modal
+                                                                                          Navigator.of(ctx).pop();
+                                                                                        },
+                                                                                        style: ElevatedButton.styleFrom(
+                                                                                          backgroundColor: Color(0xFF00588e),
+                                                                                          padding: EdgeInsets.symmetric(vertical: 12),
+                                                                                          shape: RoundedRectangleBorder(
+                                                                                            borderRadius: BorderRadius.circular(12),
+                                                                                          ),
+                                                                                        ),
+                                                                                        child: Text(
+                                                                                          'OK',
+                                                                                          style: TextStyle(
+                                                                                            fontSize: 16,
+                                                                                            fontWeight: FontWeight.bold,
+                                                                                            color: Colors.white,
+                                                                                          ),
+                                                                                        ),
+                                                                                      ),
+                                                                                    ),
+                                                                                  ],
+                                                                                );
+                                                                              },
+                                                                            );
                                                                           }
 
                                                                           // Final safety check before cleanup
@@ -1605,8 +1960,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             }
                                                                           });
 
-                                                                          // ✅ Success notification at top
-                                                                          _safeShowSnackBar("Incident report submitted successfully.");
                                                                         } catch (
                                                                           e
                                                                         ) {
