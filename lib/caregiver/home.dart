@@ -457,6 +457,15 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   bool isSidebarOpen = false;
   int selectedIndex = 0;
 
+  // Refresh handler for pull-to-refresh
+  Future<void> _handleRefresh() async {
+    // Trigger a rebuild by calling setState
+    // This will cause all StreamBuilders and FutureBuilders to re-fetch data
+    setState(() {});
+    // Add a small delay to ensure smooth refresh animation
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+
   void resetToHome() {
     setState(() {
       selectedIndex = 0;
@@ -510,8 +519,11 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                   SafeArea(
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
-                      child: ListView(
-                        children: [
+                      child: RefreshIndicator(
+                        onRefresh: _handleRefresh,
+                        color: const Color(0xFF00588e),
+                        child: ListView(
+                          children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -1548,6 +1560,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             ),
                           ),
                         ],
+                        ),
                       ),
                     ),
                   ),
