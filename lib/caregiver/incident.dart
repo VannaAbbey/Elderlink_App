@@ -1777,7 +1777,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               'incident_type': selectedIncidentType, // Main field for incident type
                                                                               'additional_info': reportController.text.trim(), // Optional additional information
                                                                               'incident_id': incidentDocRef.id,
-                                                                              'incident_verify': true,
                                                                               'user_id_cg': caregiverId,
                                                                               'user_id_nu': nurseIdsToSend, // ✅ array of all nurses
                                                                             });

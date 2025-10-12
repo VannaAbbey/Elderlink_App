@@ -29,11 +29,7 @@ class NotificationService {
     String? referenceType,
     NotificationPriority priority = NotificationPriority.normal,
     String? category,
-    bool requiresAction = false,
-    String? actionLabel,
-    String? actionUrl,
     DateTime? expiresAt,
-    String? groupKey,
   }) async {
     try {
       // Check for recent duplicate notifications (within last 10 seconds)
@@ -77,11 +73,7 @@ class NotificationService {
         referenceType: referenceType,
         priority: priority,
         category: category,
-        requiresAction: requiresAction,
-        actionLabel: actionLabel,
-        actionUrl: actionUrl,
         expiresAt: expiresAt,
-        groupKey: groupKey,
       );
 
       final docRef = await _appNotificationsCollection.add(notification.toFirestore());
@@ -425,8 +417,6 @@ class NotificationService {
       referenceType: 'leave_request',
       category: 'leave',
       priority: priority,
-      requiresAction: type == NotificationType.leaveSubmitted,
-      actionLabel: 'View Details',
       metadata: {
         'leave_request_id': leaveRequestId,
         'leave_dates': leaveDates,

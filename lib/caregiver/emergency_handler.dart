@@ -224,7 +224,6 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     "emergency_type": result["emergencyType"] ?? "", // Main field for emergency type
     "additional_info": result["description"] ?? "", // Optional additional information
     "alert_timestamp": DateTime.now(),
-    "alert_verify": false,
     "house_id": houseNameToId[result["houseName"]] ?? "",
     "house_name": result["houseName"] ?? "",
     "caregiver_name": result["caregiverName"] ?? "", // Add caregiver name field

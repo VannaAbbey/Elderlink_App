@@ -53,11 +53,7 @@ class NotificationModel {
   final String? referenceType;
   final NotificationPriority priority;
   final String? category;
-  final bool requiresAction;
-  final String? actionLabel;
-  final String? actionUrl;
   final DateTime? expiresAt;
-  final String? groupKey;
 
   NotificationModel({
     required this.id,
@@ -75,11 +71,7 @@ class NotificationModel {
     this.referenceType,
     this.priority = NotificationPriority.normal,
     this.category,
-    this.requiresAction = false,
-    this.actionLabel,
-    this.actionUrl,
     this.expiresAt,
-    this.groupKey,
   });
 
   factory NotificationModel.fromFirestore(Map<String, dynamic> data, String id) {
@@ -99,11 +91,7 @@ class NotificationModel {
       referenceType: data['reference_type'],
       priority: NotificationPriorityExtension.fromString(data['priority'] ?? 'normal'),
       category: data['category'],
-      requiresAction: data['requires_action'] ?? false,
-      actionLabel: data['action_label'],
-      actionUrl: data['action_url'],
       expiresAt: (data['expires_at'] as Timestamp?)?.toDate(),
-      groupKey: data['group_key'],
     );
   }
 
@@ -123,11 +111,7 @@ class NotificationModel {
       'reference_type': referenceType,
       'priority': priority.value,
       'category': category,
-      'requires_action': requiresAction,
-      'action_label': actionLabel,
-      'action_url': actionUrl,
       'expires_at': expiresAt != null ? Timestamp.fromDate(expiresAt!) : null,
-      'group_key': groupKey,
     };
   }
 
@@ -147,11 +131,7 @@ class NotificationModel {
     String? referenceType,
     NotificationPriority? priority,
     String? category,
-    bool? requiresAction,
-    String? actionLabel,
-    String? actionUrl,
     DateTime? expiresAt,
-    String? groupKey,
   }) {
     return NotificationModel(
       id: id ?? this.id,
@@ -169,11 +149,7 @@ class NotificationModel {
       referenceType: referenceType ?? this.referenceType,
       priority: priority ?? this.priority,
       category: category ?? this.category,
-      requiresAction: requiresAction ?? this.requiresAction,
-      actionLabel: actionLabel ?? this.actionLabel,
-      actionUrl: actionUrl ?? this.actionUrl,
       expiresAt: expiresAt ?? this.expiresAt,
-      groupKey: groupKey ?? this.groupKey,
     );
   }
 }
