@@ -141,6 +141,21 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
+  Future<bool> _isNurseScheduledForToday() async {
+    try {
+      final nurseId = await _getNurseId();
+      if (nurseId == null) return false;
+
+      final workingDays = await _getNurseWorkingDays(nurseId);
+      final today = _getSelectedDay();
+
+      return workingDays.contains(today);
+    } catch (e) {
+      print('Error checking if nurse is scheduled for today: $e');
+      return false;
+    }
+  }
+
   Future<void> _saveMedicationToDatabase({
     required String elderlyId,
     required String medicationName,
@@ -1197,6 +1212,55 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               );
             },
           ),
+        );
+      },
+    );
+  }
+
+  void _showNotScheduledDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.red, size: 45),
+              SizedBox(height: 8),
+              Text(
+                'Not Scheduled \n Today',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF00588E),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'It is not your shift or schedule today. You cannot add medications when you are not scheduled.',
+            style: TextStyle(fontSize: 16),
+            textAlign: TextAlign.justify,
+          ),
+          actions: [
+            Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xFF00588E),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                ),
+                child: Text(
+                  'OK',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -2741,17 +2805,28 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                   left: 0,
                   right: 0,
                   child: Center(
-                    child: FloatingActionButton.extended(
-                      onPressed: () => _showAddMedicationDialog(),
-                      label: Text(
-                        'Add Medication',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      icon: Icon(Icons.add, color: Colors.white),
-                      backgroundColor: Color(0xFF00588E),
+                    child: FutureBuilder<bool>(
+                      future: _isNurseScheduledForToday(),
+                      builder: (context, snapshot) {
+                        final isScheduled = snapshot.data ?? false;
+
+                        return FloatingActionButton.extended(
+                          onPressed: isScheduled
+                              ? () => _showAddMedicationDialog()
+                              : () => _showNotScheduledDialog(),
+                          label: Text(
+                            'Add Medication',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          icon: Icon(Icons.add, color: Colors.white),
+                          backgroundColor: isScheduled
+                              ? Color(0xFF00588E)
+                              : Colors.grey,
+                        );
+                      },
                     ),
                   ),
                 ),

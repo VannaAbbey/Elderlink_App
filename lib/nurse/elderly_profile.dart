@@ -36,9 +36,121 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
     'H005': 'St. Gabriel',
   };
 
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
   @override
   void initState() {
     super.initState();
+  }
+
+  String _getSelectedDay() {
+    return DateFormat('EEEE').format(DateTime.now());
+  }
+
+  String _getCurrentShift() {
+    final currentHour = DateTime.now().hour;
+    if (currentHour >= 6 && currentHour < 14) return "1st";
+    if (currentHour >= 14 && currentHour < 22) return "2nd";
+    return "3rd";
+  }
+
+  Future<String?> _getNurseId() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return null;
+
+      return currentUser.uid;
+    } catch (e) {
+      print('Error getting nurse ID: $e');
+      return null;
+    }
+  }
+
+  Future<List<String>> _getNurseWorkingDays(String nurseId) async {
+    try {
+      final currentShift = _getCurrentShift();
+
+      final shiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      if (shiftQuery.docs.isNotEmpty) {
+        final data = shiftQuery.docs.first.data();
+        return List<String>.from(data['days_assigned'] ?? []);
+      }
+      return [];
+    } catch (e) {
+      print('Error getting nurse working days: $e');
+      return [];
+    }
+  }
+
+  Future<bool> _isNurseScheduledForToday() async {
+    try {
+      final nurseId = await _getNurseId();
+      if (nurseId == null) return false;
+
+      final workingDays = await _getNurseWorkingDays(nurseId);
+      final today = _getSelectedDay();
+
+      return workingDays.contains(today);
+    } catch (e) {
+      print('Error checking if nurse is scheduled for today: $e');
+      return false;
+    }
+  }
+
+  void _showNotScheduledDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.red, size: 45),
+              SizedBox(height: 8),
+              Text(
+                'Not Scheduled \n Today',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF00588E),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'It is not your shift or schedule today. You cannot submit updates when you are not scheduled.',
+            style: TextStyle(fontSize: 16),
+            textAlign: TextAlign.justify,
+          ),
+          actions: [
+            Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xFF00588E),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                ),
+                child: Text(
+                  'OK',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Stream<DocumentSnapshot> _getElderlyStream() {
@@ -1144,39 +1256,51 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
 
                           const SizedBox(height: 20),
 
-                          // ✅ Button INSIDE container
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF00588E),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              // Use the Poppins family and the Bold (700) weight which
-                              // is actually included in pubspec.yaml. w900 may fall back
-                              // to a lighter weight if that exact weight isn't available.
-                              textStyle: const TextStyle(
-                                fontFamily: 'Poppins',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 18,
-                                letterSpacing: 0.25,
-                              ),
-                            ),
-                            onPressed: () => showSubmitConfirmation(
-                              elderly,
-                              lifeStatus,
-                              houseName,
-                            ),
-                            child: const Text(
-                              "Update and Submit to Admin",
-                              style: TextStyle(
-                                fontFamily: 'Poppins',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
+                          // ✅ Button INSIDE container with schedule validation
+                          FutureBuilder<bool>(
+                            future: _isNurseScheduledForToday(),
+                            builder: (context, snapshot) {
+                              final isScheduled = snapshot.data ?? false;
+                              return ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: isScheduled
+                                      ? const Color(0xFF00588E)
+                                      : Colors.grey,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 14,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  // Use the Poppins family and the Bold (700) weight which
+                                  // is actually included in pubspec.yaml. w900 may fall back
+                                  // to a lighter weight if that exact weight isn't available.
+                                  textStyle: const TextStyle(
+                                    fontFamily: 'Poppins',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 18,
+                                    letterSpacing: 0.25,
+                                  ),
+                                ),
+                                onPressed: isScheduled
+                                    ? () => showSubmitConfirmation(
+                                        elderly,
+                                        lifeStatus,
+                                        houseName,
+                                      )
+                                    : () => _showNotScheduledDialog(),
+                                child: const Text(
+                                  "Update and Submit to Admin",
+                                  style: TextStyle(
+                                    fontFamily: 'Poppins',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ),
