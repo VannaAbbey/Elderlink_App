@@ -39,9 +39,10 @@ class LeaveNotificationListener {
 
     // Listen to leave requests for the current user
     // Note: Listening to both 'rejected' and 'denied' to handle different status values
+    // Works for both caregivers and nurses - no user_type filter needed since user_id is unique
     _leaveRequestsSubscription = _firestore
         .collection('leave_requests')
-        .where('caregiver_id', isEqualTo: currentUser.uid)
+        .where('user_id', isEqualTo: currentUser.uid)
         .where('status', whereIn: ['approved', 'rejected', 'denied']) // Listen to all decided statuses
         .snapshots()
         .listen(
