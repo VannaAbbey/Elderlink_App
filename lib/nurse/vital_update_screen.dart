@@ -147,8 +147,8 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           label,
           style: const TextStyle(
             fontSize: 16,
-            fontWeight: FontWeight.w500,
-            color: Color(0xFF2C3E50),
+            fontWeight: FontWeight.bold,
+            color: Color(0XFF1D66A0),
           ),
         ),
         const SizedBox(height: 8),
@@ -159,7 +159,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           decoration: InputDecoration(
             hintText: 'Type here or select from dropdown',
             suffixIcon: PopupMenuButton<String>(
-              icon: const Icon(Icons.arrow_drop_down),
+              icon: const Icon(Icons.arrow_drop_down, color: Color(0XFF1D66A0)),
               onSelected: (String value) {
                 controller.text = value;
               },
@@ -174,12 +174,14 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Colors.grey),
+              borderSide: const BorderSide(color: Color(0XFF1D66A0)),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: Color(0xFF00588E), width: 2),
+              borderSide: const BorderSide(color: Color(0XFF1D66A0), width: 2),
             ),
+            filled: true,
+            fillColor: Colors.white,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 16,
               vertical: 12,
@@ -200,6 +202,25 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
     print('👴 Elderly ID: ${widget.elderlyId}');
     print('👩‍⚕️ Nurse Name: ${widget.nurseName}');
     print('🆔 Current Nurse ID: $_currentNurseId');
+
+    // 🔍 DEBUG: Check if the document exists before trying to update
+    try {
+      final docCheck = await _firestore
+          .collection('vitals')
+          .doc(widget.assignmentId)
+          .get();
+      print('📋 Document exists check: ${docCheck.exists}');
+      if (docCheck.exists) {
+        print('📋 Document data: ${docCheck.data()}');
+      } else {
+        print('❌ Document does not exist in vitals collection!');
+        return; // Don't proceed if document doesn't exist
+      }
+    } catch (e) {
+      print('❌ Error checking document existence: $e');
+      return;
+    }
+
     print('📊 Vital Values:');
     print('   - Blood Pressure: ${_bloodPressureController.text}');
     print('   - Pulse Rate: ${_pulseRateController.text}');
@@ -373,219 +394,271 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text('Vital Signs - ${widget.elderlyName}'),
-        backgroundColor: const Color(0xFF00588E),
-        foregroundColor: Colors.white,
+        title: Text(
+          'Vital Signs - ${widget.elderlyName}',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 19),
+        ),
+        backgroundColor: Colors.transparent,
+        foregroundColor: const Color(0XFF1D66A0),
         elevation: 0,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Patient Info Card
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.person_outline,
-                              size: 40,
-                              color: Color(0xFF00588E),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    widget.elderlyName,
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF2C3E50),
-                                    ),
-                                  ),
-                                  Text(
-                                    'Nurse: ${widget.nurseName ?? 'Unknown'}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Date: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.now())}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-
-                    // Vital Signs Form
-                    const Text(
-                      'Vital Signs',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2C3E50),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    _buildEditableComboBox(
-                      label: 'Blood Pressure',
-                      controller: _bloodPressureController,
-                      options: _bloodPressureOptions,
-                      suffix: ' mmHg',
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter blood pressure';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-
-                    _buildEditableComboBox(
-                      label: 'Pulse Rate',
-                      controller: _pulseRateController,
-                      options: _pulseRateOptions,
-                      suffix: ' bpm',
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter pulse rate';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-
-                    _buildEditableComboBox(
-                      label: 'O2 Saturation',
-                      controller: _o2SatController,
-                      options: _o2SatOptions,
-                      suffix: '%',
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter O2 saturation';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-
-                    _buildEditableComboBox(
-                      label: 'Temperature',
-                      controller: _temperatureController,
-                      options: _temperatureOptions,
-                      suffix: ' °C',
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter temperature';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-
-                    _buildEditableComboBox(
-                      label: 'Respiratory Rate',
-                      controller: _respiratoryRateController,
-                      options: _respiratoryRateOptions,
-                      suffix: ' breaths/min',
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter respiratory rate';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Notes Field
-                    Column(
+      body: Stack(
+        children: [
+          // Background Image
+          Positioned.fill(
+            child: Image.asset(
+              'assets/images/background1.png',
+              fit: BoxFit.cover,
+            ),
+          ),
+          // Content
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Notes (Optional)',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            color: Color(0xFF2C3E50),
+                        // Patient Info Card
+                        Card(
+                          elevation: 3,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  backgroundColor: const Color(
+                                    0xFF00588E,
+                                  ).withOpacity(0.1),
+                                  radius: 30,
+                                  child: const Icon(
+                                    Icons.person_outline,
+                                    size: 30,
+                                    color: Color(0xFF00588E),
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        widget.elderlyName,
+                                        style: const TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0XFF1D66A0),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Nurse: ${widget.nurseName ?? 'Unknown'}',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Date: ${DateFormat('MMM dd, yyyy - hh:mm a').format(DateTime.now())}',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _notesController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            hintText:
-                                'Enter any additional notes or observations...',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Colors.grey),
+                        const SizedBox(height: 24),
+
+                        // Vital Signs Form Card
+                        Card(
+                          elevation: 3,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Vital Signs Title
+                                const Text(
+                                  'Vital Signs',
+                                  style: TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0XFF1D66A0),
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+
+                                _buildEditableComboBox(
+                                  label: 'Blood Pressure',
+                                  controller: _bloodPressureController,
+                                  options: _bloodPressureOptions,
+                                  suffix: ' mmHg',
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Please enter blood pressure';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+
+                                _buildEditableComboBox(
+                                  label: 'Pulse Rate',
+                                  controller: _pulseRateController,
+                                  options: _pulseRateOptions,
+                                  suffix: ' bpm',
+                                  keyboardType: TextInputType.number,
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Please enter pulse rate';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+
+                                _buildEditableComboBox(
+                                  label: 'O2 Saturation',
+                                  controller: _o2SatController,
+                                  options: _o2SatOptions,
+                                  suffix: '%',
+                                  keyboardType: TextInputType.number,
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Please enter O2 saturation';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+
+                                _buildEditableComboBox(
+                                  label: 'Temperature',
+                                  controller: _temperatureController,
+                                  options: _temperatureOptions,
+                                  suffix: ' °C',
+                                  keyboardType: TextInputType.number,
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Please enter temperature';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+
+                                _buildEditableComboBox(
+                                  label: 'Respiratory Rate',
+                                  controller: _respiratoryRateController,
+                                  options: _respiratoryRateOptions,
+                                  suffix: ' breaths/min',
+                                  keyboardType: TextInputType.number,
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Please enter respiratory rate';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 24),
+
+                                // Notes Field
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Notes (Optional)',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0XFF1D66A0),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextFormField(
+                                      controller: _notesController,
+                                      maxLines: 3,
+                                      decoration: InputDecoration(
+                                        hintText:
+                                            'Enter any additional notes or observations...',
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          borderSide: const BorderSide(
+                                            color: Color(0XFF1D66A0),
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          borderSide: const BorderSide(
+                                            color: Color(0XFF1D66A0),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        filled: true,
+                                        fillColor: Colors.white,
+                                        contentPadding: const EdgeInsets.all(
+                                          16,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Save Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton(
+                            onPressed: _saveVitalData,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00588E),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: 2,
+                            ),
+                            child: const Text(
+                              'Save Vital Signs',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            contentPadding: const EdgeInsets.all(16),
                           ),
                         ),
+                        const SizedBox(height: 20),
                       ],
                     ),
-                    const SizedBox(height: 32),
-
-                    // Save Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        onPressed: _saveVitalData,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00588E),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          elevation: 2,
-                        ),
-                        child: const Text(
-                          'Save Vital Signs',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
+                  ),
                 ),
-              ),
-            ),
+        ],
+      ),
     );
   }
 

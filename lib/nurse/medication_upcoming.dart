@@ -7,11 +7,13 @@ import 'notification_service.dart';
 class UpcomingMedicationsTab extends StatefulWidget {
   final String houseId;
   final String? nurseName;
+  final DateTime? selectedDate;
 
   const UpcomingMedicationsTab({
     super.key,
     required this.houseId,
     required this.nurseName,
+    this.selectedDate,
   });
 
   @override
@@ -31,10 +33,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   bool _isLoading = false;
   List<Map<String, dynamic>> _upcomingMedications = [];
   Timer? _missedMedicationTimer;
+  late DateTime _selectedDate;
 
   @override
   void initState() {
     super.initState();
+    _selectedDate = widget.selectedDate ?? DateTime.now();
     // Prewarm nurse id and load data (uses cache if available) to make
     // the first frame appear faster when switching tabs/houses.
     _prewarm();
@@ -43,6 +47,30 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
   @override
   bool get wantKeepAlive => true;
+
+  void _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(primary: Color(0xFF00588E)),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      // Reload medications for the new date
+      _prewarm();
+    }
+  }
 
   Future<void> _prewarm() async {
     // Kick off assigned elderly and medications loading in background.
@@ -57,27 +85,15 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     super.dispose();
   }
 
+  String _getSelectedDay() {
+    return DateFormat('EEEE').format(_selectedDate);
+  }
+
   String _getCurrentShift() {
-    final currentHour = DateTime.now().hour;
+    final currentHour = _selectedDate.hour;
     if (currentHour >= 6 && currentHour < 14) return "1st";
     if (currentHour >= 14 && currentHour < 22) return "2nd";
     return "3rd";
-  }
-
-  String _getCurrentDay() {
-    final now = DateTime.now();
-    final currentHour = now.hour;
-
-    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
-    // we need to look at the previous day's assignments
-    if (currentHour >= 0 && currentHour < 6) {
-      // It's after midnight during third shift, so get previous day
-      final previousDay = now.subtract(Duration(days: 1));
-      return DateFormat('EEEE').format(previousDay);
-    }
-
-    // For all other times, use current day
-    return DateFormat('EEEE').format(now);
   }
 
   Future<String?> _getNurseId() async {
@@ -297,7 +313,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           'created_at': FieldValue.serverTimestamp(),
         });
 
-        // schedule notification 5 minutes before
+        // schedule notification 5 minutes before (only if in future)
         final notifyTime = taskStart.subtract(Duration(minutes: 5));
         if (notifyTime.isAfter(DateTime.now())) {
           NotificationService.scheduleTaskNotification(
@@ -322,7 +338,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
     try {
       final currentShift = _getCurrentShift();
-      final currentDay = _getCurrentDay();
+      final currentDay = _getSelectedDay();
 
       print(
         'Fetching for nurse: ${widget.nurseName}, shift: $currentShift, day: $currentDay',
@@ -515,7 +531,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   }
 
   Future<void> _loadUpcomingMedications({bool forceRefresh = false}) async {
-    final currentDay = _getCurrentDay();
+    final currentDay = _getSelectedDay();
     final currentShift = _getCurrentShift();
     final cacheKey =
         '${widget.houseId}|${widget.nurseName ?? ''}|$currentShift|$currentDay';
@@ -682,7 +698,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
-  void _showAddMedicationDialog() {
+  void _showAddMedicationDialog() async {
+    // Ensure elderly list is loaded before showing dialog
+    if (_elderlyList.isEmpty && !_isLoading) {
+      await _loadAssignedElderly();
+    }
+
     String? selectedElderlyTemp = _selectedElderly;
     String? selectedMedicationTemp;
     String? selectedDosageTemp;
@@ -1212,7 +1233,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       if (nurseId == null) return;
 
       final currentTime = DateTime.now();
-      final currentDay = _getCurrentDay();
+      final currentDay = _getSelectedDay();
       final currentShift = _getCurrentShift();
 
       print(
@@ -1385,7 +1406,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         'scheduled_time': scheduledTime,
         'timestamp': FieldValue.serverTimestamp(),
         'shift': _getCurrentShift(),
-        'day': _getCurrentDay(),
+        'day': _getSelectedDay(),
         if (oldData != null) 'old_data': oldData,
         if (newData != null) 'new_data': newData,
       };
@@ -2640,56 +2661,103 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Stack(
+    return Column(
       children: [
-        if (_isLoading)
-          const Center(child: CircularProgressIndicator())
-        else
-          // Medications List
-          _upcomingMedications.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.medication, size: 64, color: Colors.grey),
-                      SizedBox(height: 16),
-                      Text(
-                        'No upcoming medications',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
-                      ),
-                    ],
-                  ),
-                )
-              : ListView.builder(
-                  padding: EdgeInsets.only(bottom: 80),
-                  itemCount: _getTotalTakeCount(),
-                  itemBuilder: (context, index) {
-                    final takeInfo = _getTakeInfoByIndex(index);
-                    if (takeInfo == null) return SizedBox.shrink();
-
-                    return _buildIndividualTakeContainer(takeInfo);
-                  },
+        // Date Picker Row
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Colors.white,
+          child: Row(
+            children: [
+              const Text(
+                'Date: ',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF00588E),
                 ),
-        if (!_isLoading)
-          Positioned(
-            bottom: 16,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: FloatingActionButton.extended(
-                onPressed: _showAddMedicationDialog,
-                label: Text(
-                  'Add Medication',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                icon: Icon(Icons.add, color: Colors.white),
-                backgroundColor: Color(0xFF00588E),
               ),
-            ),
+              Text(
+                DateFormat('MMM dd, yyyy').format(_selectedDate),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(
+                  Icons.calendar_today,
+                  color: Color(0xFF00588E),
+                ),
+                onPressed: () => _selectDate(context),
+              ),
+            ],
           ),
+        ),
+        // Main Content
+        Expanded(
+          child: Stack(
+            children: [
+              if (_isLoading)
+                const Center(child: CircularProgressIndicator())
+              else
+                // Medications List
+                _upcomingMedications.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(height: 24),
+                            Icon(
+                              Icons.medication,
+                              size: 64,
+                              color: Colors.grey,
+                            ),
+                            SizedBox(height: 16),
+                            Text(
+                              'No upcoming medications',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.only(bottom: 80),
+                        itemCount: _getTotalTakeCount(),
+                        itemBuilder: (context, index) {
+                          final takeInfo = _getTakeInfoByIndex(index);
+                          if (takeInfo == null) return SizedBox.shrink();
+
+                          return _buildIndividualTakeContainer(takeInfo);
+                        },
+                      ),
+              if (!_isLoading)
+                Positioned(
+                  bottom: 16,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: FloatingActionButton.extended(
+                      onPressed: () => _showAddMedicationDialog(),
+                      label: Text(
+                        'Add Medication',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      icon: Icon(Icons.add, color: Colors.white),
+                      backgroundColor: Color(0xFF00588E),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }

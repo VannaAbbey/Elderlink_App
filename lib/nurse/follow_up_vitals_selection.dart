@@ -335,11 +335,48 @@ class _FollowUpVitalsSelectionScreenState
     return DateFormat('MMM dd, hh:mm a').format(dateTime);
   }
 
+  Widget _buildVitalChip(String label, String value) {
+    return Container(
+      margin: EdgeInsets.only(right: 8, bottom: 4),
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[800],
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Follow-up Vitals Selection'),
+        title: Text(
+          'Follow-up Vitals Selection',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.green[600],
         foregroundColor: Colors.white,
       ),
@@ -430,12 +467,13 @@ class _FollowUpVitalsSelectionScreenState
                                     backgroundColor: canFollowUp
                                         ? Colors.green[600]
                                         : Colors.grey[400],
+                                    radius: 24,
                                     child: Icon(
                                       Icons.person,
                                       color: Colors.white,
                                     ),
                                   ),
-                                  SizedBox(width: 12),
+                                  SizedBox(width: 16),
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment:
@@ -449,18 +487,18 @@ class _FollowUpVitalsSelectionScreenState
                                             color: Color(0xFF2C3E50),
                                           ),
                                         ),
-                                        SizedBox(height: 4),
+                                        SizedBox(height: 8),
                                         Container(
                                           padding: EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
+                                            horizontal: 12,
+                                            vertical: 6,
                                           ),
                                           decoration: BoxDecoration(
                                             color: canFollowUp
                                                 ? Colors.green[100]
                                                 : Colors.grey[200],
                                             borderRadius: BorderRadius.circular(
-                                              12,
+                                              16,
                                             ),
                                           ),
                                           child: Text(
@@ -479,50 +517,18 @@ class _FollowUpVitalsSelectionScreenState
                                       ],
                                     ),
                                   ),
-                                  if (canFollowUp)
-                                    ElevatedButton.icon(
-                                      onPressed: () =>
-                                          _recordFollowUpVitals(elderlyInfo),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green[600],
-                                        foregroundColor: Colors.white,
-                                      ),
-                                      icon: Icon(
-                                        Icons.add_circle_outline,
-                                        size: 18,
-                                      ),
-                                      label: Text('Follow-up'),
-                                    )
-                                  else
-                                    Container(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[300],
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        'Complete First',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600],
-                                        ),
-                                      ),
-                                    ),
                                 ],
                               ),
 
                               // Show previous vitals if completed
                               if (canFollowUp && previousVitals != null) ...[
-                                SizedBox(height: 12),
+                                SizedBox(height: 20),
                                 Container(
                                   width: double.infinity,
-                                  padding: EdgeInsets.all(12),
+                                  padding: EdgeInsets.all(16),
                                   decoration: BoxDecoration(
                                     color: Colors.grey[50],
-                                    borderRadius: BorderRadius.circular(6),
+                                    borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: Colors.grey[200]!,
                                     ),
@@ -531,57 +537,136 @@ class _FollowUpVitalsSelectionScreenState
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        'Previous Vitals:',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.grey[700],
-                                        ),
-                                      ),
-                                      SizedBox(height: 6),
-                                      Wrap(
-                                        spacing: 12,
-                                        runSpacing: 4,
+                                      Row(
                                         children: [
-                                          if (previousVitals['blood_pressure'] !=
-                                              null)
+                                          Icon(
+                                            Icons.monitor_heart,
+                                            size: 16,
+                                            color: Colors.grey[600],
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Previous Vitals',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      SizedBox(height: 12),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (previousVitals['blood_pressure'] != null)
                                             Text(
                                               'BP: ${previousVitals['blood_pressure']}',
                                               style: TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.grey[600],
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['pulse_rate'] !=
-                                              null)
+                                          if (previousVitals['pulse_rate'] != null)
                                             Text(
-                                              'HR: ${previousVitals['pulse_rate']}',
+                                              'HR: ${previousVitals['pulse_rate']} bpm',
                                               style: TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.grey[600],
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['temperature'] !=
-                                              null)
+                                          if (previousVitals['temperature'] != null)
                                             Text(
                                               'Temp: ${previousVitals['temperature']}°C',
                                               style: TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.grey[600],
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          if (previousVitals['oxygen_saturation'] != null)
+                                            Text(
+                                              'O2: ${previousVitals['oxygen_saturation']}%',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          if (previousVitals['respiratory_rate'] != null)
+                                            Text(
+                                              'RR: ${previousVitals['respiratory_rate']} breaths/min',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
                                               ),
                                             ),
                                         ],
                                       ),
-                                      SizedBox(height: 4),
+                                      SizedBox(height: 8),
                                       Text(
-                                        'By: ${previousVitals['recorded_by_name']} • ${_formatTimestamp(previousVitals['completed_at'])}',
+                                        'Recorded by: ${previousVitals['recorded_by_name']} • ${_formatTimestamp(previousVitals['completed_at'])}',
                                         style: TextStyle(
-                                          fontSize: 10,
+                                          fontSize: 14,
                                           color: Colors.grey[500],
+                                          fontWeight: FontWeight.w500,
                                         ),
                                       ),
                                     ],
+                                  ),
+                                ),
+                              ],
+
+                              // Follow-up button at bottom
+                              if (canFollowUp) ...[
+                                SizedBox(height: 16),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 45,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () =>
+                                        _recordFollowUpVitals(elderlyInfo),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green[600],
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    icon: Icon(
+                                      Icons.add_circle_outline,
+                                      size: 20,
+                                    ),
+                                    label: Text(
+                                      'Record Follow-up Vitals',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ] else ...[
+                                SizedBox(height: 16),
+                                Container(
+                                  width: double.infinity,
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey[300],
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      'Complete Initial Vitals First',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ],

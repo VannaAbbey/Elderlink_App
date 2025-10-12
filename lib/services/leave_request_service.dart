@@ -36,8 +36,8 @@ class LeaveRequestService {
       // Create leave request data
       final leaveRequestData = {
         'leave_request_id': '', // Will be updated with document ID
-        'caregiver_id': currentUser.uid,
-        'caregiver_email': currentUser.email ?? '',
+        'user_id': currentUser.uid,
+        'user_email': currentUser.email ?? '',
         'full_name': fullName.trim(),
         'contact_info': contactInfo.trim(),
         'emergency_contact': emergencyContact.trim(),
@@ -56,8 +56,10 @@ class LeaveRequestService {
       };
 
       // Add the document to Firestore
-      final docRef = await _firestore.collection('leave_requests').add(leaveRequestData);
-      
+      final docRef = await _firestore
+          .collection('leave_requests')
+          .add(leaveRequestData);
+
       // Update the document with its own ID
       await docRef.update({
         'leave_request_id': docRef.id,
@@ -65,7 +67,7 @@ class LeaveRequestService {
       });
 
       print('✅ Leave request submitted successfully with ID: ${docRef.id}');
-      
+
       return docRef.id;
     } catch (e) {
       print('❌ Error submitting leave request: $e');
@@ -82,22 +84,27 @@ class LeaveRequestService {
 
     return _firestore
         .collection('leave_requests')
-        .where('caregiver_id', isEqualTo: currentUser.uid)
+        .where('user_id', isEqualTo: currentUser.uid)
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['id'] = doc.id; // Include document ID
-        return data;
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            data['id'] = doc.id; // Include document ID
+            return data;
+          }).toList();
+        });
   }
 
   /// Gets a specific leave request by ID
-  static Future<Map<String, dynamic>?> getLeaveRequestById(String requestId) async {
+  static Future<Map<String, dynamic>?> getLeaveRequestById(
+    String requestId,
+  ) async {
     try {
-      final doc = await _firestore.collection('leave_requests').doc(requestId).get();
+      final doc = await _firestore
+          .collection('leave_requests')
+          .doc(requestId)
+          .get();
       if (doc.exists) {
         final data = doc.data()!;
         data['id'] = doc.id;
@@ -140,28 +147,30 @@ class LeaveRequestService {
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['id'] = doc.id;
-        return data;
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            data['id'] = doc.id;
+            return data;
+          }).toList();
+        });
   }
 
   /// Gets leave requests by status
-  static Stream<List<Map<String, dynamic>>> getLeaveRequestsByStatus(String status) {
+  static Stream<List<Map<String, dynamic>>> getLeaveRequestsByStatus(
+    String status,
+  ) {
     return _firestore
         .collection('leave_requests')
         .where('status', isEqualTo: status)
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['id'] = doc.id;
-        return data;
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            data['id'] = doc.id;
+            return data;
+          }).toList();
+        });
   }
 
   /// Gets pending leave requests count for the current user
@@ -174,10 +183,10 @@ class LeaveRequestService {
     try {
       final snapshot = await _firestore
           .collection('leave_requests')
-          .where('caregiver_id', isEqualTo: currentUser.uid)
+          .where('user_id', isEqualTo: currentUser.uid)
           .where('status', isEqualTo: 'pending')
           .get();
-      
+
       return snapshot.docs.length;
     } catch (e) {
       print('❌ Error getting pending leave count: $e');
@@ -190,8 +199,12 @@ class LeaveRequestService {
     // Start date cannot be in the past (allow today)
     final today = DateTime.now();
     final todayOnly = DateTime(today.year, today.month, today.day);
-    final startDateOnly = DateTime(startDate.year, startDate.month, startDate.day);
-    
+    final startDateOnly = DateTime(
+      startDate.year,
+      startDate.month,
+      startDate.day,
+    );
+
     if (startDateOnly.isBefore(todayOnly)) {
       return false;
     }
@@ -205,7 +218,10 @@ class LeaveRequestService {
   }
 
   /// Checks for overlapping leave requests
-  static Future<bool> hasOverlappingLeave(DateTime startDate, DateTime endDate) async {
+  static Future<bool> hasOverlappingLeave(
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
       return false;
@@ -215,7 +231,7 @@ class LeaveRequestService {
       // Get all approved leave requests for the current user
       final snapshot = await _firestore
           .collection('leave_requests')
-          .where('caregiver_id', isEqualTo: currentUser.uid)
+          .where('user_id', isEqualTo: currentUser.uid)
           .where('status', whereIn: ['pending', 'approved'])
           .get();
 
@@ -225,7 +241,8 @@ class LeaveRequestService {
         final existingEnd = (data['end_date'] as Timestamp).toDate();
 
         // Check for overlap
-        if (!(endDate.isBefore(existingStart) || startDate.isAfter(existingEnd))) {
+        if (!(endDate.isBefore(existingStart) ||
+            startDate.isAfter(existingEnd))) {
           return true; // Overlap found
         }
       }

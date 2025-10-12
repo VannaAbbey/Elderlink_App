@@ -62,11 +62,101 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     'Custom': ['Other'],
   };
 
+  // Schedule notifications for existing medical tasks
+  Future<void> _scheduleNotificationsForExistingTasks() async {
+    try {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final tomorrow = today.add(const Duration(days: 1));
+
+      debugPrint('Scheduling notifications for existing tasks');
+      debugPrint('Today: $today, Tomorrow: $tomorrow, Now: $now');
+
+      // Get all medical tasks for the next 7 days to cover all scheduled days
+      final nextWeek = today.add(const Duration(days: 7));
+      final query = await _firestore
+          .collection('medical_tasks')
+          .where(
+            'task_start',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(today),
+          )
+          .where('task_start', isLessThan: Timestamp.fromDate(nextWeek))
+          .get();
+
+      debugPrint('Found ${query.docs.length} tasks for the next 7 days');
+
+      for (final doc in query.docs) {
+        final task = doc.data();
+        final taskStart = (task['task_start'] as Timestamp).toDate();
+        final elderlyId = task['elderly_id'] as String?;
+        final medicationId = task['medication_id'] as String?;
+        final takeIndex = task['take_index'] ?? 0;
+
+        debugPrint('Processing task: ${task['task_title']}, start: $taskStart');
+
+        // Only schedule notifications for future tasks
+        if (!taskStart.isAfter(now)) {
+          debugPrint('Skipping task ${task['task_title']} - in past');
+          continue;
+        }
+
+        if (elderlyId != null && medicationId != null) {
+          // Get elderly name
+          final elderlyDoc = await _firestore
+              .collection('elderly')
+              .doc(elderlyId)
+              .get();
+          final elderlyName = elderlyDoc.exists
+              ? '${elderlyDoc.data()?['elderly_fname'] ?? ''} ${elderlyDoc.data()?['elderly_lname'] ?? ''}'
+                    .trim()
+              : 'Unknown';
+
+          // Get medication name
+          final medDoc = await _firestore
+              .collection('medications')
+              .doc(medicationId)
+              .get();
+          final medName = medDoc.exists
+              ? (medDoc.data()?['medication_name'] ?? 'Medication')
+              : 'Medication';
+
+          // Schedule 5-minute reminder notification
+          final notifyTime = taskStart.subtract(Duration(minutes: 5));
+          if (notifyTime.isAfter(now)) {
+            debugPrint('Scheduling 5-min reminder for $medName at $notifyTime');
+            NotificationService.scheduleTaskNotification(
+              id: ('${medicationId}_$takeIndex').hashCode,
+              title: 'Medication Reminder',
+              body: '$medName for $elderlyName in 5 minutes',
+              dateTime: notifyTime,
+            );
+          }
+
+          // Schedule exact time notification
+          debugPrint(
+            'Scheduling exact time notification for $medName at $taskStart',
+          );
+          NotificationService.scheduleTaskNotification(
+            id: ('${medicationId}_$takeIndex' + '_exact').hashCode,
+            title: 'Medication Time - $medName',
+            body: 'Time to administer $medName to $elderlyName',
+            dateTime: taskStart,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error scheduling notifications for existing tasks: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _loadHouses();
-    NotificationService.init(); // initialize notification service
+    NotificationService.init(
+      onNotificationTap: _handleNotificationTap,
+    ); // initialize notification service with tap handler
+    _scheduleNotificationsForExistingTasks(); // schedule notifications for existing tasks
     // After first frame we can access context safely and generate medication tasks
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
@@ -162,7 +252,30 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     }
   }
 
-  // Generate medical_tasks entries for today's medication schedule for this nurse
+  Future<List<String>> _getNurseWorkingDays(String nurseId) async {
+    try {
+      final currentShift = _getCurrentShift();
+
+      final shiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      if (shiftQuery.docs.isNotEmpty) {
+        final data = shiftQuery.docs.first.data();
+        return List<String>.from(data['days_assigned'] ?? []);
+      }
+      return [];
+    } catch (e) {
+      print('Error getting nurse working days: $e');
+      return [];
+    }
+  }
+
+  // Generate medical_tasks entries for medication schedule for this nurse
   Future<void> _generateMedicationTasksForToday() async {
     try {
       final nurseId = await _getNurseIdFromAuth();
@@ -171,7 +284,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       final currentShift = _getCurrentShift();
       final currentDay = _getCurrentDay();
 
-      // Get elderly_assignments for this nurse for today's shift/day
+      // Get nurse's working days for this shift
+      final nurseWorkingDays = await _getNurseWorkingDays(nurseId);
+
+      // Get elderly_assignments for this nurse for current shift/day
       final assignQuery = await _firestore
           .collection('elderly_assignments')
           .where('user_id', isEqualTo: nurseId)
@@ -229,6 +345,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           final medName = mdata['medication_name'] ?? 'Medication';
           final dosage = mdata['dosage'] ?? '';
           final elderlyId = mdata['elderly_id'] as String?;
+          final repeatInterval = mdata['repeat_interval'] ?? 'Once';
           if (elderlyId == null) continue;
           final elderlyName = elderlyNames[elderlyId] ?? 'Unknown';
 
@@ -237,74 +354,109 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             mdata['take_statuses'] ?? [],
           );
 
-          for (int t = 0; t < intakeTimes.length; t++) {
-            final scheduled = intakeTimes[t];
-            // scheduled expected as 'HH:mm'
-            final parts = scheduled.split(':');
-            if (parts.length != 2) continue;
-            final hour = int.tryParse(parts[0]) ?? 0;
-            final minute = int.tryParse(parts[1]) ?? 0;
+          // Determine which days to create tasks for
+          List<String> taskDays;
+          if (repeatInterval == 'Daily') {
+            // For daily medications, create tasks for all nurse's working days
+            taskDays = nurseWorkingDays;
+          } else {
+            // For once medications, only create for current day
+            taskDays = [currentDay];
+          }
 
-            // build today's DateTime for the scheduled time
-            final taskStart = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              hour,
-              minute,
-            );
+          for (final taskDay in taskDays) {
+            // Find the next occurrence of this day
+            DateTime nextTaskDate = now;
+            for (int i = 0; i < 7; i++) {
+              final checkDate = now.add(Duration(days: i));
+              final checkDayName = DateFormat('EEEE').format(checkDate);
+              if (checkDayName == taskDay) {
+                nextTaskDate = checkDate;
+                break;
+              }
+            }
 
-            // skip past takes
-            if (taskStart.isBefore(now)) continue;
+            for (int t = 0; t < intakeTimes.length; t++) {
+              final scheduled = intakeTimes[t];
+              // scheduled expected as 'HH:mm'
+              final parts = scheduled.split(':');
+              if (parts.length != 2) continue;
+              final hour = int.tryParse(parts[0]) ?? 0;
+              final minute = int.tryParse(parts[1]) ?? 0;
 
-            // only create task if status is pending
-            final status =
-                (t < takeStatuses.length && takeStatuses[t]['status'] != null)
-                ? takeStatuses[t]['status'] as String
-                : 'pending';
-            if (status != 'pending') continue;
-
-            // avoid duplicates: check for existing medical_tasks with same medication_id and take index and same start
-            final existing = await _firestore
-                .collection('medical_tasks')
-                .where('task_source', isEqualTo: 'medication')
-                .where('medication_id', isEqualTo: medicationId)
-                .where('take_index', isEqualTo: t)
-                .where('task_start', isEqualTo: Timestamp.fromDate(taskStart))
-                .get();
-            if (existing.docs.isNotEmpty) continue;
-
-            // create task
-            final taskTitle =
-                '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
-            final taskDesc =
-                'Medication scheduled for $elderlyName at $scheduled';
-
-            await _firestore.collection('medical_tasks').add({
-              'task_title': taskTitle,
-              'task_description': taskDesc,
-              'task_category': 'Medication',
-              'task_start': taskStart,
-              'task_frequency': 'Once',
-              'task_status': 'Pending',
-              'days': [_getCurrentDay()],
-              // metadata to avoid duplicates and allow tracing
-              'task_source': 'medication',
-              'medication_id': medicationId,
-              'take_index': t,
-              'elderly_id': elderlyId,
-              'created_at': FieldValue.serverTimestamp(),
-            });
-
-            // schedule notification 5 minutes before
-            final notifyTime = taskStart.subtract(Duration(minutes: 5));
-            if (notifyTime.isAfter(DateTime.now())) {
-              NotificationService.scheduleTaskNotification(
-                id: ('${medicationId}_$t').hashCode,
-                title: 'Medication Reminder',
-                body: '$medName for $elderlyName in 5 minutes',
-                dateTime: notifyTime,
+              // build DateTime for the scheduled time on the task day
+              final taskStart = DateTime(
+                nextTaskDate.year,
+                nextTaskDate.month,
+                nextTaskDate.day,
+                hour,
+                minute,
               );
+
+              // skip past takes
+              if (taskStart.isBefore(now)) continue;
+
+              // only create task if status is pending
+              final status =
+                  (t < takeStatuses.length && takeStatuses[t]['status'] != null)
+                  ? takeStatuses[t]['status'] as String
+                  : 'pending';
+              if (status != 'pending') continue;
+
+              // avoid duplicates: check for existing medical_tasks with same medication_id and take index and same start
+              final existing = await _firestore
+                  .collection('medical_tasks')
+                  .where('task_source', isEqualTo: 'medication')
+                  .where('medication_id', isEqualTo: medicationId)
+                  .where('take_index', isEqualTo: t)
+                  .where('task_start', isEqualTo: Timestamp.fromDate(taskStart))
+                  .get();
+              if (existing.docs.isNotEmpty) continue;
+
+              // create task
+              final taskTitle =
+                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+              final taskDesc =
+                  'Medication scheduled for $elderlyName at $scheduled';
+
+              await _firestore.collection('medical_tasks').add({
+                'task_title': taskTitle,
+                'task_description': taskDesc,
+                'task_category': 'Medication',
+                'task_start': taskStart,
+                'task_frequency': repeatInterval == 'Daily'
+                    ? 'Every Assigned Days'
+                    : 'Once',
+                'task_status': 'Pending',
+                'days': taskDays,
+                // metadata to avoid duplicates and allow tracing
+                'task_source': 'medication',
+                'medication_id': medicationId,
+                'take_index': t,
+                'elderly_id': elderlyId,
+                'created_at': FieldValue.serverTimestamp(),
+              });
+
+              // schedule notification 5 minutes before (only if in future)
+              final notifyTime = taskStart.subtract(Duration(minutes: 5));
+              if (notifyTime.isAfter(DateTime.now())) {
+                NotificationService.scheduleTaskNotification(
+                  id: ('${medicationId}_${taskDay}_$t').hashCode,
+                  title: 'Medication Reminder',
+                  body: '$medName for $elderlyName in 5 minutes',
+                  dateTime: notifyTime,
+                );
+              }
+
+              // schedule notification at exact medication time (only if in future)
+              if (taskStart.isAfter(DateTime.now())) {
+                NotificationService.scheduleTaskNotification(
+                  id: ('${medicationId}_${taskDay}_$t' + '_exact').hashCode,
+                  title: 'Medication Time - $medName',
+                  body: 'Time to administer $medName to $elderlyName',
+                  dateTime: taskStart,
+                );
+              }
             }
           }
         }
@@ -1195,13 +1347,62 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                 'Task added with id: ${docRef.id}, start: $taskStart, days: $days',
                               );
 
-                              // Schedule notification
-                              NotificationService.scheduleTaskNotification(
-                                id: docRef.id.hashCode,
-                                title: taskTitle,
-                                body: taskDescription,
-                                dateTime: taskStart,
+                              // Only schedule notification if task is for today and at least 2 minutes in the future
+                              final today = DateTime(
+                                now.year,
+                                now.month,
+                                now.day,
                               );
+                              final taskDate = DateTime(
+                                taskStart.year,
+                                taskStart.month,
+                                taskStart.day,
+                              );
+
+                              // Only schedule notifications for future tasks
+                              final futureThreshold = now;
+
+                              if (taskDate.isAtSameMomentAs(today) &&
+                                  taskStart.isAfter(futureThreshold)) {
+                                // Schedule notification for the task time
+                                NotificationService.scheduleTaskNotification(
+                                  id: docRef.id.hashCode,
+                                  title: taskTitle,
+                                  body: taskDescription,
+                                  dateTime: taskStart,
+                                );
+
+                                // Show success notification for today's future task
+                                await NotificationService.showMedicalTaskNotification(
+                                  taskId: docRef.id,
+                                  title: 'Task Created Successfully',
+                                  description:
+                                      'You successfully created the task at ${taskTime.format(context)}',
+                                  time: taskTime.format(context),
+                                );
+                              } else {
+                                // Task is either for tomorrow or in the past - show appropriate success message
+                                String notificationTitle =
+                                    'Task Created Successfully';
+                                String notificationBody;
+
+                                if (taskDate.isAfter(today)) {
+                                  // Task scheduled for tomorrow or future
+                                  notificationBody =
+                                      'You successfully created the task for tomorrow at ${taskTime.format(context)}';
+                                } else {
+                                  // Task time was in the past
+                                  notificationBody =
+                                      'You successfully created the task for tomorrow';
+                                }
+
+                                await NotificationService.showMedicalTaskNotification(
+                                  taskId: docRef.id,
+                                  title: notificationTitle,
+                                  description: notificationBody,
+                                  time: taskTime.format(context),
+                                );
+                              }
 
                               Navigator.of(context).pop();
                             },
@@ -1698,6 +1899,34 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       );
     } catch (e) {
       print('❌ Task dialog error: $e');
+    }
+  }
+
+  // Handle notification tap to show task dialog with alarm
+  Future<void> _handleNotificationTap(String? payload) async {
+    if (payload != null && payload.isNotEmpty) {
+      try {
+        // Fetch task data
+        final taskDoc = await _firestore
+            .collection('medical_tasks')
+            .doc(payload)
+            .get();
+
+        if (taskDoc.exists) {
+          final taskData = taskDoc.data() as Map<String, dynamic>;
+          final title = taskData['task_title'] ?? 'Task';
+          final description = taskData['task_description'] ?? '';
+          final start =
+              (taskData['task_start'] as Timestamp?)?.toDate() ??
+              DateTime.now();
+          final formattedTime = TimeOfDay.fromDateTime(start).format(context);
+
+          // Show task dialog with alarm
+          await _showTaskDialog(payload, title, description, formattedTime);
+        }
+      } catch (e) {
+        debugPrint('Error handling notification tap: $e');
+      }
     }
   }
 

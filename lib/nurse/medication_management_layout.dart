@@ -5,7 +5,7 @@ import 'medication_completed.dart';
 import 'medication_missed.dart';
 import 'nurse_sidebar.dart';
 
-class MedicationManagementLayout extends StatelessWidget {
+class MedicationManagementLayout extends StatefulWidget {
   final String search;
   final ValueChanged<String> onSearchChanged;
   final VoidCallback toggleSidebar;
@@ -38,6 +38,14 @@ class MedicationManagementLayout extends StatelessWidget {
     required this.tabScrollController,
     required this.scrollToCenter,
   });
+
+  @override
+  State<MedicationManagementLayout> createState() =>
+      _MedicationManagementLayoutState();
+}
+
+class _MedicationManagementLayoutState
+    extends State<MedicationManagementLayout> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -61,7 +69,7 @@ class MedicationManagementLayout extends StatelessWidget {
                   child: Row(
                     children: [
                       GestureDetector(
-                        onTap: toggleSidebar,
+                        onTap: widget.toggleSidebar,
                         child: const Icon(
                           Icons.menu,
                           size: 30,
@@ -86,7 +94,7 @@ class MedicationManagementLayout extends StatelessWidget {
                           color: Color(0xFF00588E),
                         ),
                         iconSize: 30,
-                        onPressed: onBellPressed,
+                        onPressed: widget.onBellPressed,
                       ),
                     ],
                   ),
@@ -95,7 +103,7 @@ class MedicationManagementLayout extends StatelessWidget {
                 // Content
                 Expanded(
                   child: FutureBuilder<List<Map<String, dynamic>>>(
-                    future: fetchHouses(),
+                    future: widget.fetchHouses(),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return const Center(child: CircularProgressIndicator());
@@ -119,7 +127,7 @@ class MedicationManagementLayout extends StatelessWidget {
                                   ),
                                 ),
                                 SingleChildScrollView(
-                                  controller: tabScrollController,
+                                  controller: widget.tabScrollController,
                                   scrollDirection: Axis.horizontal,
                                   physics: const BouncingScrollPhysics(),
                                   child: Transform.translate(
@@ -155,7 +163,7 @@ class MedicationManagementLayout extends StatelessWidget {
                                           onTap: (index) {
                                             WidgetsBinding.instance
                                                 .addPostFrameCallback((_) {
-                                                  scrollToCenter(
+                                                  widget.scrollToCenter(
                                                     index,
                                                     snapshot.data!,
                                                   );
@@ -235,15 +243,15 @@ class MedicationManagementLayout extends StatelessWidget {
                                             children: [
                                               UpcomingMedicationsTab(
                                                 houseId: house['house_id'],
-                                                nurseName: nurseName,
+                                                nurseName: widget.nurseName,
                                               ),
                                               CompletedMedicationsTab(
                                                 houseId: house['house_id'],
-                                                nurseName: nurseName,
+                                                nurseName: widget.nurseName,
                                               ),
                                               MissedMedicationsTab(
                                                 houseId: house['house_id'],
-                                                nurseName: nurseName,
+                                                nurseName: widget.nurseName,
                                               ),
                                             ],
                                           ),
@@ -265,10 +273,10 @@ class MedicationManagementLayout extends StatelessWidget {
           ),
 
           // Sidebar overlay
-          if (isSidebarOpen)
+          if (widget.isSidebarOpen)
             NurseSidebar(
-              isSidebarOpen: isSidebarOpen,
-              toggleSidebar: toggleSidebar,
+              isSidebarOpen: widget.isSidebarOpen,
+              toggleSidebar: widget.toggleSidebar,
               parentContext: context,
             ),
         ],

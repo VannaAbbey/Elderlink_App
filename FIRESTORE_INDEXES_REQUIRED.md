@@ -8,7 +8,21 @@
 # 2. Create each composite index below
 # 3. Or use Firebase CLI: firebase firestore:indexes
 
-## CRITICAL INDEXES FOR VITAL MONITORING PERFORMANCE
+### 🚨 CRITICAL INDEX FOR UPCOMING VITALS QUERY
+
+Collection: vitals
+Fields (in order):
+  - assigned_nurse_id: Ascending
+  - house_id: Ascending
+  - assigned_date: Ascending
+  - shift: Ascending
+  - status: Ascending
+  - recorded_at: Descending
+  - __name__: Descending
+
+**Error Context:** Upcoming vitals tab not filtering completed assignments correctly
+**Query:** vitals where assigned_nurse_id==[nurse_id] and house_id==[house_id] and assigned_date==[date] and shift==[shift] and status==pending order by -recorded_at, -__name__
+**Priority:** CRITICAL - Required for proper tab separation between pending and completed vitals
 
 ### 1. Daily Vital Assignments - Primary Query Index
 Collection: daily_vital_assignments
@@ -76,6 +90,30 @@ firebase deploy --only firestore:indexes
 
 {
   "indexes": [
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "assigned_nurse_id", "order": "ASCENDING"},
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "recorded_at", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "updated_at", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
+      ]
+    },
     {
       "collectionGroup": "daily_vital_assignments",
       "queryScope": "COLLECTION",

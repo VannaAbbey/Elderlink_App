@@ -5,11 +5,13 @@ import 'package:intl/intl.dart';
 class MissedMedicationsTab extends StatefulWidget {
   final String houseId;
   final String? nurseName;
+  final DateTime? selectedDate;
 
   const MissedMedicationsTab({
     super.key,
     required this.houseId,
     required this.nurseName,
+    this.selectedDate,
   });
 
   @override
@@ -18,6 +20,35 @@ class MissedMedicationsTab extends StatefulWidget {
 
 class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  late DateTime _selectedDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDate = widget.selectedDate ?? DateTime.now();
+  }
+
+  void _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(primary: Color(0xFF00588E)),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+    }
+  }
 
   String _getCurrentDay() {
     return DateFormat('EEEE').format(DateTime.now());
@@ -145,179 +176,254 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('medication_activity_logs')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('action', isEqualTo: 'miss_take')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
-          print('Error loading missed medications: ${snapshot.error}');
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-
-        return FutureBuilder<List<Map<String, dynamic>>>(
-          future: _getMissedMedications(),
-          builder: (context, futureSnapshot) {
-            if (futureSnapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            final missedMedications = futureSnapshot.data ?? [];
-            print('Found ${missedMedications.length} missed medications');
-
-            if (missedMedications.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 64,
-                      color: Colors.grey,
-                    ),
-                    SizedBox(height: 16),
-                    Text(
-                      'No missed medications',
-                      style: TextStyle(fontSize: 18, color: Colors.grey),
-                    ),
-                  ],
+    return Column(
+      children: [
+        // Date Picker Row
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Colors.white,
+          child: Row(
+            children: [
+              const Text(
+                'Date: ',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF00588E),
                 ),
-              );
-            }
+              ),
+              Text(
+                DateFormat('MMM dd, yyyy').format(_selectedDate),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(
+                  Icons.calendar_today,
+                  color: Color(0xFF00588E),
+                ),
+                onPressed: () => _selectDate(context),
+              ),
+            ],
+          ),
+        ),
+        // Main Content
+        Expanded(
+          child: StreamBuilder<QuerySnapshot>(
+            stream: _firestore
+                .collection('medication_activity_logs')
+                .where('house_id', isEqualTo: widget.houseId)
+                .where('action', isEqualTo: 'miss_take')
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-            return ListView.builder(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              itemCount: missedMedications.length,
-              itemBuilder: (context, index) {
-                final medication = missedMedications[index];
-                final takeOrdinal = _getOrdinal(
-                  medication['take_number'] as int,
-                );
+              if (snapshot.hasError) {
+                print('Error loading missed medications: ${snapshot.error}');
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
 
-                return Card(
-                  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Elderly Name
-                        Row(
+              return FutureBuilder<List<Map<String, dynamic>>>(
+                future: _getMissedMedications(),
+                builder: (context, futureSnapshot) {
+                  if (futureSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final allMissedMedications = futureSnapshot.data ?? [];
+                  print(
+                    'Found ${allMissedMedications.length} missed medications',
+                  );
+
+                  // Filter by selected date
+                  final missedMedications = allMissedMedications.where((
+                    medication,
+                  ) {
+                    final missedDate = medication['missed_at'] != null
+                        ? (medication['missed_at'] as Timestamp).toDate()
+                        : (medication['created_at'] as Timestamp).toDate();
+                    final isSameDate =
+                        missedDate.year == _selectedDate.year &&
+                        missedDate.month == _selectedDate.month &&
+                        missedDate.day == _selectedDate.day;
+                    return isSameDate;
+                  }).toList();
+
+                  print(
+                    'Filtered missed medications for selected date: ${missedMedications.length}',
+                  );
+
+                  if (missedMedications.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.person, color: Color(0xFF00588E)),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                medication['elderly_name'] ?? 'Unknown',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF00588E),
-                                ),
+                            Icon(
+                              Icons.check_circle_outline,
+                              size: 64,
+                              color: Colors.grey,
+                            ),
+                            SizedBox(height: 16),
+                            Text(
+                              'No missed medications for selected date',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.grey,
                               ),
+                              textAlign: TextAlign.center,
                             ),
                           ],
                         ),
-                        SizedBox(height: 12),
+                      ),
+                    );
+                  }
 
-                        // Medication Name and Dosage
-                        Row(
-                          children: [
-                            Icon(Icons.medication, color: Colors.orange),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${medication['medication_name']} - ${medication['dosage']}',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
+                  return ListView.builder(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    itemCount: missedMedications.length,
+                    itemBuilder: (context, index) {
+                      final medication = missedMedications[index];
+                      final takeOrdinal = _getOrdinal(
+                        medication['take_number'] as int,
+                      );
+
+                      return Card(
+                        margin: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
                         ),
-                        SizedBox(height: 12),
-
-                        // Missed Take Information
-                        Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: Colors.red.withOpacity(0.3),
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                            color: Colors.red.withOpacity(0.1),
-                          ),
-                          child: Row(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.cancel, color: Colors.red, size: 24),
-                              SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '$takeOrdinal Take - MISSED',
+                              // Elderly Name
+                              Row(
+                                children: [
+                                  Icon(Icons.person, color: Color(0xFF00588E)),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      medication['elderly_name'] ?? 'Unknown',
                                       style: TextStyle(
+                                        fontSize: 18,
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: Colors.red,
+                                        color: Color(0xFF00588E),
                                       ),
                                     ),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      'Scheduled Time: ${medication['scheduled_time'] ?? 'Not specified'}',
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+
+                              // Medication Name and Dosage
+                              Row(
+                                children: [
+                                  Icon(Icons.medication, color: Colors.orange),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '${medication['medication_name']} - ${medication['dosage']}',
                                       style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey[700],
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
-                                    if (medication['missed_at'] != null)
-                                      Padding(
-                                        padding: EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          'Missed: ${DateFormat('MMM dd, yyyy HH:mm').format((medication['missed_at'] as Timestamp).toDate())}',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            color: Colors.red[700],
-                                            fontWeight: FontWeight.w500,
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+
+                              // Missed Take Information
+                              Container(
+                                padding: EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: Colors.red.withOpacity(0.3),
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: Colors.red.withOpacity(0.1),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.cancel,
+                                      color: Colors.red,
+                                      size: 24,
+                                    ),
+                                    SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '$takeOrdinal Take - MISSED',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                              color: Colors.red,
+                                            ),
                                           ),
-                                        ),
+                                          SizedBox(height: 4),
+                                          Text(
+                                            'Scheduled Time: ${medication['scheduled_time'] ?? 'Not specified'}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                          if (medication['missed_at'] != null)
+                                            Padding(
+                                              padding: EdgeInsets.only(top: 4),
+                                              child: Text(
+                                                'Missed: ${DateFormat('MMM dd, yyyy HH:mm').format((medication['missed_at'] as Timestamp).toDate())}',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.red[700],
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
+                                    ),
                                   ],
                                 ),
                               ),
+
+                              // Created timestamp (smaller and at bottom)
+                              if (medication['created_at'] != null)
+                                Padding(
+                                  padding: EdgeInsets.only(top: 12),
+                                  child: Text(
+                                    'Created: ${DateFormat('MMM dd, yyyy HH:mm').format((medication['created_at'] as Timestamp).toDate())}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
-
-                        // Created timestamp (smaller and at bottom)
-                        if (medication['created_at'] != null)
-                          Padding(
-                            padding: EdgeInsets.only(top: 12),
-                            child: Text(
-                              'Created: ${DateFormat('MMM dd, yyyy HH:mm').format((medication['created_at'] as Timestamp).toDate())}',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey[500],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

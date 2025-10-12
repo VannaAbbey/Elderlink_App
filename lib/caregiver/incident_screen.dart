@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'incident_report_service.dart';
 import 'caregiver_sidebar.dart';
@@ -38,12 +37,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   Future<void> loadInitialData() async {
     // Load caregiver name
-    caregiverName = await _service._loadCaregiverName();
+    caregiverName = await _service.loadCaregiverName();
 
     // Load elderly assignments
-    final assignments = await _service._loadElderlyAssignments();
+    final assignments = await _service.loadElderlyAssignments();
     isOnDuty = assignments['isOnDuty'] ?? false;
-    elderlyList = List<Map<String, dynamic>>.from(assignments['elderlyList'] ?? []);
+    elderlyList = List<Map<String, dynamic>>.from(
+      assignments['elderlyList'] ?? [],
+    );
 
     setState(() {
       isLoading = false;
@@ -51,7 +52,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
   }
 
   void _checkShiftAndShowDialog(BuildContext context) async {
-    await _service._checkShiftAndShowDialog((message) {
+    await _service.checkShiftAndShowDialog((message) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -61,7 +62,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text("OK"),
-            )
+            ),
           ],
         ),
       );
@@ -70,8 +71,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
     Future<void> handleLogout() async {
       Navigator.pushNamedAndRemoveUntil(
         context,
@@ -128,7 +127,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
                 body: Center(
                   child: SingleChildScrollView(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -160,7 +162,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                 hint: Text(
                                   isLoading
                                       ? 'Loading...'
-                                      : (isOnDuty ? 'Select Elderly' : 'Not your schedule today/shift'),
+                                      : (isOnDuty
+                                            ? 'Select Elderly'
+                                            : 'Not your schedule today/shift'),
                                 ),
                                 isExpanded: true,
                                 icon: const Icon(
@@ -179,7 +183,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                         setState(() {
                                           selectedElderlyId = value;
                                           selectedElderlyName = elderlyList
-                                              .firstWhere((e) => e['id'] == value)['name'];
+                                              .firstWhere(
+                                                (e) => e['id'] == value,
+                                              )['name'];
                                         });
                                       }
                                     : null,
@@ -200,7 +206,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                               enabled: isOnDuty,
                               decoration: const InputDecoration(
                                 hintText: 'Write the incident report here.',
-                                hintStyle: TextStyle(fontStyle: FontStyle.italic),
+                                hintStyle: TextStyle(
+                                  fontStyle: FontStyle.italic,
+                                ),
                                 border: InputBorder.none,
                                 contentPadding: EdgeInsets.all(5),
                               ),
@@ -214,7 +222,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             child: ElevatedButton(
                               onPressed: isOnDuty
                                   ? () async {
-                                      final formattedDate = DateFormat('MM/dd/yy | h:mm a').format(DateTime.now());
+                                      final formattedDate = DateFormat(
+                                        'MM/dd/yy | h:mm a',
+                                      ).format(DateTime.now());
 
                                       showDialog(
                                         context: context,
@@ -225,29 +235,59 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                             builder: (context, setState) {
                                               return Dialog(
                                                 shape: RoundedRectangleBorder(
-                                                  borderRadius: BorderRadius.circular(20),
+                                                  borderRadius:
+                                                      BorderRadius.circular(20),
                                                 ),
-                                                insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+                                                insetPadding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 24,
+                                                      vertical: 40,
+                                                    ),
                                                 child: Container(
                                                   width: 380,
-                                                  padding: const EdgeInsets.fromLTRB(20, 2, 20, 20),
+                                                  padding:
+                                                      const EdgeInsets.fromLTRB(
+                                                        20,
+                                                        2,
+                                                        20,
+                                                        20,
+                                                      ),
                                                   decoration: BoxDecoration(
                                                     color: Colors.white,
-                                                    borderRadius: BorderRadius.circular(20),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          20,
+                                                        ),
                                                   ),
                                                   child: SingleChildScrollView(
                                                     child: Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .stretch,
                                                       children: [
                                                         // Close button
                                                         Row(
-                                                          mainAxisAlignment: MainAxisAlignment.end,
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .end,
                                                           children: [
                                                             IconButton(
-                                                              padding: EdgeInsets.zero,
-                                                              constraints: const BoxConstraints(),
-                                                              icon: const Icon(Icons.close, size: 28, color: Color(0xFF00588e)),
-                                                              onPressed: () => Navigator.of(context).pop(),
+                                                              padding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              constraints:
+                                                                  const BoxConstraints(),
+                                                              icon: const Icon(
+                                                                Icons.close,
+                                                                size: 28,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
+                                                              onPressed: () =>
+                                                                  Navigator.of(
+                                                                    context,
+                                                                  ).pop(),
                                                             ),
                                                           ],
                                                         ),
@@ -257,198 +297,416 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                             'Confirmation Form',
                                                             style: TextStyle(
                                                               fontSize: 24,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: Color(0xFF00588e),
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
                                                             ),
                                                           ),
                                                         ),
-                                                        const SizedBox(height: 12),
+                                                        const SizedBox(
+                                                          height: 12,
+                                                        ),
                                                         const Divider(),
-                                                        const SizedBox(height: 8),
+                                                        const SizedBox(
+                                                          height: 8,
+                                                        ),
                                                         const Text(
                                                           'Please review the following information before submitting:',
-                                                          textAlign: TextAlign.justify,
-                                                          style: TextStyle(fontSize: 15),
+                                                          textAlign:
+                                                              TextAlign.justify,
+                                                          style: TextStyle(
+                                                            fontSize: 15,
+                                                          ),
                                                         ),
-                                                        const SizedBox(height: 12),
+                                                        const SizedBox(
+                                                          height: 12,
+                                                        ),
                                                         // Elderly Name
                                                         Row(
                                                           children: [
-                                                            const Icon(Icons.person, color: Color(0xFF00588e)),
-                                                            const SizedBox(width: 8),
+                                                            const Icon(
+                                                              Icons.person,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
                                                             const Text(
                                                               'Elderly Name:',
-                                                              style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00588e)),
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
                                                             ),
-                                                            const SizedBox(width: 4),
+                                                            const SizedBox(
+                                                              width: 4,
+                                                            ),
                                                             Expanded(
                                                               child: Text(
-                                                                selectedElderlyName ?? '',
-                                                                style: const TextStyle(fontSize: 15),
-                                                                overflow: TextOverflow.visible,
+                                                                selectedElderlyName ??
+                                                                    '',
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          15,
+                                                                    ),
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .visible,
                                                               ),
                                                             ),
                                                           ],
                                                         ),
-                                                        const SizedBox(height: 10),
+                                                        const SizedBox(
+                                                          height: 10,
+                                                        ),
                                                         // Date & Time
                                                         Row(
                                                           children: [
-                                                            const Icon(Icons.access_time, color: Color(0xFF00588e)),
-                                                            const SizedBox(width: 8),
+                                                            const Icon(
+                                                              Icons.access_time,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
                                                             const Text(
                                                               'Date & Time:',
-                                                              style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00588e)),
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
                                                             ),
-                                                            const SizedBox(width: 4),
+                                                            const SizedBox(
+                                                              width: 4,
+                                                            ),
                                                             Expanded(
                                                               child: Text(
                                                                 formattedDate,
-                                                                style: const TextStyle(fontSize: 15),
-                                                                overflow: TextOverflow.visible,
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          15,
+                                                                    ),
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .visible,
                                                               ),
                                                             ),
                                                           ],
                                                         ),
-                                                        const SizedBox(height: 20),
+                                                        const SizedBox(
+                                                          height: 20,
+                                                        ),
                                                         // Incident Description
                                                         Row(
                                                           children: [
-                                                            const Icon(Icons.warning, color: Color(0xFF00588e)),
-                                                            const SizedBox(width: 8),
+                                                            const Icon(
+                                                              Icons.warning,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
                                                             const Text(
                                                               'Incident Description:',
-                                                              style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00588e)),
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
                                                             ),
                                                           ],
                                                         ),
-                                                        const SizedBox(height: 10),
+                                                        const SizedBox(
+                                                          height: 10,
+                                                        ),
                                                         Container(
-                                                          decoration: BoxDecoration(
-                                                            color: const Color(0xFFE6F3FA),
-                                                            boxShadow: [BoxShadow(color: Colors.black12)],
-                                                          ),
-                                                          padding: const EdgeInsets.all(10),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                                color:
+                                                                    const Color(
+                                                                      0xFFE6F3FA,
+                                                                    ),
+                                                                boxShadow: [
+                                                                  BoxShadow(
+                                                                    color: Colors
+                                                                        .black12,
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                          padding:
+                                                              const EdgeInsets.all(
+                                                                10,
+                                                              ),
                                                           child: SizedBox(
                                                             height: 120,
                                                             child: Align(
-                                                              alignment: Alignment.topLeft,
+                                                              alignment:
+                                                                  Alignment
+                                                                      .topLeft,
                                                               child: Text(
-                                                                reportController.text,
+                                                                reportController
+                                                                    .text,
                                                                 style: const TextStyle(
-                                                                  fontStyle: FontStyle.italic,
+                                                                  fontStyle:
+                                                                      FontStyle
+                                                                          .italic,
                                                                   fontSize: 15,
                                                                 ),
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                        const SizedBox(height: 20),
+                                                        const SizedBox(
+                                                          height: 20,
+                                                        ),
                                                         // Caregiver
                                                         Row(
                                                           children: [
-                                                            const Icon(Icons.person, color: Color(0xFF00588e)),
-                                                            const SizedBox(width: 8),
+                                                            const Icon(
+                                                              Icons.person,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
                                                             const Text(
                                                               'Caregiver:',
-                                                              style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00588e)),
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
                                                             ),
-                                                            const SizedBox(width: 4),
+                                                            const SizedBox(
+                                                              width: 4,
+                                                            ),
                                                             Expanded(
                                                               child: Text(
-                                                                caregiverName ?? 'Loading...',
-                                                                style: const TextStyle(fontSize: 15),
-                                                                overflow: TextOverflow.visible,
+                                                                caregiverName ??
+                                                                    'Loading...',
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          15,
+                                                                    ),
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .visible,
                                                               ),
                                                             ),
                                                           ],
                                                         ),
-                                                        const SizedBox(height: 16),
+                                                        const SizedBox(
+                                                          height: 16,
+                                                        ),
                                                         // Acknowledgement Checkbox
                                                         Row(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
                                                           children: [
                                                             Checkbox(
-                                                              value: acknowledged,
-                                                              activeColor: const Color(0xFF00588e),
+                                                              value:
+                                                                  acknowledged,
+                                                              activeColor:
+                                                                  const Color(
+                                                                    0xFF00588e,
+                                                                  ),
                                                               onChanged: (val) {
                                                                 setState(() {
-                                                                  acknowledged = val ?? false;
+                                                                  acknowledged =
+                                                                      val ??
+                                                                      false;
                                                                 });
                                                               },
                                                             ),
                                                             const Expanded(
                                                               child: Padding(
-                                                                padding: EdgeInsets.only(right: 8.0),
+                                                                padding:
+                                                                    EdgeInsets.only(
+                                                                      right:
+                                                                          8.0,
+                                                                    ),
                                                                 child: Text(
                                                                   'I acknowledge that the information provided is accurate and complete. I accept full responsibility and understand that this submission is final and cannot be modified.',
-                                                                  textAlign: TextAlign.justify,
-                                                                  style: TextStyle(fontSize: 13),
+                                                                  textAlign:
+                                                                      TextAlign
+                                                                          .justify,
+                                                                  style:
+                                                                      TextStyle(
+                                                                        fontSize:
+                                                                            13,
+                                                                      ),
                                                                 ),
                                                               ),
                                                             ),
                                                           ],
                                                         ),
-                                                        const SizedBox(height: 20),
+                                                        const SizedBox(
+                                                          height: 20,
+                                                        ),
                                                         // Buttons
                                                         Row(
-                                                          mainAxisAlignment: MainAxisAlignment.end,
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .end,
                                                           children: [
                                                             SizedBox(
                                                               width: 120,
                                                               height: 44,
                                                               child: ElevatedButton(
-                                                                onPressed: (acknowledged && selectedElderlyName != null && selectedElderlyName!.isNotEmpty && reportController.text.trim().isNotEmpty)
+                                                                onPressed:
+                                                                    (acknowledged &&
+                                                                        selectedElderlyName !=
+                                                                            null &&
+                                                                        selectedElderlyName!
+                                                                            .isNotEmpty &&
+                                                                        reportController
+                                                                            .text
+                                                                            .trim()
+                                                                            .isNotEmpty)
                                                                     ? () async {
-                                                                        Navigator.of(ctx).pop();
+                                                                        Navigator.of(
+                                                                          ctx,
+                                                                        ).pop();
                                                                         await _service.submitIncidentReport(
-                                                                          selectedElderlyId: selectedElderlyId!,
-                                                                          reportText: reportController.text,
+                                                                          selectedElderlyId:
+                                                                              selectedElderlyId!,
+                                                                          reportText:
+                                                                              reportController.text,
                                                                         );
-                                                                        reportController.clear();
+                                                                        reportController
+                                                                            .clear();
                                                                         setState(() {
-                                                                          selectedElderlyId = null;
-                                                                          selectedElderlyName = null;
+                                                                          selectedElderlyId =
+                                                                              null;
+                                                                          selectedElderlyName =
+                                                                              null;
                                                                         });
-                                                                        ScaffoldMessenger.of(context).showSnackBar(
-                                                                          const SnackBar(
-                                                                            content: Text("Incident report submitted successfully."),
-                                                                            behavior: SnackBarBehavior.floating,
-                                                                            margin: EdgeInsets.fromLTRB(16, 50, 16, 0),
-                                                                            backgroundColor: Color(0xFF00588e),
-                                                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                                                            duration: Duration(seconds: 3),
+                                                                        ScaffoldMessenger.of(
+                                                                          context,
+                                                                        ).showSnackBar(
+                                                                          SnackBar(
+                                                                            content: const Text(
+                                                                              "Incident report submitted successfully.",
+                                                                            ),
+                                                                            behavior:
+                                                                                SnackBarBehavior.floating,
+                                                                            margin: const EdgeInsets.fromLTRB(
+                                                                              16,
+                                                                              50,
+                                                                              16,
+                                                                              0,
+                                                                            ),
+                                                                            backgroundColor: const Color(
+                                                                              0xFF00588e,
+                                                                            ),
+                                                                            shape: RoundedRectangleBorder(
+                                                                              borderRadius: BorderRadius.circular(
+                                                                                10,
+                                                                              ),
+                                                                            ),
+                                                                            duration: const Duration(
+                                                                              seconds: 3,
+                                                                            ),
                                                                           ),
                                                                         );
                                                                       }
                                                                     : null,
                                                                 style: ElevatedButton.styleFrom(
-                                                                  backgroundColor: (acknowledged && selectedElderlyName != null && selectedElderlyName!.isNotEmpty && reportController.text.trim().isNotEmpty)
-                                                                      ? const Color(0xFF00588e)
-                                                                      : Colors.grey,
+                                                                  backgroundColor:
+                                                                      (acknowledged &&
+                                                                          selectedElderlyName !=
+                                                                              null &&
+                                                                          selectedElderlyName!
+                                                                              .isNotEmpty &&
+                                                                          reportController
+                                                                              .text
+                                                                              .trim()
+                                                                              .isNotEmpty)
+                                                                      ? const Color(
+                                                                          0xFF00588e,
+                                                                        )
+                                                                      : Colors
+                                                                            .grey,
                                                                   shape: RoundedRectangleBorder(
-                                                                    borderRadius: BorderRadius.circular(18),
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          18,
+                                                                        ),
                                                                   ),
                                                                 ),
                                                                 child: const Text(
                                                                   'Submit',
-                                                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                                  style: TextStyle(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .bold,
+                                                                  ),
                                                                 ),
                                                               ),
                                                             ),
-                                                            const SizedBox(width: 12),
+                                                            const SizedBox(
+                                                              width: 12,
+                                                            ),
                                                             SizedBox(
                                                               width: 120,
                                                               height: 44,
                                                               child: ElevatedButton(
-                                                                onPressed: () => Navigator.of(ctx).pop(),
+                                                                onPressed: () =>
+                                                                    Navigator.of(
+                                                                      ctx,
+                                                                    ).pop(),
                                                                 style: ElevatedButton.styleFrom(
-                                                                  backgroundColor: const Color(0xFF900000),
-                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                                                                  backgroundColor:
+                                                                      const Color(
+                                                                        0xFF900000,
+                                                                      ),
+                                                                  shape: RoundedRectangleBorder(
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          18,
+                                                                        ),
+                                                                  ),
                                                                 ),
                                                                 child: const Text(
                                                                   'Cancel',
-                                                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                                  style: TextStyle(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .bold,
+                                                                  ),
                                                                 ),
                                                               ),
                                                             ),
@@ -469,13 +727,21 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                     },
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF00588e),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 elevation: 4,
                               ),
                               child: const Text(
                                 'Forward the Report',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
                               ),
                             ),
                           ),

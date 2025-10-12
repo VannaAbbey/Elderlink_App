@@ -57,6 +57,7 @@ dependencies:
   # << Add Flutter Local Notifications here >>
   firebase_messaging: ^16.0.1
   flutter_local_notifications: ^13.0.0
+  permission_handler: ^11.3.1
   audioplayers: ^6.5.1
   csv: ^6.0.0
   share_plus: ^10.0.2

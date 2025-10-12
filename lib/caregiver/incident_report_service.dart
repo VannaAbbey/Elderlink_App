@@ -6,7 +6,7 @@ class IncidentReportService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // Caregiver Name
-  Future<String?> _loadCaregiverName() async {
+  Future<String?> loadCaregiverName() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return null;
     final doc = await _firestore.collection('users').doc(uid).get();
@@ -15,11 +15,8 @@ class IncidentReportService {
   }
 
   // Load Elderly Assignments
-  Future<Map<String, dynamic>> _loadElderlyAssignments() async {
-    bool isOnDuty = false;
+  Future<Map<String, dynamic>> loadElderlyAssignments() async {
     List<Map<String, dynamic>> elderlyList = [];
-    DateTime shiftStart = DateTime.now();
-    DateTime shiftEnd = DateTime.now();
 
     try {
       final now = DateTime.now();
@@ -144,9 +141,11 @@ class IncidentReportService {
   }
 
   // Check Shift & Schedule Dialog
-  Future<void> _checkShiftAndShowDialog(Function showWarningDialog) async {
+  Future<Map<String, DateTime>> checkShiftAndShowDialog(
+    Function showWarningDialog,
+  ) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) return {};
 
     final now = DateTime.now();
     final currentDay = DateFormat('EEEE').format(now);
@@ -160,7 +159,7 @@ class IncidentReportService {
 
     if (query.docs.isEmpty) {
       showWarningDialog("No active shift found.");
-      return;
+      return {};
     }
 
     final data = query.docs.first.data();
@@ -172,7 +171,7 @@ class IncidentReportService {
 
     if (!daysAssigned.contains(currentDay)) {
       showWarningDialog("You are not scheduled today.");
-      return;
+      return {};
     }
 
     final startParts = (timeRange['start'] as String).split(":");
