@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import 'nurse_sidebar.dart';
+import 'notification_service.dart';
+import '../providers/auth_provider.dart' as my_auth;
+import 'activity_logs.dart';
 
 class IncidentReportScreen extends StatefulWidget {
   const IncidentReportScreen({super.key});
@@ -19,6 +23,9 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
   String? nurseName;
   List<Map<String, dynamic>> emergencies = [];
+
+  String? nurseId;
+  final Map<String, bool> _shownIncidentNotifications = {};
 
   void _pickDate() async {
     if (_mounted) {
@@ -48,6 +55,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
   void initState() {
     super.initState();
     _loadNurseData();
+    _loadNurseId();
     _loadIncidents();
   }
 
@@ -76,6 +84,13 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
       if (_mounted) {
         setState(() => nurseName = null);
       }
+    }
+  }
+
+  Future<void> _loadNurseId() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && _mounted) {
+      setState(() => nurseId = user.uid);
     }
   }
 
@@ -222,6 +237,24 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
       if (_mounted) {
         setState(() => emergencies = loaded);
       }
+
+      // Send notifications for new incidents assigned to this nurse
+      if (nurseId != null) {
+        for (final em in loaded) {
+          final nurseIds = List<String>.from(em['user_id_nu'] ?? []);
+          if (nurseIds.contains(nurseId) &&
+              !_shownIncidentNotifications.containsKey(em['incident_id'])) {
+            NotificationService.scheduleTaskNotification(
+              id: em['incident_id'].hashCode,
+              title: 'Incident Report',
+              body:
+                  'Incident: ${em['incident_type']} - ${em['additional_info']}',
+              dateTime: DateTime.now().add(const Duration(seconds: 1)),
+            );
+            _shownIncidentNotifications[em['incident_id']] = true;
+          }
+        }
+      }
     } catch (e) {
       print("❌ Error loading incidents: $e");
       if (_mounted) {
@@ -266,10 +299,24 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                           color: Color(0xFF00588E),
                         ),
                       ),
-                      const Icon(
-                        Icons.notifications,
-                        size: 30,
-                        color: Color(0xFF00588E),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ActivityLogsScreen(
+                                houseId: 'H001', // Default house
+                                nurseName:
+                                    '${Provider.of<my_auth.AuthProvider>(context, listen: false).userFirstName} ${Provider.of<my_auth.AuthProvider>(context, listen: false).userLastName}',
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Icon(
+                          Icons.notifications,
+                          size: 30,
+                          color: Color(0xFF00588E),
+                        ),
                       ),
                     ],
                   ),
@@ -351,17 +398,13 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                                           width: 50,
                                           height: 50,
                                           decoration: BoxDecoration(
-                                            color: em['verified']
-                                                ? Colors.green
-                                                : Colors.orange,
+                                            color: Colors.green,
                                             borderRadius: BorderRadius.circular(
                                               8,
                                             ),
                                           ),
-                                          child: Icon(
-                                            em['verified']
-                                                ? Icons.verified
-                                                : Icons.report_problem,
+                                          child: const Icon(
+                                            Icons.report,
                                             color: Colors.white,
                                             size: 28,
                                           ),
@@ -370,12 +413,10 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                                         Expanded(
                                           child: Text(
                                             em['house'],
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                               fontWeight: FontWeight.bold,
                                               fontSize: 20,
-                                              color: em['verified']
-                                                  ? Colors.green
-                                                  : Colors.orange,
+                                              color: Colors.green,
                                             ),
                                           ),
                                         ),
@@ -393,18 +434,6 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                                                   81,
                                                   81,
                                                 ),
-                                              ),
-                                            ),
-                                            Text(
-                                              em['verified']
-                                                  ? 'Verified'
-                                                  : 'Pending',
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                                color: em['verified']
-                                                    ? Colors.green
-                                                    : Colors.orange,
                                               ),
                                             ),
                                           ],

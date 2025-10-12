@@ -1080,7 +1080,11 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
                                                                           final nurseQuery = await _firestore
                                                                               .collection(
-                                                                                'nurse_shift_assign',
+                                                                                'house_shift_assignments',
+                                                                              )
+                                                                              .where(
+                                                                                'user_type',
+                                                                                isEqualTo: 'nurse',
                                                                               )
                                                                               .where(
                                                                                 'is_current',

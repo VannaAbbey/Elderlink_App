@@ -745,8 +745,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
       // Check shift assignment
       final shiftQuery = await _firestore
-          .collection('nurse_shift_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
           .where('shift', isEqualTo: currentShift)
           .where('days_assigned', arrayContains: currentDay)
@@ -759,10 +760,11 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
       // Get nurse's assigned elderly for current day and shift
       final nurseElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();
@@ -1219,63 +1221,75 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
       // Get all elderly assigned to this nurse for current day/shift
       final assignedElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('${currentDay.toLowerCase()}_$shift', isEqualTo: true)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('house_id', arrayContains: widget.houseId)
+          .where('day', isEqualTo: currentDay)
+          .where('shift', isEqualTo: shift)
           .get();
 
       for (var assignDoc in assignedElderlyQuery.docs) {
-        final elderlyId = assignDoc['elderly_id'];
-        final elderlyName = assignDoc['elderly_name'];
+        final elderlyIds = List<String>.from(assignDoc['elderly_ids'] ?? []);
+        for (final elderlyId in elderlyIds) {
+          // Fetch elderly name
+          final elderlyDoc = await _firestore
+              .collection('elderly')
+              .doc(elderlyId)
+              .get();
+          final elderlyName = elderlyDoc.exists
+              ? '${elderlyDoc['elderly_fname'] ?? ''} ${elderlyDoc['elderly_lname'] ?? ''}'
+                    .trim()
+              : 'Unknown';
 
-        print('📋 Checking assignments for: $elderlyName');
+          print('📋 Checking assignments for: $elderlyName');
 
-        // Check if vital assignment already exists
-        final existingVitalQuery = await _firestore
-            .collection('vitals')
-            .where('elderly_id', isEqualTo: elderlyId)
-            .where('assigned_nurse_id', isEqualTo: nurseId)
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('assigned_date', isEqualTo: today)
-            .where('shift', isEqualTo: shift)
-            .limit(1)
-            .get();
+          // Check if vital assignment already exists
+          final existingVitalQuery = await _firestore
+              .collection('vitals')
+              .where('elderly_id', isEqualTo: elderlyId)
+              .where('assigned_nurse_id', isEqualTo: nurseId)
+              .where('house_id', isEqualTo: widget.houseId)
+              .where('assigned_date', isEqualTo: today)
+              .where('shift', isEqualTo: shift)
+              .limit(1)
+              .get();
 
-        // If no vital assignment exists, create one
-        if (existingVitalQuery.docs.isEmpty) {
-          print('➕ Creating vital assignment for: $elderlyName');
+          // If no vital assignment exists, create one
+          if (existingVitalQuery.docs.isEmpty) {
+            print('➕ Creating vital assignment for: $elderlyName');
 
-          await _firestore.collection('vitals').add({
-            // 🔧 ASSIGNMENT FIELDS (required)
-            'elderly_id': elderlyId,
-            'elderly_name': elderlyName,
-            'assigned_nurse_id': nurseId,
-            'assigned_nurse_name': widget.nurseName ?? 'Unknown',
-            'house_id': widget.houseId,
-            'shift': shift,
-            'assigned_date': today,
-            'status': 'pending',
-            'created_at': FieldValue.serverTimestamp(),
+            await _firestore.collection('vitals').add({
+              // 🔧 ASSIGNMENT FIELDS (required)
+              'elderly_id': elderlyId,
+              'elderly_name': elderlyName,
+              'assigned_nurse_id': nurseId,
+              'assigned_nurse_name': widget.nurseName ?? 'Unknown',
+              'house_id': widget.houseId,
+              'shift': shift,
+              'assigned_date': today,
+              'status': 'pending',
+              'created_at': FieldValue.serverTimestamp(),
 
-            // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
-            'blood_pressure': null,
-            'pulse_rate': null,
-            'oxygen_saturation': null,
-            'temperature': null,
-            'respiratory_rate': null,
-            'vital_remarks': null,
+              // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
+              'blood_pressure': null,
+              'pulse_rate': null,
+              'oxygen_saturation': null,
+              'temperature': null,
+              'respiratory_rate': null,
+              'vital_remarks': null,
 
-            // ✅ Single completion timestamp (null until completed)
-            'completed_at': null,
+              // ✅ Single completion timestamp (null until completed)
+              'completed_at': null,
 
-            // ✅ Minimal tracking (null until updated)
-            'updated_by_nurse_id': null,
-            'updated_by_nurse_name': null,
-          });
-          print('✅ Created vital assignment for: $elderlyName');
-        } else {
-          print('ℹ️ Vital assignment already exists for: $elderlyName');
+              // ✅ Minimal tracking (null until updated)
+              'updated_by_nurse_id': null,
+              'updated_by_nurse_name': null,
+            });
+            print('✅ Created vital assignment for: $elderlyName');
+          } else {
+            print('ℹ️ Vital assignment already exists for: $elderlyName');
+          }
         }
       }
 

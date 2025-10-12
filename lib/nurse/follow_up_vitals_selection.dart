@@ -110,7 +110,7 @@ class _FollowUpVitalsSelectionScreenState
 
       print('📋 Found ${allVitalsQuery.docs.length} total vitals for today');
 
-      // 🔧 FIXED: Get ALL elderly assigned to current nurse from nurse_elderly_assign collection
+      // 🔧 FIXED: Get ALL elderly assigned to current nurse from elderly_assignments collection
       // This gives us ALL elderly that should be assigned to this nurse for ANY shift today
       final nurseAssignedElderlyIds = <String>{};
 
@@ -120,10 +120,11 @@ class _FollowUpVitalsSelectionScreenState
 
       for (final shift in allShifts) {
         final nurseElderlyQuery = await _firestore
-            .collection('nurse_elderly_assign')
-            .where('nurse_id', isEqualTo: nurseId)
+            .collection('elderly_assignments')
+            .where('user_id', isEqualTo: nurseId)
+            .where('user_type', isEqualTo: 'nurse')
             .where('is_current', isEqualTo: true)
-            .where('house_ids', arrayContains: widget.houseId)
+            .where('house_id', arrayContains: widget.houseId)
             .where('shift', isEqualTo: shift)
             .where('day', isEqualTo: currentDay)
             .get();

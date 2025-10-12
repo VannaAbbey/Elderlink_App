@@ -1080,7 +1080,11 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
                                                                           final nurseQuery = await _firestore
                                                                               .collection(
-                                                                                'nurse_shift_assign',
+                                                                                'house_shift_assignments',
+                                                                              )
+                                                                              .where(
+                                                                                'user_type',
+                                                                                isEqualTo: 'nurse',
                                                                               )
                                                                               .where(
                                                                                 'is_current',
@@ -1175,7 +1179,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               'elderly_id': selectedElderlyId,
                                                                               'house_id': houseId,
                                                                               'incident_date_time': formattedDate,
-                                                                              'incident_desc': reportController.text.trim(),
+                                                                              'incident_type': 'Incident Report',
+                                                                              'additional_info': reportController.text.trim(),
                                                                               'incident_id': incidentDocRef.id,
                                                                               'incident_verify': true,
                                                                               'user_id_cg': caregiverId,

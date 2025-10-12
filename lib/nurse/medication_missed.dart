@@ -54,10 +54,11 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
 
       // Get nurse's assigned elderly for current day (ALL shifts)
       final nurseElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('day', isEqualTo: currentDay)
           .get();
 

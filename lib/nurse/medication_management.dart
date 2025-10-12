@@ -173,8 +173,9 @@ class _MedicationManagementScreenState
 
     // 🔹 Step 3: Get current shift assignment
     final shiftSnap = await _firestore
-        .collection('nurse_shift_assign')
-        .where('nurse_id', isEqualTo: nurseId)
+        .collection('house_shift_assignments')
+        .where('user_id', isEqualTo: nurseId)
+        .where('user_type', isEqualTo: 'nurse')
         .where('is_current', isEqualTo: true)
         .where('days_assigned', arrayContains: today)
         .get();
@@ -186,8 +187,9 @@ class _MedicationManagementScreenState
 
     // 🔹 Step 4: Get elderly assignments for this nurse + today + shift
     final assignSnap = await _firestore
-        .collection('nurse_elderly_assign')
-        .where('nurse_id', isEqualTo: nurseId)
+        .collection('elderly_assignments')
+        .where('user_id', isEqualTo: nurseId)
+        .where('user_type', isEqualTo: 'nurse')
         .where('is_current', isEqualTo: true)
         .where('day', isEqualTo: today)
         .where('shift', isEqualTo: currentShift)

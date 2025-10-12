@@ -76,6 +76,7 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
           'elderly_dietNotes': data['elderly_dietNotes'] ?? '',
           'elderly_mobilityStatus': data['elderly_mobilityStatus'] ?? '',
           'elderly_sex': data['elderly_sex'] ?? '',
+          'elderly_causeOfDeath': data['elderly_causeOfDeath'] ?? '',
         };
       }).toList();
 
@@ -199,18 +200,20 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                   const SizedBox(height: 20),
 
                   Container(
-  height: 45,
-  decoration: BoxDecoration(
-    color: const Color(0xFFD8F4FF), // light blue background for full bar
-    borderRadius: BorderRadius.circular(30),
-  ),
-  child: Row(
-    children: [
-      _buildSegmentedButton("Alive", isLeft: true),
-      _buildSegmentedButton("Deceased", isLeft: false),
-    ],
-  ),
-),
+                    height: 45,
+                    decoration: BoxDecoration(
+                      color: const Color(
+                        0xFFD8F4FF,
+                      ), // light blue background for full bar
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Row(
+                      children: [
+                        _buildSegmentedButton("Alive", isLeft: true),
+                        _buildSegmentedButton("Deceased", isLeft: false),
+                      ],
+                    ),
+                  ),
 
                   const SizedBox(height: 20),
 
@@ -413,8 +416,13 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
-                                          (elderly['elderly_condition'] ?? '')
-                                              .toString(),
+                                          selectedStatus == "Deceased"
+                                              ? (elderly['elderly_causeOfDeath'] ??
+                                                        '')
+                                                    .toString()
+                                              : (elderly['elderly_condition'] ??
+                                                        '')
+                                                    .toString(),
                                           textAlign: TextAlign.center,
                                           maxLines: 2,
                                           overflow: TextOverflow.ellipsis,
@@ -441,44 +449,45 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
   }
 
   Widget _buildSegmentedButton(String label, {required bool isLeft}) {
-  final bool isSelected = selectedStatus == label;
+    final bool isSelected = selectedStatus == label;
 
-  return Expanded(
-    child: GestureDetector(
-      onTap: () {
-        setState(() {
-          selectedStatus = label;
-        });
-        fetchElderly();
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        margin: const EdgeInsets.all(4), // spacing inside outer capsule
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF00588E) : Colors.transparent,
-          borderRadius: BorderRadius.circular(30), // ✅ fully rounded highlight
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : [],
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: TextStyle(
-            fontFamily: "Poppins",
-            fontWeight: FontWeight.bold,
-            color: isSelected ? Colors.white : Colors.black87,
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            selectedStatus = label;
+          });
+          fetchElderly();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          margin: const EdgeInsets.all(4), // spacing inside outer capsule
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFF00588E) : Colors.transparent,
+            borderRadius: BorderRadius.circular(
+              30,
+            ), // ✅ fully rounded highlight
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : [],
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: "Poppins",
+              fontWeight: FontWeight.bold,
+              color: isSelected ? Colors.white : Colors.black87,
+            ),
           ),
         ),
       ),
-    ),
-  );
-}
-
+    );
+  }
 }

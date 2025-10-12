@@ -287,8 +287,9 @@ class _OptimizedUpcomingVitalsTabState
 
       // Check if nurse is assigned to work this shift
       final shiftQuery = await _firestore
-          .collection('nurse_shift_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
           .where('shift', isEqualTo: currentShift)
           .where('days_assigned', arrayContains: currentDay)
@@ -302,10 +303,11 @@ class _OptimizedUpcomingVitalsTabState
 
       // Get nurse's elderly assignments
       final elderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .limit(1)

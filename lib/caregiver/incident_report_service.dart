@@ -47,11 +47,17 @@ class IncidentReportService {
       final startDate = (houseData['start_date'] as Timestamp).toDate();
       final endDate = (houseData['end_date'] as Timestamp).toDate();
 
-      if (now.isBefore(startDate) || now.isAfter(endDate)) return {'isOnDuty': false, 'elderlyList': []};
-      if (!daysAssigned.contains(dayName)) return {'isOnDuty': false, 'elderlyList': []};
+      if (now.isBefore(startDate) || now.isAfter(endDate)) {
+        return {'isOnDuty': false, 'elderlyList': []};
+      }
+      if (!daysAssigned.contains(dayName)) {
+        return {'isOnDuty': false, 'elderlyList': []};
+      }
 
       // Time range
-      final timeRange = Map<String, dynamic>.from(houseData['time_range'] ?? {});
+      final timeRange = Map<String, dynamic>.from(
+        houseData['time_range'] ?? {},
+      );
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
       if (timeRange.isNotEmpty) {
         final startParts = (timeRange['start'] as String).split(':');
@@ -62,18 +68,34 @@ class IncidentReportService {
         endMinute = int.parse(endParts[1]);
       }
 
-      DateTime calculatedShiftStart = DateTime(now.year, now.month, now.day, startHour, startMinute);
-      DateTime calculatedShiftEnd = DateTime(now.year, now.month, now.day, endHour, endMinute);
+      DateTime calculatedShiftStart = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        startHour,
+        startMinute,
+      );
+      DateTime calculatedShiftEnd = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        endHour,
+        endMinute,
+      );
 
       if (calculatedShiftEnd.isBefore(calculatedShiftStart)) {
         if (now.isBefore(calculatedShiftEnd)) {
-          calculatedShiftStart = calculatedShiftStart.subtract(const Duration(days: 1));
+          calculatedShiftStart = calculatedShiftStart.subtract(
+            const Duration(days: 1),
+          );
         } else {
           calculatedShiftEnd = calculatedShiftEnd.add(const Duration(days: 1));
         }
       }
 
-      final isWithinShift = !(now.isBefore(calculatedShiftStart) || now.isAfter(calculatedShiftEnd));
+      final isWithinShift =
+          !(now.isBefore(calculatedShiftStart) ||
+              now.isAfter(calculatedShiftEnd));
       if (!isWithinShift) return {'isOnDuty': false, 'elderlyList': []};
 
       // Elderly assignments
@@ -84,21 +106,30 @@ class IncidentReportService {
           .get();
 
       if (assignSnapshot.docs.isNotEmpty) {
-        final elderlyIds = assignSnapshot.docs.map((doc) => doc.data()['elderly_id'] as String).toSet().toList();
+        final elderlyIds = assignSnapshot.docs
+            .map((doc) => doc.data()['elderly_id'] as String)
+            .toSet()
+            .toList();
         for (int i = 0; i < elderlyIds.length; i += 30) {
           final chunk = elderlyIds.skip(i).take(30).toList();
-          final chunkSnapshot = await _firestore.collection('elderly').where(FieldPath.documentId, whereIn: chunk).get();
+          final chunkSnapshot = await _firestore
+              .collection('elderly')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .get();
           for (var doc in chunkSnapshot.docs) {
             final data = doc.data();
             if (data['house_id'] == houseId) {
               elderlyList.add({
                 'id': doc.id,
-                'name': '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
+                'name':
+                    '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
               });
             }
           }
         }
-        elderlyList.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+        elderlyList.sort(
+          (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+        );
       }
 
       return {
@@ -135,7 +166,9 @@ class IncidentReportService {
     final data = query.docs.first.data();
     final List daysAssigned = data['days_assigned'] ?? [];
     final String shift = data['shift'] ?? "";
-    final Map<String, dynamic> timeRange = Map<String, dynamic>.from(data['time_range']);
+    final Map<String, dynamic> timeRange = Map<String, dynamic>.from(
+      data['time_range'],
+    );
 
     if (!daysAssigned.contains(currentDay)) {
       showWarningDialog("You are not scheduled today.");
@@ -145,10 +178,24 @@ class IncidentReportService {
     final startParts = (timeRange['start'] as String).split(":");
     final endParts = (timeRange['end'] as String).split(":");
 
-    DateTime start = DateTime(now.year, now.month, now.day, int.parse(startParts[0]), int.parse(startParts[1]));
-    DateTime end = DateTime(now.year, now.month, now.day, int.parse(endParts[0]), int.parse(endParts[1]));
+    DateTime start = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      int.parse(startParts[0]),
+      int.parse(startParts[1]),
+    );
+    DateTime end = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      int.parse(endParts[0]),
+      int.parse(endParts[1]),
+    );
 
-    if (shift == "3rd" && end.isBefore(start)) end = end.add(const Duration(days: 1));
+    if (shift == "3rd" && end.isBefore(start)) {
+      end = end.add(const Duration(days: 1));
+    }
 
     // Return shift times for UI usage
     return {'shiftStart': start, 'shiftEnd': end};
@@ -164,14 +211,21 @@ class IncidentReportService {
 
     final caregiverId = user.uid;
 
-    final elderlyDoc = await _firestore.collection('elderly').doc(selectedElderlyId).get();
+    final elderlyDoc = await _firestore
+        .collection('elderly')
+        .doc(selectedElderlyId)
+        .get();
     final houseId = elderlyDoc['house_id'] ?? '';
 
     // Nurses scheduled today
     final todayDay = DateFormat('EEEE').format(DateTime.now());
     final nowTime = DateFormat('HH:mm').format(DateTime.now());
 
-    final nurseQuery = await _firestore.collection('nurse_shift_assign').where('is_current', isEqualTo: true).get();
+    final nurseQuery = await _firestore
+        .collection('house_shift_assignments')
+        .where('user_type', isEqualTo: 'nurse')
+        .where('is_current', isEqualTo: true)
+        .get();
 
     List<String> nurseIdsToSend = [];
     for (var doc in nurseQuery.docs) {
@@ -183,7 +237,9 @@ class IncidentReportService {
         final start = DateFormat('HH:mm').parse(startTime);
         final end = DateFormat('HH:mm').parse(endTime);
         final nowParsed = DateFormat('HH:mm').parse(nowTime);
-        bool inShift = end.isBefore(start) ? nowParsed.isAfter(start) || nowParsed.isBefore(end) : nowParsed.isAfter(start) && nowParsed.isBefore(end);
+        bool inShift = end.isBefore(start)
+            ? nowParsed.isAfter(start) || nowParsed.isBefore(end)
+            : nowParsed.isAfter(start) && nowParsed.isBefore(end);
 
         if (inShift) nurseIdsToSend.add(doc['nurse_id']);
       }

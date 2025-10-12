@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'nurse_sidebar.dart';
 import 'package:intl/intl.dart';
+import '../providers/auth_provider.dart' as my_auth;
+import 'activity_logs.dart';
 
 class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
@@ -102,9 +105,20 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           color: Color(0xFF00588E),
                         ),
                       ),
-                      IconButton(
-                        onPressed: _pickDate,
-                        icon: const Icon(
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ActivityLogsScreen(
+                                houseId: 'H001', // Default house
+                                nurseName:
+                                    '${Provider.of<my_auth.AuthProvider>(context, listen: false).userFirstName} ${Provider.of<my_auth.AuthProvider>(context, listen: false).userLastName}',
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Icon(
                           Icons.notifications,
                           color: Color(0xFF00588E),
                           size: 30,
@@ -131,7 +145,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                         icon: const Icon(
                           Icons.calendar_today,
                           color: Color(0xFF00588E),
-                          size: 24,
+                          size: 30,
                         ),
                       ),
                     ],

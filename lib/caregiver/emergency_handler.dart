@@ -86,7 +86,8 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   if (result != null) {
     // ✅ Hanapin nurses na naka-duty today at this shift
     final nurseQuery = await FirebaseFirestore.instance
-        .collection("nurse_shift_assign")
+        .collection("house_shift_assignments")
+        .where("user_type", isEqualTo: "nurse")
         .where("is_current", isEqualTo: true)
         .get();
 

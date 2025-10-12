@@ -106,8 +106,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final currentShift = _getCurrentShift();
 
       final shiftQuery = await _firestore
-          .collection('nurse_shift_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
           .where('shift', isEqualTo: currentShift)
           .get();
@@ -269,8 +270,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       print('Looking for - Shift: $currentShift, Day: $currentDay');
 
       final shiftQuery = await _firestore
-          .collection('nurse_shift_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
           .where('shift', isEqualTo: currentShift)
           .where('days_assigned', arrayContains: currentDay)
@@ -278,7 +280,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       if (shiftQuery.docs.isEmpty) {
         print('Nurse is not assigned to this shift on this day');
-        print('Query returned no results for nurse_shift_assign');
+        print('Query returned no results for house_shift_assignments');
         setState(() {
           _elderlyList = [];
           _isLoading = false;
@@ -295,10 +297,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Get nurse-elderly assignments for the current house and specific nurse
       final nurseElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();
@@ -409,20 +412,27 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   Future<void> _loadUpcomingMedications({bool forceRefresh = false}) async {
     final currentDay = _getCurrentDay();
     final currentShift = _getCurrentShift();
-    final cacheKey = '${widget.houseId}|${widget.nurseName ?? ''}|$currentShift|$currentDay';
+    final cacheKey =
+        '${widget.houseId}|${widget.nurseName ?? ''}|$currentShift|$currentDay';
 
     try {
       // If cached and not forced to refresh, return cached data immediately
       final cached = _medsCache[cacheKey];
       final cacheTime = _medsCacheTime[cacheKey];
-      if (!forceRefresh && cached != null && cacheTime != null && DateTime.now().difference(cacheTime) < _cacheDuration) {
+      if (!forceRefresh &&
+          cached != null &&
+          cacheTime != null &&
+          DateTime.now().difference(cacheTime) < _cacheDuration) {
         setState(() {
           _upcomingMedications = List<Map<String, dynamic>>.from(cached);
           _isLoading = false;
         });
 
         // Schedule a background refresh after cache TTL to keep things fresh
-        Future.delayed(_cacheDuration, () => _loadUpcomingMedications(forceRefresh: true));
+        Future.delayed(
+          _cacheDuration,
+          () => _loadUpcomingMedications(forceRefresh: true),
+        );
         return;
       }
 
@@ -441,10 +451,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Fetch nurse assignment and medications in parallel to reduce latency.
       final nurseAssignFuture = _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();
@@ -469,7 +480,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         return;
       }
 
-      final assignData = nurseElderlyQuery.docs.first.data() as Map<String, dynamic>?;
+      final assignData =
+          nurseElderlyQuery.docs.first.data() as Map<String, dynamic>?;
       final assignedElderlyIds = List<String>.from(
         assignData?['elderly_ids'] ?? [],
       );
@@ -497,7 +509,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final medicationShift = data['shift'] as String?;
         final workingDays = data['working_days'] as List?;
 
-        if (medicationShift == currentShift && workingDays != null && workingDays.contains(currentDay)) {
+        if (medicationShift == currentShift &&
+            workingDays != null &&
+            workingDays.contains(currentDay)) {
           medsToInclude.add({'id': doc.id, ...data});
           elderlyIdsNeeded.add(elderlyId);
         }
@@ -507,7 +521,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final Map<String, String> elderlyNames = {};
       final elderlyIdList = elderlyIdsNeeded.toList();
       for (var i = 0; i < elderlyIdList.length; i += 30) {
-        final end = (i + 30 < elderlyIdList.length) ? i + 30 : elderlyIdList.length;
+        final end = (i + 30 < elderlyIdList.length)
+            ? i + 30
+            : elderlyIdList.length;
         final chunk = elderlyIdList.sublist(i, end);
         final elderlyQuery = await _firestore
             .collection('elderly')
@@ -516,7 +532,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         for (final ed in elderlyQuery.docs) {
           final edata = ed.data();
-          final name = '${edata['elderly_fname'] ?? ''} ${edata['elderly_lname'] ?? ''}'.trim();
+          final name =
+              '${edata['elderly_fname'] ?? ''} ${edata['elderly_lname'] ?? ''}'
+                  .trim();
           elderlyNames[ed.id] = name.isNotEmpty ? name : 'Unknown';
         }
       }
@@ -944,10 +962,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Get nurse's assigned elderly for current day and shift
       final nurseElderlyQuery = await _firestore
-          .collection('nurse_elderly_assign')
-          .where('nurse_id', isEqualTo: nurseId)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('house_ids', arrayContains: widget.houseId)
+          .where('house_id', arrayContains: widget.houseId)
           .where('shift', isEqualTo: currentShift)
           .where('day', isEqualTo: currentDay)
           .get();

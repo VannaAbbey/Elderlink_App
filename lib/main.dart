@@ -602,7 +602,13 @@ class MyApp extends StatelessWidget {
                 }
               }
 
-              final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
+              final nurseData = data['user_id_nu'];
+              List<String> nurseArray = [];
+              if (nurseData is List) {
+                nurseArray = List<String>.from(nurseData);
+              } else if (nurseData is String) {
+                nurseArray = [nurseData];
+              }
               if (currentUserId != null && nurseArray.contains(currentUserId)) {
                 final formattedTime = DateFormat('h:mm a').format(timestampRaw);
                 await IncidentService.showIncidentNotification(
