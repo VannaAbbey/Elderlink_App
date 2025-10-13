@@ -3252,11 +3252,42 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     showDialog(
                                                       context: ctx,
                                                       builder: (BuildContext context) => AlertDialog(
-                                                        title: const Text('No Assigned Days'),
-                                                        content: Text('No assigned days found for selected elderly.\n\nDebugging info:\nElderly ID: $selectedElderly\nCaregiver ID: $caregiverId\n\nPlease check with your administrator about your schedule assignments.'),
+                                                        shape: RoundedRectangleBorder(
+                                                          borderRadius: BorderRadius.circular(16),
+                                                        ),
+                                                        title: const Row(
+                                                          children: [
+                                                            Icon(
+                                                              Icons.warning_amber_rounded,
+                                                              color: Colors.orange,
+                                                              size: 28,
+                                                            ),
+                                                            SizedBox(width: 8),
+                                                            Flexible(
+                                                              child: Text(
+                                                                'No Assigned Days',
+                                                                style: TextStyle(
+                                                                  color: Colors.orange,
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        content: const Text(
+                                                          'You are not currently assigned to this elderly on any days. Please check with your administrator about your schedule assignments.',
+                                                          style: TextStyle(fontSize: 16),
+                                                        ),
                                                         actions: [
                                                           TextButton(
                                                             onPressed: () => Navigator.of(context).pop(),
+                                                            style: TextButton.styleFrom(
+                                                              backgroundColor: Colors.orange,
+                                                              foregroundColor: Colors.white,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                            ),
                                                             child: const Text('OK'),
                                                           ),
                                                         ],
@@ -3651,26 +3682,93 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     showDialog(
                                                       context: ctx,
                                                       builder: (BuildContext context) => AlertDialog(
-                                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                                        title: Row(
-                                                          children: const [
-                                                            Icon(Icons.warning_amber, color: Colors.orange),
+                                                        shape: RoundedRectangleBorder(
+                                                          borderRadius: BorderRadius.circular(16),
+                                                        ),
+                                                        title: const Row(
+                                                          children: [
+                                                            Icon(
+                                                              Icons.warning_amber_rounded,
+                                                              color: Colors.orange,
+                                                              size: 28,
+                                                            ),
                                                             SizedBox(width: 8),
-                                                            Text('No Assigned Days'),
+                                                            Flexible(
+                                                              child: Text(
+                                                                'No Assigned Days',
+                                                                style: TextStyle(
+                                                                  color: Colors.orange,
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
+                                                              ),
+                                                            ),
                                                           ],
                                                         ),
-                                                        content: Text(
-                                                          'Debug Info:\n'
-                                                          'Selected Elderly: $selectedElderly\n'
-                                                          'Assigned Days Found: $elderlyAssignedDays\n'
-                                                          'AssignedElderly Count: ${assignedElderly.length}\n\n'
-                                                          'You are not currently assigned to this elderly on any days. '
-                                                          'Please check with your administrator about your schedule assignments.',
+                                                        content: const Text(
+                                                          'You are not currently assigned to this elderly on any days. Please check with your administrator about your schedule assignments.',
+                                                          style: TextStyle(fontSize: 16),
                                                         ),
                                                         actions: [
                                                           TextButton(
                                                             onPressed: () => Navigator.of(context).pop(),
-                                                            child: const Text('OK', style: TextStyle(color: Color(0xFF22688E))),
+                                                            style: TextButton.styleFrom(
+                                                              backgroundColor: Colors.orange,
+                                                              foregroundColor: Colors.white,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                            ),
+                                                            child: const Text('OK'),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    return;
+                                                  }
+                                                  
+                                                  // Check if temporary assignment and show warning instead of date picker
+                                                  if (isTemporaryAssignment) {
+                                                    showDialog(
+                                                      context: ctx,
+                                                      builder: (BuildContext dialogContext) => AlertDialog(
+                                                        shape: RoundedRectangleBorder(
+                                                          borderRadius: BorderRadius.circular(16),
+                                                        ),
+                                                        title: const Row(
+                                                          children: [
+                                                            Icon(
+                                                              Icons.info_outline,
+                                                              color: Colors.orange,
+                                                              size: 28,
+                                                            ),
+                                                            SizedBox(width: 8),
+                                                            Flexible(
+                                                              child: Text(
+                                                                'Temporary Assignment',
+                                                                style: TextStyle(
+                                                                  color: Colors.orange,
+                                                                  fontWeight: FontWeight.bold,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        content: const Text(
+                                                          'This elderly is only temporarily assigned for the day and cannot have a different task start date.\n\n'
+                                                          'The task date is automatically set to TODAY only.',
+                                                          style: TextStyle(fontSize: 16),
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.of(dialogContext).pop(),
+                                                            style: TextButton.styleFrom(
+                                                              backgroundColor: Colors.orange,
+                                                              foregroundColor: Colors.white,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                            ),
+                                                            child: const Text('OK'),
                                                           ),
                                                         ],
                                                       ),
