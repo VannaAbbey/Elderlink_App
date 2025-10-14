@@ -158,7 +158,39 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         return;
       }
 
-      // Always proceed to get/create assignments and fetch vitals
+      // Fast-path: check if there is at least one pending vital in this house/shift
+      final today = _getTodayDateString();
+      final currentShift = _getCurrentShift();
+      final quickCheck = await _firestore
+          .collection('vitals')
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('shift', isEqualTo: currentShift)
+          .where('status', isEqualTo: 'pending')
+          .limit(1)
+          .get();
+
+      if (quickCheck.docs.isEmpty) {
+        // No assignments yet - create them and get the vitals
+        print('🔄 No assignments found - creating and fetching...');
+        final vitals = await _ensureAssignmentsExistInBackground(
+          nurseId,
+          currentShift,
+          _getCurrentDay(),
+          today,
+        );
+
+        _houseVitalsCache[cacheKey] = vitals;
+        _houseVitalsCacheTime[cacheKey] = DateTime.now();
+        if (mounted) {
+          setState(() {
+            _upcomingVitals = vitals;
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
       final vitals = await _getUpcomingVitals();
       _houseVitalsCache[cacheKey] = vitals;
       _houseVitalsCacheTime[cacheKey] = DateTime.now();
