@@ -28,6 +28,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (!authProvider.isAuthenticated) {
           _absenceInitialized = false; // Reset flag on logout
           _leaveListenerInitialized = false; // Reset leave listener flag
+          _missedTaskMonitorInitialized = false; // Reset missed task monitor flag
+          
+          // Stop all background services on logout
+          MissedTaskMonitorService().stopMonitoring();
+          LeaveNotificationListener().dispose();
+          
           return const GetStartedPage();
         }
 

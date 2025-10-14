@@ -1438,10 +1438,15 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
   void _startPeriodicRefresh() {
     _refreshTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
       if (mounted) {
-        print('🔄 Periodic refresh triggered...');
-        // Check if shift has ended and run progressive task system if needed
-        _checkProgressiveTaskSystem(context);
-        _triggerRefresh();
+        try {
+          print('🔄 Periodic refresh triggered...');
+          // Check if shift has ended and run progressive task system if needed
+          _checkProgressiveTaskSystem(context);
+          _triggerRefresh();
+        } catch (e) {
+          print('⚠️ Periodic refresh error (non-critical): $e');
+          // Don't crash if refresh fails
+        }
       }
     });
   }

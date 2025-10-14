@@ -18,6 +18,9 @@ class MissedTaskMonitorService {
   bool _isMonitoring = false;
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
 
+  /// Getter to check if monitoring is active
+  bool get isMonitoring => _isMonitoring;
+
   /// Start monitoring for missed tasks
   /// This runs every 30 seconds to check for overdue tasks
   Future<void> startMonitoring() async {
@@ -74,7 +77,11 @@ class MissedTaskMonitorService {
   Future<void> _checkMissedTasks() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        print('⚠️ No user logged in, stopping missed task monitor');
+        stopMonitoring(); // Stop monitoring if user is null
+        return;
+      }
 
       final now = DateTime.now();
       
@@ -244,7 +251,4 @@ class MissedTaskMonitorService {
     final hour12 = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
     return '$hour12:$minute $ampm';
   }
-
-  /// Check if monitoring is active
-  bool get isMonitoring => _isMonitoring;
 }
