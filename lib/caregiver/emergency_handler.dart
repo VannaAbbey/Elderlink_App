@@ -127,19 +127,20 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
       return;
     }
 
-    // ✅ Save to Firestore with BOTH house_id & house_name
-    await FirebaseFirestore.instance.collection("emergency_alert").add({
-      "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
-      "alert_description": result["description"],
-      "emergency_type": result["type"],
-      "additional_info": result["additionalInfo"],
-      "alert_timestamp": DateTime.now(),
-      "alert_verify": false,
-      "house_id": houseNameToId[result["houseName"]] ?? "",
-      "house_name": result["houseName"],
-      "user_id_cg": user.uid,
-      "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
-    });
+    // ✅ Save to Firestore with updated schema - create separate record for each nurse
+    for (final nurseId in activeNurseIds) {
+      await FirebaseFirestore.instance.collection("emergency_alert").add({
+        "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}_$nurseId",
+        "emergency_type": result["type"],
+        "additional_info": result["additionalInfo"],
+        "alert_timestamp": DateTime.now(),
+        "alert_viewed": false,
+        "house_id": [houseNameToId[result["houseName"]] ?? ""],
+        "house_name": result["houseName"],
+        "user_id_cg": user.uid,
+        "user_id_nu": nurseId,
+      });
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

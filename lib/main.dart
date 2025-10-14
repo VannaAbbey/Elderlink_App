@@ -121,6 +121,8 @@ class EmergencyService {
   static final AudioPlayer _audioPlayer = AudioPlayer();
   static bool _modalOpen = false;
 
+  static bool get isModalOpen => _modalOpen;
+
   static Future<void> initNotifications() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const settings = InitializationSettings(android: android);
@@ -538,6 +540,10 @@ class MyApp extends StatelessWidget {
     try {
       FirebaseFirestore.instance
           .collection('emergency_alert')
+          .where(
+            'alert_viewed',
+            isEqualTo: false,
+          ) // Only listen for unviewed alerts
           .orderBy('alert_timestamp', descending: true)
           .snapshots()
           .listen((snapshot) {
@@ -545,10 +551,14 @@ class MyApp extends StatelessWidget {
             for (var doc in snapshot.docs) {
               final data = doc.data();
               final alertId = doc.id;
-              final description = data['alert_description'] ?? 'No description';
-              final nurseArray = List<String>.from(data['user_id_nu'] ?? []);
+              final emergencyType = data['emergency_type'] ?? 'Emergency Alert';
+              final additionalInfo = data['additional_info'] ?? '';
+              final description = additionalInfo.isNotEmpty
+                  ? '$emergencyType - $additionalInfo'
+                  : emergencyType;
+              final assignedNurseId = data['user_id_nu'] as String?;
 
-              if (currentUserId != null && nurseArray.contains(currentUserId)) {
+              if (currentUserId != null && assignedNurseId == currentUserId) {
                 EmergencyService.showEmergencyAlert(
                   alertId: alertId,
                   description: description,

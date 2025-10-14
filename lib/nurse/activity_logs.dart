@@ -349,10 +349,16 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
           }
         }
 
-        // Get elderly gender for proper title (Lola/Lolo)
+        // Get elderly name and gender for proper title (Lola/Lolo)
+        String elderlyName = 'Unknown';
         String elderlyTitle = 'Lola'; // Default to female
+        String nurseName = widget.nurseName ?? 'Unknown Nurse';
+
         try {
           final elderlyId = data['elderly_id'] as String?;
+          final nurseId = data['nurse_id'] as String?;
+
+          // Get elderly info
           if (elderlyId != null) {
             final elderlyDoc = await _firestore
                 .collection('elderly')
@@ -362,6 +368,9 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
             if (elderlyDoc.exists) {
               final elderlyData = elderlyDoc.data();
               if (elderlyData != null) {
+                elderlyName =
+                    '${elderlyData['elderly_fname'] ?? 'Unknown'} ${elderlyData['elderly_lname'] ?? 'Elderly'}'
+                        .trim();
                 final gender = elderlyData['elderly_gender'] as String?;
                 elderlyTitle = (gender?.toLowerCase() == 'male')
                     ? 'Lolo'
@@ -369,8 +378,21 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
               }
             }
           }
+
+          // Get nurse name
+          if (nurseId != null) {
+            final nurseDoc = await _firestore
+                .collection('users')
+                .doc(nurseId)
+                .get();
+
+            if (nurseDoc.exists) {
+              final nurseData = nurseDoc.data();
+              nurseName = nurseData?['user_fname'] ?? 'Unknown Nurse';
+            }
+          }
         } catch (e) {
-          print('Error getting elderly gender: $e');
+          print('Error getting names: $e');
         }
 
         // Add activity with enhanced data
@@ -378,8 +400,8 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
           'id': doc.id,
           'elderly_title': elderlyTitle,
           'action_type': data['action_type'] ?? 'vital_completed',
-          'elderly_name': data['elderly_name'] ?? 'Unknown',
-          'nurse_name': data['nurse_name'] ?? widget.nurseName,
+          'elderly_name': elderlyName,
+          'nurse_name': nurseName,
           'timestamp': data['timestamp'],
           'shift': data['shift'] ?? _getCurrentShift(),
           'new_values': data['new_values'] ?? {},

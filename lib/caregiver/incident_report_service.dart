@@ -245,17 +245,20 @@ class IncidentReportService {
     }
 
     if (nurseIdsToSend.isNotEmpty) {
-      final incidentDocRef = _firestore.collection('incident_report').doc();
-      await incidentDocRef.set({
-        'elderly_id': selectedElderlyId,
-        'house_id': houseId,
-        'incident_date_time': DateTime.now(),
-        'incident_desc': reportText.trim(),
-        'incident_id': incidentDocRef.id,
-        'incident_verify': true,
-        'user_id_cg': caregiverId,
-        'user_id_nu': nurseIdsToSend,
-      });
+      // Create separate incident report for each nurse
+      for (final nurseId in nurseIdsToSend) {
+        final incidentDocRef = _firestore.collection('incident_report').doc();
+        await incidentDocRef.set({
+          'incident_id': incidentDocRef.id,
+          'elderly_id': selectedElderlyId,
+          'user_id_cg': caregiverId,
+          'house_id': [houseId], // Now an array
+          'user_id_nu': nurseId, // Now a string for each nurse
+          'incident_date_time': DateTime.now(),
+          'incident_type': reportText.trim(),
+          'additional_info': '', // Can be expanded later if needed
+        });
+      }
     }
   }
 }

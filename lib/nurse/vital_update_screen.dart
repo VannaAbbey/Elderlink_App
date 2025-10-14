@@ -197,6 +197,79 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
       return;
     }
 
+    // Show confirmation dialog before saving (medication-style)
+    bool isChecked = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Confirm Vital Signs Submission'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Please review the details below before submitting:',
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Blood Pressure: ${_bloodPressureController.text}'),
+                    Text('Pulse Rate: ${_pulseRateController.text}'),
+                    Text('O2 Saturation: ${_o2SatController.text}'),
+                    Text('Temperature: ${_temperatureController.text}'),
+                    Text(
+                      'Respiratory Rate: ${_respiratoryRateController.text}',
+                    ),
+                    if (_notesController.text.trim().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Description/Notes: ${_notesController.text}',
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    Text('Reporting Nurse: ${widget.nurseName ?? "Unknown"}'),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: isChecked,
+                          onChanged: (val) =>
+                              setState(() => isChecked = val ?? false),
+                        ),
+                        const Expanded(
+                          child: Text(
+                            'I confirm that the above vital signs are accurate and ready to be submitted.',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isChecked
+                      ? () => Navigator.of(context).pop(true)
+                      : null,
+                  child: const Text('Submit & Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (confirmed != true) return;
+
     print('🔄 Starting to save vital data...');
     print('🏥 Assignment ID: ${widget.assignmentId}');
     print('👴 Elderly ID: ${widget.elderlyId}');
@@ -239,29 +312,23 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
       final vitalValues = {
         'blood_pressure': _bloodPressureController.text.trim(),
         'pulse_rate': _pulseRateController.text.trim(),
-        'oxygen_saturation': _o2SatController.text
-            .trim(), // ✅ Standardized field name
+        'oxygen_saturation': _o2SatController.text.trim(),
         'temperature': _temperatureController.text.trim(),
         'respiratory_rate': _respiratoryRateController.text.trim(),
       };
 
       // 🔧 FIXED: Prepare activity log data using assignment ID
       final activityLogData = {
-        'vital_assignment_id':
-            widget.assignmentId, // Use existing assignment ID
-        'elderly_id': widget.elderlyId,
-        'elderly_name': widget.elderlyName,
         'assignment_id': widget.assignmentId,
+        'elderly_id': widget.elderlyId,
         'house_id': widget.houseId,
         'shift': _getCurrentShift(),
         'action_type': 'vital_completed',
         'nurse_id': _currentNurseId ?? 'Unknown',
-        'nurse_name': widget.nurseName ?? 'Unknown',
         'timestamp': Timestamp.fromDate(now),
         'old_values': {},
         'new_values': vitalValues,
-        'remarks': _notesController.text
-            .trim(), // ✅ FIXED: Use 'remarks' consistently
+        'remarks': _notesController.text.trim(),
       };
 
       print('💾 Starting batch write operation...');
@@ -278,26 +345,36 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
 
       // Prepare update data with essential fields only
       final updateData = <String, dynamic>{
-        // Assignment status
         'status': 'completed',
-        'completed_at': Timestamp.fromDate(now), // ✅ Main completion timestamp
-        // 🔧 CLEAN: Only the 5 vital fields from the form + notes
+        'completed_at': Timestamp.fromDate(now),
         'blood_pressure': _bloodPressureController.text.trim(),
         'pulse_rate': _pulseRateController.text.trim(),
         'oxygen_saturation': _o2SatController.text.trim(),
         'temperature': _temperatureController.text.trim(),
         'respiratory_rate': _respiratoryRateController.text.trim(),
-        'remarks': _notesController.text
-            .trim(), // ✅ FIXED: Use 'remarks' not 'vital_remarks'
-        // ✅ Minimal recording tracking
-        'recorded_by': _currentNurseId ?? 'Unknown',
-        'recorded_by_name': widget.nurseName ?? 'Unknown',
+        'remarks': _notesController.text.trim(),
+        'updated_by_nurse_id': _currentNurseId ?? 'Unknown',
       };
 
-      // ✅ PRESERVE inheritance info if it exists
       if (assignmentData['inherited_from_shift'] != null) {
+        String inheritedNurseName = 'Unknown Nurse';
+        final inheritedNurseId = assignmentData['inherited_from_nurse_id'];
+        if (inheritedNurseId != null) {
+          try {
+            final nurseDoc = await _firestore
+                .collection('users')
+                .doc(inheritedNurseId)
+                .get();
+            if (nurseDoc.exists) {
+              final nurseData = nurseDoc.data();
+              inheritedNurseName = nurseData?['user_fname'] ?? 'Unknown Nurse';
+            }
+          } catch (e) {
+            print('Error getting inherited nurse name: $e');
+          }
+        }
         updateData['inherited_from'] =
-            '${assignmentData['inherited_from_nurse_name']} (${assignmentData['inherited_from_shift']} shift)';
+            '$inheritedNurseName (${assignmentData['inherited_from_shift']} shift)';
       }
 
       batch.update(
@@ -305,16 +382,13 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
         updateData,
       );
 
-      // Write activity log
       batch.set(
         _firestore.collection('vital_activity_logs').doc(),
         activityLogData,
       );
 
-      // Execute all operations atomically
       await batch.commit();
 
-      // 🧹 CLEANUP: Remove any redundant fields from the document
       await _cleanupRedundantFields();
 
       print('✅ Batch write completed successfully - all data saved atomically');

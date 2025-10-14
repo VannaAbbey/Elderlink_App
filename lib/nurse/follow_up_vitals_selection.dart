@@ -138,10 +138,90 @@ class _FollowUpVitalsSelectionScreenState
         }
       }
 
-      print(
-        '👥 Current nurse is assigned to ${nurseAssignedElderlyIds.length} elderly across all shifts',
-      );
       print('🔍 Assigned elderly IDs: $nurseAssignedElderlyIds');
+
+      // 🔧 STEP 1.5: Pre-fetch elderly names for all assigned elderly
+      final elderlyNamesCache = <String, String>{};
+      final nurseNamesCache = <String, String>{};
+      if (nurseAssignedElderlyIds.isNotEmpty) {
+        // Split into chunks of 30 (Firestore limit for whereIn)
+        final chunks = <List<String>>[];
+        final idsList = nurseAssignedElderlyIds.toList();
+        for (var i = 0; i < idsList.length; i += 30) {
+          final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
+          chunks.add(idsList.sublist(i, end));
+        }
+
+        for (final chunk in chunks) {
+          print('🔍 Fetching elderly names for chunk: $chunk');
+          final elderlyQuery = await _firestore
+              .collection('elderly')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .get();
+
+          print(
+            '📋 Found ${elderlyQuery.docs.length} elderly documents in chunk',
+          );
+          for (final doc in elderlyQuery.docs) {
+            final data = doc.data();
+            print(
+              '   - Elderly ${doc.id}: elderly_fname=${data['elderly_fname']}, elderly_lname=${data['elderly_lname']}',
+            );
+            final fullName =
+                '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}'
+                    .trim();
+            elderlyNamesCache[doc.id] = fullName.isNotEmpty
+                ? fullName
+                : 'Unknown';
+            print('   - Cached name: ${elderlyNamesCache[doc.id]}');
+          }
+        }
+      }
+
+      print('📋 Elderly names cache populated: $elderlyNamesCache');
+
+      // 🔧 STEP 1.6: Pre-fetch nurse names for all nurses who completed vitals
+      final nurseIdsToFetch = <String>{};
+      for (final vitalDoc in allVitalsQuery.docs) {
+        final vitalData = vitalDoc.data();
+        final assignedNurseId = vitalData['assigned_nurse_id'];
+        final updatedByNurseId = vitalData['updated_by_nurse_id'];
+        final recordedBy = vitalData['recorded_by'];
+
+        if (assignedNurseId != null) nurseIdsToFetch.add(assignedNurseId);
+        if (updatedByNurseId != null) nurseIdsToFetch.add(updatedByNurseId);
+        if (recordedBy != null) nurseIdsToFetch.add(recordedBy);
+      }
+
+      if (nurseIdsToFetch.isNotEmpty) {
+        final nurseChunks = <List<String>>[];
+        final nurseIdsList = nurseIdsToFetch.toList();
+        for (var i = 0; i < nurseIdsList.length; i += 30) {
+          final end = (i + 30 < nurseIdsList.length)
+              ? i + 30
+              : nurseIdsList.length;
+          nurseChunks.add(nurseIdsList.sublist(i, end));
+        }
+
+        for (final chunk in nurseChunks) {
+          final nurseQuery = await _firestore
+              .collection('users')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .get();
+
+          for (final doc in nurseQuery.docs) {
+            final data = doc.data();
+            final fullName =
+                '${data['user_fname'] ?? ''} ${data['user_lname'] ?? ''}'
+                    .trim();
+            nurseNamesCache[doc.id] = fullName.isNotEmpty
+                ? fullName
+                : 'Unknown Nurse';
+          }
+        }
+      }
+
+      print('👩‍⚕️ Nurse names cache populated: $nurseNamesCache');
 
       final elderlyList = <Map<String, dynamic>>[];
 
@@ -151,10 +231,15 @@ class _FollowUpVitalsSelectionScreenState
       for (final vitalDoc in allVitalsQuery.docs) {
         final vitalData = vitalDoc.data();
         final elderlyId = vitalData['elderly_id'];
-        final elderlyName = vitalData['elderly_name'] ?? 'Unknown';
+
+        // 🔧 FIXED: Get elderly name from vitals data first, then from cache if not available
+        String elderlyName = vitalData['elderly_name'] ?? '';
+        if (elderlyName.isEmpty || elderlyName == 'Unknown') {
+          elderlyName = elderlyNamesCache[elderlyId] ?? 'Unknown';
+        }
 
         print(
-          '📋 Processing vital: $elderlyName ($elderlyId) - Status: ${vitalData['status']} - Nurse: ${vitalData['assigned_nurse_name']}',
+          '📋 Processing vital: $elderlyName ($elderlyId) - Status: ${vitalData['status']} - Nurse: ${vitalData['assigned_nurse_id'] ?? 'Unknown'}',
         );
 
         // Only include elderly that are assigned to current nurse
@@ -186,8 +271,11 @@ class _FollowUpVitalsSelectionScreenState
             'elderly_name': elderlyName,
             'assignment_id': vitalDoc.id,
             'status': vitalData['status'],
-            'assigned_nurse_name': vitalData['assigned_nurse_name'],
-            'recorded_by_name': vitalData['recorded_by_name'],
+            'assigned_nurse_id': vitalData['assigned_nurse_id'],
+            'assigned_nurse_name':
+                nurseNamesCache[vitalData['assigned_nurse_id']] ??
+                'Unknown Nurse',
+            'updated_by_nurse_id': vitalData['updated_by_nurse_id'],
             'shift': vitalData['shift'],
             'timestamp': timestamp,
             'vitals_data': {
@@ -197,32 +285,61 @@ class _FollowUpVitalsSelectionScreenState
               'temperature': vitalData['temperature'],
               'respiratory_rate': vitalData['respiratory_rate'],
               'completed_at': vitalData['completed_at'],
-              'recorded_by_name': vitalData['recorded_by_name'],
+              'recorded_by_name':
+                  nurseNamesCache[vitalData['recorded_by']] ?? 'Unknown Nurse',
             },
           };
         }
       }
 
-      // 🔧 STEP 3: Build the final elderly list with proper follow-up eligibility
-      for (final elderlyData in elderlyLatestVitals.values) {
-        final status = elderlyData['status'];
-        final vitalsData = elderlyData['vitals_data'] as Map<String, dynamic>;
+      // 🔧 STEP 3: Build the final elderly list - include ALL assigned elderly
+      for (final elderlyId in nurseAssignedElderlyIds) {
+        final elderlyName = elderlyNamesCache[elderlyId] ?? 'Unknown';
+        print('🔍 Processing elderly $elderlyId: cached name = "$elderlyName"');
 
-        // 🆕 ENHANCED: Can follow-up if ANY vitals exist (completed by any nurse)
-        final hasAnyVitals = vitalsData['completed_at'] != null;
-        final canFollowUp =
-            hasAnyVitals; // Allow follow-up for any completed vitals
+        // Check if this elderly has vitals data
+        final elderlyData = elderlyLatestVitals[elderlyId];
 
-        elderlyList.add({
-          'elderly_id': elderlyData['elderly_id'],
-          'elderly_name': elderlyData['elderly_name'],
-          'assignment_id': elderlyData['assignment_id'],
-          'status': status,
-          'previous_vitals': hasAnyVitals ? vitalsData : null,
-          'can_follow_up': canFollowUp,
-          'completed_by_nurse': elderlyData['recorded_by_name'],
-          'completed_in_shift': elderlyData['shift'],
-        });
+        if (elderlyData != null) {
+          // Elderly has vitals - use existing logic
+          final status = elderlyData['status'];
+          final vitalsData = elderlyData['vitals_data'] as Map<String, dynamic>;
+          final hasAnyVitals = vitalsData['completed_at'] != null;
+          final canFollowUp = hasAnyVitals;
+
+          print(
+            '🔍 Building elderly item (with vitals): $elderlyName - Status: $status - HasVitals: $hasAnyVitals - CanFollowUp: $canFollowUp',
+          );
+
+          elderlyList.add({
+            'elderly_id': elderlyId,
+            'elderly_name': elderlyName,
+            'assignment_id': elderlyData['assignment_id'],
+            'status': status,
+            'previous_vitals': hasAnyVitals ? vitalsData : null,
+            'can_follow_up': canFollowUp,
+            'completed_by_nurse':
+                nurseNamesCache[elderlyData['assigned_nurse_id']] ??
+                'Unknown Nurse',
+            'completed_in_shift': elderlyData['shift'],
+          });
+        } else {
+          // Elderly has no vitals yet - show as pending
+          print(
+            '🔍 Building elderly item (no vitals): $elderlyName - Status: pending - CanFollowUp: false',
+          );
+
+          elderlyList.add({
+            'elderly_id': elderlyId,
+            'elderly_name': elderlyName,
+            'assignment_id': null,
+            'status': 'pending',
+            'previous_vitals': null,
+            'can_follow_up': false,
+            'completed_by_nurse': 'None',
+            'completed_in_shift': 'N/A',
+          });
+        }
       }
 
       // Sort: completed vitals first (eligible for follow-up), then pending
@@ -239,6 +356,12 @@ class _FollowUpVitalsSelectionScreenState
       });
 
       print('✅ Loaded ${elderlyList.length} elderly for follow-up selection');
+      print('📋 Elderly list details:');
+      for (final elderly in elderlyList) {
+        print(
+          '   - ${elderly['elderly_name']} (${elderly['elderly_id']}) - Can follow up: ${elderly['can_follow_up']}',
+        );
+      }
     } catch (e) {
       print('❌ Error loading assigned elderly: $e');
       setState(() {
@@ -333,40 +456,6 @@ class _FollowUpVitalsSelectionScreenState
     }
 
     return DateFormat('MMM dd, hh:mm a').format(dateTime);
-  }
-
-  Widget _buildVitalChip(String label, String value) {
-    return Container(
-      margin: EdgeInsets.only(right: 8, bottom: 4),
-      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          SizedBox(height: 2),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[800],
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -557,9 +646,11 @@ class _FollowUpVitalsSelectionScreenState
                                       ),
                                       SizedBox(height: 12),
                                       Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          if (previousVitals['blood_pressure'] != null)
+                                          if (previousVitals['blood_pressure'] !=
+                                              null)
                                             Text(
                                               'BP: ${previousVitals['blood_pressure']}',
                                               style: TextStyle(
@@ -568,7 +659,8 @@ class _FollowUpVitalsSelectionScreenState
                                                 fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['pulse_rate'] != null)
+                                          if (previousVitals['pulse_rate'] !=
+                                              null)
                                             Text(
                                               'HR: ${previousVitals['pulse_rate']} bpm',
                                               style: TextStyle(
@@ -577,7 +669,8 @@ class _FollowUpVitalsSelectionScreenState
                                                 fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['temperature'] != null)
+                                          if (previousVitals['temperature'] !=
+                                              null)
                                             Text(
                                               'Temp: ${previousVitals['temperature']}°C',
                                               style: TextStyle(
@@ -586,7 +679,8 @@ class _FollowUpVitalsSelectionScreenState
                                                 fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['oxygen_saturation'] != null)
+                                          if (previousVitals['oxygen_saturation'] !=
+                                              null)
                                             Text(
                                               'O2: ${previousVitals['oxygen_saturation']}%',
                                               style: TextStyle(
@@ -595,7 +689,8 @@ class _FollowUpVitalsSelectionScreenState
                                                 fontWeight: FontWeight.w500,
                                               ),
                                             ),
-                                          if (previousVitals['respiratory_rate'] != null)
+                                          if (previousVitals['respiratory_rate'] !=
+                                              null)
                                             Text(
                                               'RR: ${previousVitals['respiratory_rate']} breaths/min',
                                               style: TextStyle(

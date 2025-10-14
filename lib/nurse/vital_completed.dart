@@ -56,11 +56,9 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
       );
       print('🏠 House: ${widget.houseId}, Date: $today (ALL shifts)');
 
-      // 🔧 ENHANCED: Query ALL completed vitals for today (any shift)
-      // This allows nurses to see their completions from earlier shifts
+      // Query ALL completed vitals for today (any nurse, any shift)
       final completedVitalsQuery = await _firestore
           .collection('vitals')
-          .where('recorded_by', isEqualTo: nurseId)
           .where('house_id', isEqualTo: widget.houseId)
           .where('assigned_date', isEqualTo: today)
           .where('status', isEqualTo: 'completed')
@@ -68,48 +66,71 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
 
       print('✅ Found ${completedVitalsQuery.docs.length} completed vitals');
 
+      // Build a list of completed vitals and collect elderly IDs
       final completedVitals = <Map<String, dynamic>>[];
-
-      // Process completed vitals with clean data structure
+      final elderlyIdSet = <String>{};
       for (final vitalDoc in completedVitalsQuery.docs) {
         final vitalData = vitalDoc.data();
-
-        print(
-          '📋 Processing completed vital for: ${vitalData['elderly_name']}',
-        );
-
-        // 🔧 CLEAN: Build completed vital record with essential data only
+        final elderlyId = vitalData['elderly_id'] ?? '';
+        elderlyIdSet.add(elderlyId);
         completedVitals.add({
           'vital_id': vitalDoc.id,
-          'assignment_id':
-              vitalDoc.id, // The vital document itself is the assignment
-          'elderly_id': vitalData['elderly_id'] ?? '',
-          'elderly_name': vitalData['elderly_name'] ?? 'Unknown',
-
-          // ✅ CLEAN: Essential vital data with standardized field names
+          'assignment_id': vitalDoc.id,
+          'elderly_id': elderlyId,
           'blood_pressure': vitalData['blood_pressure'] ?? 'N/A',
           'pulse_rate': vitalData['pulse_rate'] ?? 'N/A',
-          'oxygen_saturation':
-              vitalData['oxygen_saturation'] ??
-              'N/A', // Standardized field name
+          'oxygen_saturation': vitalData['oxygen_saturation'] ?? 'N/A',
           'temperature': vitalData['temperature'] ?? 'N/A',
           'respiratory_rate': vitalData['respiratory_rate'] ?? 'N/A',
-          'remarks':
-              vitalData['remarks'] ?? '', // Use 'remarks' not 'vital_remarks'
-          // ✅ CLEAN: Completion tracking
+          'remarks': vitalData['remarks'] ?? '',
           'completed_at': vitalData['completed_at'],
           'created_at': vitalData['created_at'],
           'recorded_by': vitalData['recorded_by'] ?? nurseId,
           'recorded_by_name': vitalData['recorded_by_name'] ?? widget.nurseName,
           'status': 'completed',
-
-          // 🆕 ENHANCED: Show shift information for better timeline tracking
           'shift': vitalData['shift'] ?? 'Unknown',
           'assigned_date': vitalData['assigned_date'] ?? '',
-
-          // ✅ Show inheritance info if applicable
           'inherited_from': vitalData['inherited_from'],
         });
+      }
+
+      // Fetch elderly names in batches (Firestore whereIn limit is 10)
+      final elderlyNames = <String, String>{};
+      final elderlyIds = elderlyIdSet.where((id) => id.isNotEmpty).toList();
+      for (var i = 0; i < elderlyIds.length; i += 10) {
+        final chunk = elderlyIds.sublist(
+          i,
+          i + 10 > elderlyIds.length ? elderlyIds.length : i + 10,
+        );
+        final elderlyQuery = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+        for (final doc in elderlyQuery.docs) {
+          final data = doc.data();
+          final fname = data['elderly_fname']?.toString().trim();
+          final lname = data['elderly_lname']?.toString().trim();
+          String elderlyName = '';
+          if (fname != null &&
+              fname.isNotEmpty &&
+              lname != null &&
+              lname.isNotEmpty) {
+            elderlyName = '$fname $lname';
+          } else if (fname != null && fname.isNotEmpty) {
+            elderlyName = fname;
+          } else if (lname != null && lname.isNotEmpty) {
+            elderlyName = lname;
+          } else {
+            elderlyName = 'Unnamed Elderly';
+          }
+          elderlyNames[doc.id] = elderlyName;
+        }
+      }
+
+      // Attach elderly name to each completed vital
+      for (final vital in completedVitals) {
+        final elderlyId = vital['elderly_id'] ?? '';
+        vital['elderly_name'] = elderlyNames[elderlyId] ?? 'Unnamed Elderly';
       }
 
       // Sort by completion time (most recent first)

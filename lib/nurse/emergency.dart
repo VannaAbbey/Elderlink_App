@@ -196,162 +196,279 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
                         final alerts = snapshot.data!.docs;
 
-                        return ListView.builder(
-                          itemCount: alerts.length,
-                          itemBuilder: (context, index) {
-                            final data =
-                                alerts[index].data() as Map<String, dynamic>;
-                            final emergencyType = data['emergency_type'] ?? '';
-                            final additionalInfo =
-                                data['additional_info'] ?? '';
-                            final houseName = data['house_name'] ?? '';
-                            final caregiverName =
-                                data['caregiver_name'] ?? 'Unknown Caregiver';
-                            final timestamp =
-                                (data['alert_timestamp'] as Timestamp).toDate();
+                        // Collect unique caregiver IDs
+                        final Set<String> caregiverIds = {};
+                        for (final doc in alerts) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          final userIdCg = data['user_id_cg'] ?? '';
+                          if (userIdCg.isNotEmpty) {
+                            caregiverIds.add(userIdCg);
+                          }
+                        }
 
-                            // Caregiver name is now directly available in the alert data
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 16),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: const Color.fromARGB(255, 247, 220, 220),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Top row with house icon, name, time
-                                  Row(
-                                    children: [
-                                      Container(
-                                        width: 50,
-                                        height: 50,
-                                        decoration: BoxDecoration(
-                                          color: Colors.red,
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.home,
-                                          color: Colors.white,
-                                          size: 28,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Text(
-                                          houseName,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 20,
-                                            color: Colors.red,
-                                          ),
-                                        ),
-                                      ),
-                                      Text(
-                                        DateFormat('hh:mm a').format(timestamp),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Color.fromARGB(
-                                            255,
-                                            82,
-                                            81,
-                                            81,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                        // Fetch all caregiver names in batch
+                        return FutureBuilder<Map<String, String>>(
+                          future: caregiverIds.isNotEmpty
+                              ? FirebaseFirestore.instance
+                                    .collection('users')
+                                    .where(
+                                      FieldPath.documentId,
+                                      whereIn: caregiverIds.toList(),
+                                    )
+                                    .get()
+                                    .then((querySnapshot) {
+                                      final Map<String, String> caregiverNames =
+                                          {};
+                                      for (final doc in querySnapshot.docs) {
+                                        final userData = doc.data();
+                                        final firstName =
+                                            userData['user_fname'] ?? '';
+                                        final lastName =
+                                            userData['user_lname'] ?? '';
+                                        final fullName = '$firstName $lastName'
+                                            .trim();
+                                        caregiverNames[doc.id] =
+                                            fullName.isNotEmpty
+                                            ? fullName
+                                            : 'Unknown Caregiver';
+                                      }
+                                      return caregiverNames;
+                                    })
+                              : Future.value({}),
+                          builder: (context, caregiverNamesSnapshot) {
+                            if (caregiverNamesSnapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
+                            }
+
+                            final caregiverNames =
+                                caregiverNamesSnapshot.data ?? {};
+
+                            return ListView.builder(
+                              itemCount: alerts.length,
+                              itemBuilder: (context, index) {
+                                final data =
+                                    alerts[index].data()
+                                        as Map<String, dynamic>;
+                                final emergencyType =
+                                    data['emergency_type'] ?? '';
+                                final additionalInfo =
+                                    data['additional_info'] ?? '';
+                                final houseName = data['house_name'] ?? '';
+                                final userIdCg = data['user_id_cg'] ?? '';
+                                final timestamp =
+                                    (data['alert_timestamp'] as Timestamp)
+                                        .toDate();
+
+                                final caregiverName =
+                                    caregiverNames[userIdCg] ??
+                                    'Unknown Caregiver';
+
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 16),
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      247,
+                                      220,
+                                      220,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
-
-                                  const SizedBox(height: 8),
-                                  // Reporting caregiver label & value in same row with wrap
-                                  Row(
+                                  child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
+                                      // Top row with house icon, name, time
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 50,
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              color: Colors.red,
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: const Icon(
+                                              Icons.home,
+                                              color: Colors.white,
+                                              size: 28,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              houseName,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 20,
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                          ),
+                                          Text(
+                                            DateFormat(
+                                              'hh:mm a',
+                                            ).format(timestamp),
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Color.fromARGB(
+                                                255,
+                                                82,
+                                                81,
+                                                81,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+
+                                      const SizedBox(height: 8),
+                                      // Reporting caregiver label & value in same row with wrap
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'Reporting Caregiver: ',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                          Expanded(
+                                            child: Text(
+                                              caregiverName,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.normal,
+                                                color: Colors.black,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      // What happened label
                                       const Text(
-                                        'Reporting Caregiver: ',
+                                        'What happened?',
                                         style: TextStyle(
                                           fontWeight: FontWeight.bold,
                                           color: Colors.black,
                                         ),
                                       ),
-                                      Expanded(
-                                        child: Text(
-                                          caregiverName,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.normal,
-                                            color: Colors.black,
+                                      const SizedBox(height: 8),
+                                      // Centered description box
+                                      Center(
+                                        child: Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red[50],
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              // Emergency Type (Main description)
+                                              Text(
+                                                emergencyType.isNotEmpty
+                                                    ? emergencyType
+                                                    : 'No emergency type specified',
+                                                textAlign: TextAlign.justify,
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              // Additional Info (Optional)
+                                              if (additionalInfo
+                                                  .isNotEmpty) ...[
+                                                const SizedBox(height: 12),
+                                                const Text(
+                                                  'Additional Information:',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  additionalInfo,
+                                                  textAlign: TextAlign.justify,
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight:
+                                                        FontWeight.normal,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      // Mark as Viewed Button
+                                      Center(
+                                        child: ElevatedButton.icon(
+                                          onPressed: () async {
+                                            try {
+                                              await FirebaseFirestore.instance
+                                                  .collection('emergency_alert')
+                                                  .doc(alerts[index].id)
+                                                  .update({
+                                                    'alert_viewed': true,
+                                                  });
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'Emergency alert marked as viewed',
+                                                  ),
+                                                  backgroundColor: Colors.green,
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Error marking as viewed: $e',
+                                                  ),
+                                                  backgroundColor: Colors.red,
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          icon: const Icon(Icons.check_circle),
+                                          label: const Text('Mark as Viewed'),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(
+                                              0xFF00588E,
+                                            ),
+                                            foregroundColor: Colors.white,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 12),
-                                  // What happened label
-                                  const Text(
-                                    'What happened?',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  // Centered description box
-                                  Center(
-                                    child: Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red[50],
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          // Emergency Type (Main description)
-                                          Text(
-                                            emergencyType.isNotEmpty
-                                                ? emergencyType
-                                                : 'No emergency type specified',
-                                            textAlign: TextAlign.justify,
-                                            style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.black87,
-                                            ),
-                                          ),
-                                          // Additional Info (Optional)
-                                          if (additionalInfo.isNotEmpty) ...[
-                                            const SizedBox(height: 12),
-                                            const Text(
-                                              'Additional Information:',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.black54,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              additionalInfo,
-                                              textAlign: TextAlign.justify,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.normal,
-                                                color: Colors.black54,
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             );
                           },
                         );

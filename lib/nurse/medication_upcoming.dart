@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
 import 'notification_service.dart';
@@ -8,12 +9,14 @@ class UpcomingMedicationsTab extends StatefulWidget {
   final String houseId;
   final String? nurseName;
   final DateTime? selectedDate;
+  final Function(int)? onCountChanged;
 
   const UpcomingMedicationsTab({
     super.key,
     required this.houseId,
     required this.nurseName,
     this.selectedDate,
+    this.onCountChanged,
   });
 
   @override
@@ -33,6 +36,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   bool _isLoading = false;
   List<Map<String, dynamic>> _upcomingMedications = [];
   Timer? _missedMedicationTimer;
+  Timer? _autoRefreshTimer;
   late DateTime _selectedDate;
 
   @override
@@ -43,6 +47,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     // the first frame appear faster when switching tabs/houses.
     _prewarm();
     _startMissedMedicationTimer();
+    _startAutoRefreshTimer();
   }
 
   @override
@@ -82,6 +87,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   @override
   void dispose() {
     _missedMedicationTimer?.cancel();
+    _autoRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -94,6 +100,28 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     if (currentHour >= 6 && currentHour < 14) return "1st";
     if (currentHour >= 14 && currentHour < 22) return "2nd";
     return "3rd";
+  }
+
+  bool _isTimeInCurrentShift(String scheduledTime) {
+    // Parse scheduled time (format: "HH:mm:ss" or "HH:mm")
+    final timeParts = scheduledTime.split(':');
+    if (timeParts.length < 2) return false;
+
+    final hour = int.tryParse(timeParts[0]) ?? 0;
+    final minute = int.tryParse(timeParts[1]) ?? 0;
+    final scheduledHour = hour + (minute / 60.0); // Convert to decimal hours
+
+    final currentShift = _getCurrentShift();
+    switch (currentShift) {
+      case "1st": // 6:00 AM - 2:00 PM
+        return scheduledHour >= 6.0 && scheduledHour < 14.0;
+      case "2nd": // 2:00 PM - 10:00 PM
+        return scheduledHour >= 14.0 && scheduledHour < 22.0;
+      case "3rd": // 10:00 PM - 6:00 AM
+        return scheduledHour >= 22.0 || scheduledHour < 6.0;
+      default:
+        return false;
+    }
   }
 
   Future<String?> _getNurseId() async {
@@ -121,7 +149,41 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   Future<List<String>> _getNurseWorkingDays(String nurseId) async {
     try {
       final currentShift = _getCurrentShift();
+      final currentDay = _getSelectedDay();
 
+      // For shifts that span midnight (like 3rd shift), we need special handling
+      if (currentShift == "3rd" && _selectedDate.hour < 6) {
+        // If it's 3rd shift and before 6 AM, check if nurse was assigned to previous day
+        final days = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ];
+        final currentDayIndex = days.indexOf(currentDay);
+        final previousDayIndex = currentDayIndex == 0 ? 6 : currentDayIndex - 1;
+        final previousDay = days[previousDayIndex];
+
+        // Check if nurse has 3rd shift assignment on the previous day
+        final shiftQuery = await _firestore
+            .collection('house_shift_assignments')
+            .where('user_id', isEqualTo: nurseId)
+            .where('user_type', isEqualTo: 'nurse')
+            .where('is_current', isEqualTo: true)
+            .where('shift', isEqualTo: currentShift)
+            .where('days_assigned', arrayContains: previousDay)
+            .get();
+
+        if (shiftQuery.docs.isNotEmpty) {
+          // Nurse was assigned to 3rd shift on previous day, so they're working today
+          return [currentDay];
+        }
+      }
+
+      // Normal case: check current shift and current day
       final shiftQuery = await _firestore
           .collection('house_shift_assignments')
           .where('user_id', isEqualTo: nurseId)
@@ -146,6 +208,20 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final nurseId = await _getNurseId();
       if (nurseId == null) return false;
 
+      // First check if nurse has any current shift assignment at all
+      final anyShiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .get();
+
+      if (anyShiftQuery.docs.isNotEmpty) {
+        // Nurse has some current shift assignment, consider them scheduled
+        return true;
+      }
+
+      // Fallback to the original day-specific logic
       final workingDays = await _getNurseWorkingDays(nurseId);
       final today = _getSelectedDay();
 
@@ -175,120 +251,132 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         throw Exception('No working days found for nurse');
       }
 
-      // Convert TimeOfDay to string format
-      final intakeTimeStrings = intakeTimes
+      // Convert TimeOfDay to Time format for database
+      final intakeTimesFormatted = intakeTimes
           .map(
             (time) =>
-                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
+                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:00',
           )
           .toList();
 
-      // Create individual take statuses
-      final List<Map<String, dynamic>> takeStatuses = [];
-      for (int i = 0; i < numberOfIntakes; i++) {
-        takeStatuses.add({
-          'take_number': i + 1,
-          'take_name': _getOrdinal(i + 1),
-          'scheduled_time': intakeTimeStrings[i],
-          'status': 'pending', // pending, complete, missed
-          'completed_at': null,
-          'completed_by': null,
-        });
-      }
-
-      // Create medication document
+      // Create medication document in new Medications table
       final medicationData = {
+        'medication_id': '', // Will be set after creation
         'elderly_id': elderlyId,
         'house_id': widget.houseId,
-        'created_nurse_id': nurseId, // Who created the medication
-        'created_nurse_name': widget.nurseName,
+        'created_nurse_id': nurseId,
         'medication_name': medicationName,
         'dosage': dosage,
         'repeat_interval': repeatInterval,
-        'number_of_intakes': numberOfIntakes,
-        'intake_times': intakeTimeStrings,
-        'take_statuses': takeStatuses, // Individual take tracking
-        'working_days': repeatInterval == 'Daily'
-            ? [
-                'Monday',
-                'Tuesday',
-                'Wednesday',
-                'Thursday',
-                'Friday',
-                'Saturday',
-                'Sunday',
-              ]
-            : workingDays, // All days for Daily, specific days for Once
         'shift': _getCurrentShift(),
-        'status': 'upcoming',
-        'created_at': FieldValue.serverTimestamp(),
-        'created_by': nurseId,
+        'working_days': repeatInterval == 'Daily'
+            ? null // null means all days for Daily medications
+            : workingDays, // specific days for Once medications
+        'created_at': Timestamp.fromDate(DateTime.now()),
+        'updated_at': Timestamp.fromDate(DateTime.now()),
+        'status': 'active',
       };
 
-      final docRef = await _firestore
+      final medicationDocRef = await _firestore
           .collection('medications')
           .add(medicationData);
 
-      // Log the add medication activity
-      await _logMedicationActivity(
-        action: 'add_medication',
-        medicationId: docRef.id,
-        medicationData: medicationData,
-        takeNumber: 0, // 0 for whole medication addition
-        newData: medicationData,
+      final medicationId = medicationDocRef.id;
+
+      // Update medication_id in the document
+      await medicationDocRef.update({'medication_id': medicationId});
+
+      // Create Medication_Takes records for each intake
+      final batch = _firestore.batch();
+      for (int i = 0; i < numberOfIntakes; i++) {
+        final takeDocRef = _firestore.collection('medication_takes').doc();
+        batch.set(takeDocRef, {
+          'take_id': takeDocRef.id,
+          'medication_id': medicationId,
+          'take_number': i + 1,
+          'scheduled_time': intakeTimesFormatted[i],
+          'status': 'pending',
+          'completed_at': null,
+          'completed_by': null,
+          'created_at': Timestamp.fromDate(DateTime.now()),
+          'updated_at': Timestamp.fromDate(DateTime.now()),
+        });
+      }
+
+      // Commit the batch
+      await batch.commit();
+
+      // Log the add medication activity to Medication_Activity_Logs
+      await _logMedicationActivityNew(
+        action: 'create',
+        medicationId: medicationId,
+        elderlyId: elderlyId,
+        nurseId: nurseId,
+        houseId: widget.houseId,
+        shift: _getCurrentShift(),
+        medicationName: medicationName,
+        dosage: dosage,
+        repeatInterval: repeatInterval,
       );
 
-      print('Medication saved successfully');
+      print('Medication saved successfully with new structure');
 
       // Create corresponding medical_tasks immediately so Home shows them
       // and schedule notifications. Also force-refresh the medications list
       // cache so the Upcoming tab shows the newly created medication.
-      await _createTasksForMedication(docRef.id, medicationData);
+      await _createTasksForMedicationNew(
+        medicationId,
+        medicationData,
+        intakeTimes,
+      );
       await _loadUpcomingMedications(forceRefresh: true);
+
+      // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
+      _autoRefreshTimer?.cancel();
+      _startAutoRefreshTimer();
     } catch (e) {
       print('Error saving medication: $e');
       rethrow;
     }
   }
 
-  Future<void> _createTasksForMedication(
+  Future<void> _createTasksForMedicationNew(
     String medicationId,
     Map<String, dynamic> medicationData,
+    List<TimeOfDay> intakeTimes,
   ) async {
     try {
       final now = DateTime.now();
-      final intakeTimes = List<String>.from(
-        medicationData['intake_times'] ?? [],
-      );
-      final takeStatuses = List<Map<String, dynamic>>.from(
-        medicationData['take_statuses'] ?? [],
-      );
 
-      for (int t = 0; t < intakeTimes.length; t++) {
-        final scheduled = intakeTimes[t];
-        final parts = scheduled.split(':');
-        if (parts.length != 2) continue;
-        final hour = int.tryParse(parts[0]) ?? 0;
-        final minute = int.tryParse(parts[1]) ?? 0;
+      // Get all takes for this medication
+      final takesSnapshot = await _firestore
+          .collection('medication_takes')
+          .where('medication_id', isEqualTo: medicationId)
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      for (var takeDoc in takesSnapshot.docs) {
+        final takeData = takeDoc.data();
+        final takeNumber = takeData['take_number'] as int;
+        final scheduledTimeStr = takeData['scheduled_time'] as String;
+
+        // Parse scheduled time
+        final timeParts = scheduledTimeStr.split(':');
+        if (timeParts.length < 2) continue;
+        final hour = int.tryParse(timeParts[0]) ?? 0;
+        final minute = int.tryParse(timeParts[1]) ?? 0;
 
         final taskStart = DateTime(now.year, now.month, now.day, hour, minute);
 
-        // Skip past takes (keep behavior consistent with Home generator)
+        // Skip past takes
         if (taskStart.isBefore(now)) continue;
-
-        // Only create task if take status is pending
-        final status =
-            (t < takeStatuses.length && takeStatuses[t]['status'] != null)
-            ? takeStatuses[t]['status'] as String
-            : 'pending';
-        if (status != 'pending') continue;
 
         // Avoid duplicates: check existing medical_tasks
         final existing = await _firestore
             .collection('medical_tasks')
-            .where('task_source', isEqualTo: 'medication')
+            .where('task_source', isEqualTo: 'Medication')
             .where('medication_id', isEqualTo: medicationId)
-            .where('take_index', isEqualTo: t)
+            .where('take_index', isEqualTo: takeNumber - 1) // 0-based index
             .where('task_start', isEqualTo: Timestamp.fromDate(taskStart))
             .get();
         if (existing.docs.isNotEmpty) continue;
@@ -311,28 +399,30 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         final taskTitle =
             '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
-        final taskDesc = 'Medication scheduled for $elderlyName at $scheduled';
+        final taskDesc =
+            'Medication scheduled for $elderlyName at ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 
-        await _firestore.collection('medical_tasks').add({
+        final taskDocRef = _firestore.collection('medical_tasks').doc();
+        await taskDocRef.set({
+          'task_id': taskDocRef.id,
+          'medication_id': medicationId,
+          'elderly_id': elderlyId,
           'task_title': taskTitle,
           'task_description': taskDesc,
-          'task_category': 'Medication',
           'task_start': taskStart,
-          'task_end_date': null,
-          'task_frequency': 'Once',
-          'task_status': 'Pending',
-          'task_source': 'medication',
-          'medication_id': medicationId,
-          'take_index': t,
-          'elderly_id': elderlyId,
-          'created_at': FieldValue.serverTimestamp(),
+          'task_status': 'pending',
+          'take_index': takeNumber - 1, // 0-based index
+          'task_source': 'Medication',
+          'task_frequency': 'Daily',
+          'task_category': 'Medication',
+          'days': 1,
         });
 
         // schedule notification 5 minutes before (only if in future)
         final notifyTime = taskStart.subtract(Duration(minutes: 5));
         if (notifyTime.isAfter(DateTime.now())) {
           NotificationService.scheduleTaskNotification(
-            id: ('${medicationId}_$t').hashCode,
+            id: ('${medicationId}_${takeNumber - 1}').hashCode,
             title: 'Medication Reminder',
             body: '$medName for $elderlyName in 5 minutes',
             dateTime: notifyTime,
@@ -360,11 +450,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       );
       print('Filtering assignments for house: ${widget.houseId}');
 
-      // First get the nurse's ID from users collection
-      // Split the full name into first and last name
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) {
-        print('Invalid nurse name format: ${widget.nurseName}');
+      // Get the nurse's ID using the existing method
+      final nurseId = await _getNurseId();
+      if (nurseId == null) {
+        print('Could not find nurse ID for: ${widget.nurseName}');
         if (!mounted) return;
         setState(() {
           _elderlyList = [];
@@ -373,27 +462,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         return;
       }
 
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        print('No nurse found with name: $firstName $lastName');
-        if (!mounted) return;
-        setState(() {
-          _elderlyList = [];
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final nurseId = userQuery.docs.first.id;
       print('Found nurse ID: $nurseId');
 
       // First check if nurse is assigned to work this shift on this day
@@ -601,11 +669,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           .where('day', isEqualTo: currentDay)
           .get();
 
-      // Limit to current shift/day and upcoming status to reduce transferred data
+      // Fetch medications and takes in parallel to reduce latency.
       final medicationsFuture = _firestore
           .collection('medications')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('status', isEqualTo: 'upcoming')
+          .where('status', isEqualTo: 'active')
           .get();
 
       final results = await Future.wait([nurseAssignFuture, medicationsFuture]);
@@ -639,10 +707,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         return;
       }
 
-      // Filter meds by assigned elderly, shift and working day, but don't fetch
-      // elderly doc per-med; instead collect unique elderly IDs and fetch once in chunks.
+      // Filter medications by assigned elderly, shift and working day
       final medsToInclude = <Map<String, dynamic>>[];
       final elderlyIdsNeeded = <String>{};
+      final medicationIds = <String>[];
 
       for (final doc in medicationsQuery.docs) {
         final data = doc.data() as Map<String, dynamic>;
@@ -653,12 +721,61 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         final medicationShift = data['shift'] as String?;
         final workingDays = data['working_days'] as List?;
+        final repeatInterval = data['repeat_interval'] as String?;
 
-        if (medicationShift == currentShift &&
-            workingDays != null &&
-            workingDays.contains(currentDay)) {
+        // Check if medication is scheduled for current shift and day
+        bool isScheduledForToday = false;
+        if (medicationShift == currentShift) {
+          if (repeatInterval == 'Daily' || workingDays == null) {
+            // Daily medications or null working_days means all days
+            isScheduledForToday = true;
+          } else if (workingDays.contains(currentDay)) {
+            // Once medications with specific working days
+            isScheduledForToday = true;
+          }
+        }
+
+        if (isScheduledForToday) {
           medsToInclude.add({'id': doc.id, ...data});
           elderlyIdsNeeded.add(elderlyId);
+          medicationIds.add(doc.id);
+        }
+      }
+
+      if (medicationIds.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _upcomingMedications = [];
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
+      // Fetch Medication_Takes for these medications
+      final takesQuery = await _firestore
+          .collection('medication_takes')
+          .where(
+            'medication_id',
+            whereIn: medicationIds.take(10).toList(),
+          ) // Limit to 10 for whereIn
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      // Group takes by medication_id and filter by shift time
+      final takesByMedication = <String, List<Map<String, dynamic>>>{};
+      for (final takeDoc in takesQuery.docs) {
+        final takeData = takeDoc.data();
+        final medId = takeData['medication_id'] as String;
+
+        // Check if take's scheduled time falls within current shift
+        final scheduledTimeStr = takeData['scheduled_time'] as String?;
+        if (scheduledTimeStr != null &&
+            _isTimeInCurrentShift(scheduledTimeStr)) {
+          if (!takesByMedication.containsKey(medId)) {
+            takesByMedication[medId] = [];
+          }
+          takesByMedication[medId]!.add({'id': takeDoc.id, ...takeData});
         }
       }
 
@@ -686,11 +803,51 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       final medications = <Map<String, dynamic>>[];
       for (final m in medsToInclude) {
+        final medicationId = m['id'] as String;
         final elderlyId = m['elderly_id'] as String;
+        final allTakes = takesByMedication[medicationId] ?? [];
+
+        // Filter out completed takes - only show active takes
+        final activeTakes = allTakes
+            .where((take) => take['status'] != 'complete')
+            .toList();
+
+        // Skip medications that have no active takes
+        if (activeTakes.isEmpty) continue;
+
+        // Convert to old format for compatibility with existing UI
+        final intakeTimes = activeTakes
+            .map((t) => t['scheduled_time'] as String)
+            .toList();
+        final takeStatuses = activeTakes
+            .map(
+              (t) => {
+                'take_number': t['take_number'],
+                'scheduled_time': t['scheduled_time'],
+                'status': t['status'],
+                'completed_at': t['completed_at'],
+                'completed_by': t['completed_by'],
+              },
+            )
+            .toList();
+
         medications.add({
-          'id': m['id'],
+          'id': medicationId,
           'elderly_name': elderlyNames[elderlyId] ?? 'Unknown',
-          ...m,
+          'medication_name': m['medication_name'],
+          'dosage': m['dosage'],
+          'repeat_interval': m['repeat_interval'],
+          'shift': m['shift'],
+          'working_days': m['working_days'],
+          'status': m['status'],
+          'elderly_id': elderlyId,
+          'house_id': m['house_id'],
+          'created_nurse_id': m['created_nurse_id'],
+          'number_of_intakes': activeTakes.length,
+          'intake_times': intakeTimes,
+          'take_statuses': takeStatuses,
+          'created_at': m['created_at'],
+          'updated_at': m['updated_at'],
         });
       }
 
@@ -703,6 +860,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           _upcomingMedications = medications;
           _isLoading = false;
         });
+        widget.onCountChanged?.call(_getTotalTakeCount());
       }
     } catch (e) {
       print('Error loading upcoming medications: $e');
@@ -758,6 +916,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           contentPadding: EdgeInsets.all(20),
           title: Column(
             mainAxisSize: MainAxisSize.min,
@@ -787,245 +946,384 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // Elderly Selection
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          inputDecorationTheme: InputDecorationTheme(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF00588E)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.person,
+                              color: Color(0xFF00588E),
+                              size: 20,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                            SizedBox(width: 8),
+                            Text(
+                              'Select Elderly',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Color(0xFF00588E),
-                                width: 1.5,
                               ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 117, 178, 215),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
                               ),
                             ),
-                            suffixIconColor: Color(0xFF00588E),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select elderly',
+                              enableSearch: true,
+                              enableFilter: true,
+                              requestFocusOnTap: true,
+                              initialSelection: selectedElderlyTemp,
+                              dropdownMenuEntries: _elderlyList.map((elderly) {
+                                return DropdownMenuEntry<String>(
+                                  value: elderly['id']!,
+                                  label: elderly['name'] ?? '',
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedElderlyTemp = value;
+                                });
+                              },
+                            ),
                           ),
                         ),
-                        child: DropdownMenu<String>(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          menuHeight: 200.0,
-                          hintText: 'Select elderly',
-                          enableSearch: true,
-                          enableFilter: true,
-                          requestFocusOnTap: true,
-                          initialSelection: selectedElderlyTemp,
-                          dropdownMenuEntries: _elderlyList.map((elderly) {
-                            return DropdownMenuEntry<String>(
-                              value: elderly['id']!,
-                              label: elderly['name'] ?? '',
-                            );
-                          }).toList(),
-                          onSelected: (String? value) {
-                            setDialogState(() {
-                              selectedElderlyTemp = value;
-                            });
-                          },
-                        ),
-                      ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Medication Name
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          inputDecorationTheme: InputDecorationTheme(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF00588E)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.medical_services,
+                              color: Color(0xFF00588E),
+                              size: 20,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                            SizedBox(width: 8),
+                            Text(
+                              'Medication Name',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Color(0xFF00588E),
-                                width: 1.5,
                               ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
                               ),
                             ),
-                            suffixIconColor: Color(0xFF00588E),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select medication',
+                              enableSearch: true,
+                              enableFilter: true,
+                              requestFocusOnTap: true,
+                              initialSelection: selectedMedicationTemp,
+                              dropdownMenuEntries: commonMedications.map((
+                                medication,
+                              ) {
+                                return DropdownMenuEntry<String>(
+                                  value: medication,
+                                  label: medication,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedMedicationTemp = value;
+                                });
+                              },
+                            ),
                           ),
                         ),
-                        child: DropdownMenu<String>(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          menuHeight: 200.0,
-                          hintText: 'Select medication',
-                          enableSearch: true,
-                          enableFilter: true,
-                          requestFocusOnTap: true,
-                          initialSelection: selectedMedicationTemp,
-                          dropdownMenuEntries: commonMedications.map((
-                            medication,
-                          ) {
-                            return DropdownMenuEntry<String>(
-                              value: medication,
-                              label: medication,
-                            );
-                          }).toList(),
-                          onSelected: (String? value) {
-                            setDialogState(() {
-                              selectedMedicationTemp = value;
-                            });
-                          },
-                        ),
-                      ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Dosage
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          inputDecorationTheme: InputDecorationTheme(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF00588E)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.medication,
+                              color: Color(0xFF00588E),
+                              size: 20,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                            SizedBox(width: 8),
+                            Text(
+                              'Dosage',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Color(0xFF00588E),
-                                width: 1.5,
                               ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
                               ),
                             ),
-                            suffixIconColor: Color(0xFF00588E),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select dosage',
+                              enableSearch: true,
+                              enableFilter: true,
+                              requestFocusOnTap: true,
+                              initialSelection: selectedDosageTemp,
+                              dropdownMenuEntries: commonDosages.map((dosage) {
+                                return DropdownMenuEntry<String>(
+                                  value: dosage,
+                                  label: dosage,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedDosageTemp = value;
+                                });
+                              },
+                            ),
                           ),
                         ),
-                        child: DropdownMenu<String>(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          menuHeight: 200.0,
-                          hintText: 'Select dosage',
-                          enableSearch: true,
-                          enableFilter: true,
-                          requestFocusOnTap: true,
-                          initialSelection: selectedDosageTemp,
-                          dropdownMenuEntries: commonDosages.map((dosage) {
-                            return DropdownMenuEntry<String>(
-                              value: dosage,
-                              label: dosage,
-                            );
-                          }).toList(),
-                          onSelected: (String? value) {
-                            setDialogState(() {
-                              selectedDosageTemp = value;
-                            });
-                          },
-                        ),
-                      ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Repeat Interval
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          inputDecorationTheme: InputDecorationTheme(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF00588E)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.repeat,
+                              color: Color(0xFF00588E),
+                              size: 20,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                            SizedBox(width: 8),
+                            Text(
+                              'Repeat Interval',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Color(0xFF00588E),
-                                width: 1.5,
                               ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
                               ),
                             ),
-                            suffixIconColor: Color(0xFF00588E),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select repeat interval',
+                              initialSelection: selectedIntervalTemp,
+                              dropdownMenuEntries: repeatIntervals.map((
+                                interval,
+                              ) {
+                                return DropdownMenuEntry<String>(
+                                  value: interval,
+                                  label: interval,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedIntervalTemp = value;
+                                });
+                              },
+                            ),
                           ),
                         ),
-                        child: DropdownMenu<String>(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          menuHeight: 200.0,
-                          hintText: 'Select repeat interval',
-                          initialSelection: selectedIntervalTemp,
-                          dropdownMenuEntries: repeatIntervals.map((interval) {
-                            return DropdownMenuEntry<String>(
-                              value: interval,
-                              label: interval,
-                            );
-                          }).toList(),
-                          onSelected: (String? value) {
-                            setDialogState(() {
-                              selectedIntervalTemp = value;
-                            });
-                          },
-                        ),
-                      ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Number of Intakes
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: Theme(
-                        data: Theme.of(context).copyWith(
-                          inputDecorationTheme: InputDecorationTheme(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF00588E)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.format_list_numbered,
+                              color: Color(0xFF00588E),
+                              size: 20,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
+                            SizedBox(width: 8),
+                            Text(
+                              'Number of Intakes',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                                 color: Color(0xFF00588E),
-                                width: 1.5,
                               ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(
-                                color: Color(0xFF00588E),
-                                width: 2,
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
                               ),
                             ),
-                            suffixIconColor: Color(0xFF00588E),
+                            child: DropdownMenu<int>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Number of medication intakes',
+                              initialSelection: numberOfIntakesTemp,
+                              dropdownMenuEntries: intakeOptions.map((
+                                intakeCount,
+                              ) {
+                                return DropdownMenuEntry<int>(
+                                  value: intakeCount,
+                                  label:
+                                      '$intakeCount intake${intakeCount > 1 ? 's' : ''}',
+                                );
+                              }).toList(),
+                              onSelected: (int? value) {
+                                setDialogState(() {
+                                  numberOfIntakesTemp = value;
+                                  // Initialize intake times list
+                                  if (value != null) {
+                                    intakeTimes = List.filled(value, null);
+                                  } else {
+                                    intakeTimes = [];
+                                  }
+                                });
+                              },
+                            ),
                           ),
                         ),
-                        child: DropdownMenu<int>(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          menuHeight: 200.0,
-                          hintText: 'Number of medication intakes',
-                          initialSelection: numberOfIntakesTemp,
-                          dropdownMenuEntries: intakeOptions.map((intakeCount) {
-                            return DropdownMenuEntry<int>(
-                              value: intakeCount,
-                              label:
-                                  '$intakeCount intake${intakeCount > 1 ? 's' : ''}',
-                            );
-                          }).toList(),
-                          onSelected: (int? value) {
-                            setDialogState(() {
-                              numberOfIntakesTemp = value;
-                              // Initialize intake times list
-                              if (value != null) {
-                                intakeTimes = List.filled(value, null);
-                              } else {
-                                intakeTimes = [];
-                              }
-                            });
-                          },
-                        ),
-                      ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
@@ -1069,10 +1367,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                       vertical: 12,
                                     ),
                                     decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: Color(0xFF00588E),
-                                      ),
-                                      borderRadius: BorderRadius.circular(4),
+                                      color: Color.fromARGB(255, 162, 219, 255),
+                                      border: Border.all(color: Colors.white),
+                                      borderRadius: BorderRadius.circular(30),
                                     ),
                                     child: Row(
                                       mainAxisAlignment:
@@ -1116,59 +1413,50 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 selectedIntervalTemp != null &&
                                 numberOfIntakesTemp != null &&
                                 intakeTimes.every((time) => time != null)) {
-                              try {
-                                // Show loading indicator
-                                showDialog(
-                                  context: context,
-                                  barrierDismissible: false,
-                                  builder: (context) => Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
+                              // Validate that intake times are in chronological order
+                              bool timesAreValid = true;
+                              String? validationMessage;
 
-                                // Save medication to database
-                                await _saveMedicationToDatabase(
-                                  elderlyId: selectedElderlyTemp!,
-                                  medicationName: selectedMedicationTemp!,
-                                  dosage: selectedDosageTemp!,
-                                  repeatInterval: selectedIntervalTemp!,
-                                  numberOfIntakes: numberOfIntakesTemp!,
-                                  intakeTimes: intakeTimes.cast<TimeOfDay>(),
-                                );
+                              final validTimes = intakeTimes.cast<TimeOfDay>();
+                              for (int i = 1; i < validTimes.length; i++) {
+                                final previousTime = validTimes[i - 1];
+                                final currentTime = validTimes[i];
 
-                                setState(() {
-                                  _selectedElderly = selectedElderlyTemp;
-                                });
+                                // Convert to minutes since midnight for comparison
+                                final previousMinutes =
+                                    previousTime.hour * 60 +
+                                    previousTime.minute;
+                                final currentMinutes =
+                                    currentTime.hour * 60 + currentTime.minute;
 
-                                // Close loading dialog
-                                Navigator.of(context).pop();
+                                if (currentMinutes <= previousMinutes) {
+                                  timesAreValid = false;
+                                  validationMessage =
+                                      '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
+                                  break;
+                                }
+                              }
 
-                                // Close medication dialog
-                                Navigator.of(context).pop();
-
-                                // Show success message
+                              if (!timesAreValid) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text(
-                                      'Medication added successfully',
-                                    ),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              } catch (e) {
-                                // Close loading dialog if it's open
-                                Navigator.of(context).pop();
-
-                                // Show error message
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Error adding medication: ${e.toString()}',
-                                    ),
+                                    content: Text(validationMessage!),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
+                                return;
                               }
+
+                              // Show confirmation dialog instead of directly saving
+                              showMedicationConfirmation(
+                                context,
+                                selectedElderlyTemp!,
+                                selectedMedicationTemp!,
+                                selectedDosageTemp!,
+                                selectedIntervalTemp!,
+                                numberOfIntakesTemp!,
+                                intakeTimes.cast<TimeOfDay>(),
+                              );
                             } else {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -1266,6 +1554,307 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     );
   }
 
+  void showMedicationConfirmation(
+    BuildContext parentContext,
+    String elderlyId,
+    String medicationName,
+    String dosage,
+    String repeatInterval,
+    int numberOfIntakes,
+    List<TimeOfDay> intakeTimes,
+  ) {
+    bool isChecked = false;
+    // Prepare a future to fetch the current nurse's user document for display
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final Future<DocumentSnapshot?> nurseFuture = currentUser != null
+        ? FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUser.uid)
+              .get()
+        : Future.value(null);
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          // add a small left-top exit icon and center the title
+          titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top-left X/exit icon only (larger tappable area)
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                iconSize: 28,
+                icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                onPressed: () => Navigator.pop(context),
+                tooltip: 'Close',
+              ),
+              // consume remaining space so header moves to next row (in content)
+              const Expanded(child: SizedBox()),
+              const SizedBox(width: 36),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header moved to content so it sits under the exit icon
+              const Center(
+                child: Text(
+                  'Confirmation Form',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF00588E),
+                    fontSize: 26,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Divider(color: Color(0xFF00588E), thickness: 2),
+              const SizedBox(height: 12),
+              const Text(
+                'You are about to add a new medication to the system. '
+                'Please verify all details are correct before proceeding. '
+                'This action will create medication tasks and cannot be easily undone.',
+                textAlign: TextAlign.justify,
+              ),
+              const SizedBox(height: 14),
+              // Reporting nurse label (fetched asynchronously) - placed above the checkbox
+              FutureBuilder<DocumentSnapshot?>(
+                future: nurseFuture,
+                builder: (context, snapshot) {
+                  String nurseName = '-';
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8.0),
+                      child: SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  }
+                  if (snapshot.hasData &&
+                      snapshot.data != null &&
+                      snapshot.data!.exists) {
+                    final data = snapshot.data!.data() as Map<String, dynamic>?;
+                    if (data != null) {
+                      final f = data['user_fname'] ?? '';
+                      final l = data['user_lname'] ?? '';
+                      nurseName = ('$f $l').trim();
+                    }
+                  }
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.person,
+                                size: 25,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              // Make label colored and value black, and allow wrapping
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Reporting Nurse: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: nurseName,
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.start,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Checkbox(
+                    value: isChecked,
+                    onChanged: (val) =>
+                        setState(() => isChecked = val ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    activeColor: const Color(0xFF00588E),
+                    checkColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFF00588E), width: 2),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'I acknowledge that the medication information provided is accurate and complete.',
+                      textAlign: TextAlign.justify,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Submit button (responsive)
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00588E),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          minimumSize: const Size.fromHeight(44),
+                        ),
+                        onPressed: isChecked
+                            ? () async {
+                                // Close confirmation dialog
+                                Navigator.of(context).pop();
+
+                                // Check if widget is still mounted
+                                if (!mounted) return;
+
+                                // Show loading indicator
+                                showDialog(
+                                  context: parentContext,
+                                  barrierDismissible: false,
+                                  builder: (context) => Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+
+                                try {
+                                  // Save medication to database
+                                  await _saveMedicationToDatabase(
+                                    elderlyId: elderlyId,
+                                    medicationName: medicationName,
+                                    dosage: dosage,
+                                    repeatInterval: repeatInterval,
+                                    numberOfIntakes: numberOfIntakes,
+                                    intakeTimes: intakeTimes,
+                                  );
+
+                                  // Check if widget is still mounted
+                                  if (!mounted) return;
+
+                                  // Close loading dialog
+                                  Navigator.of(parentContext).pop();
+
+                                  // Show success message
+                                  ScaffoldMessenger.of(
+                                    parentContext,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Medication added successfully',
+                                      ),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+
+                                  // Close medication dialog
+                                  Navigator.of(parentContext).pop();
+                                } catch (e) {
+                                  // Check if widget is still mounted
+                                  if (!mounted) return;
+
+                                  // Close loading dialog if it's open
+                                  Navigator.of(parentContext).pop();
+
+                                  // Show error message
+                                  ScaffoldMessenger.of(
+                                    parentContext,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error adding medication: ${e.toString()}',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            : null,
+                        child: const Text(
+                          'Submit',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 24),
+
+                  // Cancel button (responsive)
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          minimumSize: const Size.fromHeight(44),
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _getOrdinal(int number) {
     if (number >= 11 && number <= 13) {
       return '${number}th';
@@ -1289,6 +1878,15 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     });
     // Also check immediately
     _checkForMissedMedications();
+  }
+
+  void _startAutoRefreshTimer() {
+    // Auto-refresh medication data every 45 seconds to ensure data is always updated
+    _autoRefreshTimer = Timer.periodic(Duration(seconds: 45), (timer) {
+      if (mounted) {
+        _loadUpcomingMedications(forceRefresh: true);
+      }
+    });
   }
 
   Future<void> _checkForMissedMedications() async {
@@ -1340,11 +1938,21 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         final medicationShift = data['shift'] as String?;
         final workingDays = data['working_days'] as List?;
+        final repeatInterval = data['repeat_interval'] as String?;
 
         // Only check medications for current shift and current day
-        if (medicationShift == currentShift &&
-            workingDays != null &&
-            workingDays.contains(currentDay)) {
+        bool shouldCheckMedication = false;
+        if (medicationShift == currentShift) {
+          if (repeatInterval == 'Daily' || workingDays == null) {
+            // Daily medications or null working_days means all days
+            shouldCheckMedication = true;
+          } else if (workingDays.contains(currentDay)) {
+            // Once medications with specific working days
+            shouldCheckMedication = true;
+          }
+        }
+
+        if (shouldCheckMedication) {
           final takeStatuses = data['take_statuses'] as List<dynamic>? ?? [];
           bool hasUpdates = false;
 
@@ -1352,6 +1960,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             final take = takeStatuses[i] as Map<String, dynamic>;
             final status = take['status'] as String;
             final scheduledTimeStr = take['scheduled_time'] as String;
+
+            // Only check takes that are scheduled within the current shift
+            if (!_isTimeInCurrentShift(scheduledTimeStr)) continue;
 
             // Only check pending medications
             if (status == 'pending') {
@@ -1403,7 +2014,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       }
 
       // Refresh the UI if there were any updates
-      await _loadUpcomingMedications();
+      await _loadUpcomingMedications(forceRefresh: true);
     } catch (e) {
       print('Error checking for missed medications: $e');
     }
@@ -1468,9 +2079,21 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         'take_number': takeNumber,
         'take_ordinal': _getOrdinal(takeNumber),
         'scheduled_time': scheduledTime,
-        'timestamp': FieldValue.serverTimestamp(),
+        'timestamp': Timestamp.fromDate(DateTime.now()),
         'shift': _getCurrentShift(),
         'day': _getSelectedDay(),
+
+        // 🆕 BACKWARD COMPATIBILITY FIELDS
+        // Keep old field names for existing code that might read logs
+        'created_by': nurseId, // Maps to nurse_id
+        'created_nurse_id': nurseId, // Explicit nurse ID
+        'created_nurse_name': widget.nurseName, // Explicit nurse name
+        // Medication details (normalized)
+        'number_of_intakes': medicationData['number_of_intakes'],
+        'intake_times': medicationData['intake_times'],
+        'working_days':
+            medicationData['working_days'], // null for daily, array for specific
+
         if (oldData != null) 'old_data': oldData,
         if (newData != null) 'new_data': newData,
       };
@@ -1479,6 +2102,70 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       print('Medication activity logged: $action');
     } catch (e) {
       print('Error logging medication activity: $e');
+    }
+  }
+
+  Future<void> _logMedicationActivityNew({
+    required String action,
+    required String medicationId,
+    required String elderlyId,
+    required String nurseId,
+    required String houseId,
+    required String shift,
+    required String medicationName,
+    required String dosage,
+    required String repeatInterval,
+    int? takeNumber,
+    String? scheduledTime,
+  }) async {
+    try {
+      // Get elderly name
+      final elderlyDoc = await _firestore
+          .collection('elderly')
+          .doc(elderlyId)
+          .get();
+
+      String elderlyName = 'Unknown';
+      if (elderlyDoc.exists) {
+        final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
+        elderlyName =
+            '${elderlyData['elderly_fname']} ${elderlyData['elderly_lname']}'
+                .trim();
+      }
+
+      // Get nurse name
+      final nurseDoc = await _firestore.collection('users').doc(nurseId).get();
+
+      String nurseName = 'Unknown';
+      if (nurseDoc.exists) {
+        final nurseData = nurseDoc.data() as Map<String, dynamic>;
+        nurseName = '${nurseData['user_fname']} ${nurseData['user_lname']}'
+            .trim();
+      }
+
+      final activityData = {
+        'elderly_id': elderlyId,
+        'medication_id': medicationId,
+        'nurse_id': nurseId,
+        'house_id': houseId,
+        'action': action,
+        'shift': shift,
+        'timestamp': Timestamp.fromDate(DateTime.now()),
+        'nurse_name': nurseName,
+        'elderly_name': elderlyName,
+        'medication_name': medicationName,
+        'dosage': dosage,
+        'repeat_interval': repeatInterval,
+        'take_number': takeNumber,
+        'take_ordinal': takeNumber != null ? _getOrdinal(takeNumber) : null,
+        'scheduled_time': scheduledTime,
+      };
+
+      await _firestore.collection('medication_activity_logs').add(activityData);
+
+      print('Medication activity logged to new table: $action');
+    } catch (e) {
+      print('Error logging medication activity to new table: $e');
     }
   }
 
@@ -1531,86 +2218,363 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     final List<String> repeatIntervals = ['Once', 'Daily'];
     final List<int> intakeOptions = [1, 2, 3, 4, 5, 6];
 
+    // Function to check if any changes were made
+    bool hasChanges() {
+      // Check medication name
+      if (selectedMedicationTemp != medicationData['medication_name'])
+        return true;
+
+      // Check dosage
+      if (selectedDosageTemp != medicationData['dosage']) return true;
+
+      // Check repeat interval
+      if (selectedIntervalTemp != medicationData['repeat_interval'])
+        return true;
+
+      // Check number of intakes
+      if (numberOfIntakesTemp != medicationData['number_of_intakes'])
+        return true;
+
+      // Check intake times
+      final existingTimes = List<String>.from(
+        medicationData['intake_times'] ?? [],
+      );
+      final currentTimes = intakeTimes
+          .where((time) => time != null)
+          .cast<TimeOfDay>()
+          .map(
+            (time) =>
+                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
+          )
+          .toList();
+
+      if (existingTimes.length != currentTimes.length) return true;
+
+      for (int i = 0; i < existingTimes.length; i++) {
+        if (existingTimes[i] != currentTimes[i]) return true;
+      }
+
+      return false;
+    }
+
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
+              backgroundColor: Colors.white,
               title: Text('Edit Medication'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // Medication Name
-                    DropdownButtonFormField<String>(
-                      value: selectedMedicationTemp,
-                      decoration: InputDecoration(labelText: 'Medication Name'),
-                      items: commonMedications.map((med) {
-                        return DropdownMenuItem(value: med, child: Text(med));
-                      }).toList(),
-                      onChanged: (value) {
-                        setDialogState(() => selectedMedicationTemp = value);
-                      },
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.medical_services,
+                              color: Color(0xFF00588E),
+                              size: 20,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Medication Name',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588E),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                            ),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select medication',
+                              enableSearch: true,
+                              enableFilter: true,
+                              requestFocusOnTap: true,
+                              initialSelection: selectedMedicationTemp,
+                              dropdownMenuEntries: commonMedications.map((
+                                medication,
+                              ) {
+                                return DropdownMenuEntry<String>(
+                                  value: medication,
+                                  label: medication,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedMedicationTemp = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Dosage
-                    DropdownButtonFormField<String>(
-                      value: selectedDosageTemp,
-                      decoration: InputDecoration(labelText: 'Dosage'),
-                      items: commonDosages.map((dosage) {
-                        return DropdownMenuItem(
-                          value: dosage,
-                          child: Text(dosage),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setDialogState(() => selectedDosageTemp = value);
-                      },
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.medication,
+                              color: Color(0xFF00588E),
+                              size: 20,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Dosage',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588E),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                            ),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select dosage',
+                              enableSearch: true,
+                              enableFilter: true,
+                              requestFocusOnTap: true,
+                              initialSelection: selectedDosageTemp,
+                              dropdownMenuEntries: commonDosages.map((dosage) {
+                                return DropdownMenuEntry<String>(
+                                  value: dosage,
+                                  label: dosage,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedDosageTemp = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Repeat Interval
-                    DropdownButtonFormField<String>(
-                      value: selectedIntervalTemp,
-                      decoration: InputDecoration(labelText: 'Repeat'),
-                      items: repeatIntervals.map((interval) {
-                        return DropdownMenuItem(
-                          value: interval,
-                          child: Text(interval),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setDialogState(() => selectedIntervalTemp = value);
-                      },
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.repeat,
+                              color: Color(0xFF00588E),
+                              size: 20,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Repeat Interval',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588E),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                            ),
+                            child: DropdownMenu<String>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Select repeat interval',
+                              initialSelection: selectedIntervalTemp,
+                              dropdownMenuEntries: repeatIntervals.map((
+                                interval,
+                              ) {
+                                return DropdownMenuEntry<String>(
+                                  value: interval,
+                                  label: interval,
+                                );
+                              }).toList(),
+                              onSelected: (String? value) {
+                                setDialogState(() {
+                                  selectedIntervalTemp = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
                     // Number of Intakes
-                    DropdownButtonFormField<int>(
-                      value: numberOfIntakesTemp,
-                      decoration: InputDecoration(
-                        labelText: 'Number of Intakes',
-                      ),
-                      items: intakeOptions.map((count) {
-                        return DropdownMenuItem(
-                          value: count,
-                          child: Text(count.toString()),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setDialogState(() {
-                          numberOfIntakesTemp = value;
-                          // Reset intake times when count changes
-                          intakeTimes = List.generate(
-                            6,
-                            (index) => index < (value ?? 0)
-                                ? (intakeTimes[index] ?? TimeOfDay.now())
-                                : null,
-                          );
-                        });
-                      },
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.format_list_numbered,
+                              color: Color(0xFF00588E),
+                              size: 20,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Number of Intakes',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588E),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width * 0.8,
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              inputDecorationTheme: InputDecorationTheme(
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                filled: true,
+                                fillColor: Color.fromARGB(255, 162, 219, 255),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide(color: Colors.white),
+                                ),
+                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                            ),
+                            child: DropdownMenu<int>(
+                              width: MediaQuery.of(context).size.width * 0.8,
+                              menuHeight: 200.0,
+                              hintText: 'Number of medication intakes',
+                              initialSelection: numberOfIntakesTemp,
+                              dropdownMenuEntries: intakeOptions.map((
+                                intakeCount,
+                              ) {
+                                return DropdownMenuEntry<int>(
+                                  value: intakeCount,
+                                  label:
+                                      '$intakeCount intake${intakeCount > 1 ? 's' : ''}',
+                                );
+                              }).toList(),
+                              onSelected: (int? value) {
+                                setDialogState(() {
+                                  numberOfIntakesTemp = value;
+                                  // Reset intake times when count changes
+                                  intakeTimes = List.generate(
+                                    6,
+                                    (index) => index < (value ?? 0)
+                                        ? (intakeTimes[index] ??
+                                              TimeOfDay.now())
+                                        : null,
+                                  );
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     SizedBox(height: 16),
 
@@ -1657,6 +2621,19 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                 ),
                 ElevatedButton(
                   onPressed: () async {
+                    // Check if any changes were made
+                    if (!hasChanges()) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'No changes detected. Please modify at least one field before updating.',
+                          ),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                      return;
+                    }
+
                     if (selectedMedicationTemp != null &&
                         selectedDosageTemp != null &&
                         selectedIntervalTemp != null &&
@@ -1679,87 +2656,57 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         return;
                       }
 
-                      try {
-                        // Store old data for logging
-                        final oldData = Map<String, dynamic>.from(
-                          medicationData,
-                        );
+                      // Validate that intake times are in chronological order
+                      bool timesAreValid = true;
+                      String? validationMessage;
 
-                        // Convert TimeOfDay to string format
-                        final intakeTimeStrings = intakeTimes
-                            .take(numberOfIntakesTemp!)
-                            .map(
-                              (time) =>
-                                  '${time!.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
-                            )
-                            .toList();
+                      final validTimes = intakeTimes
+                          .take(numberOfIntakesTemp!)
+                          .where((t) => t != null)
+                          .cast<TimeOfDay>()
+                          .toList();
+                      for (int i = 1; i < validTimes.length; i++) {
+                        final previousTime = validTimes[i - 1];
+                        final currentTime = validTimes[i];
 
-                        // Update take statuses to match new intake count
-                        List<Map<String, dynamic>> updatedTakeStatuses = [];
-                        final existingTakeStatuses =
-                            List<Map<String, dynamic>>.from(
-                              medicationData['take_statuses'] ?? [],
-                            );
+                        // Convert to minutes since midnight for comparison
+                        final previousMinutes =
+                            previousTime.hour * 60 + previousTime.minute;
+                        final currentMinutes =
+                            currentTime.hour * 60 + currentTime.minute;
 
-                        for (int i = 0; i < numberOfIntakesTemp!; i++) {
-                          if (i < existingTakeStatuses.length) {
-                            // Keep existing status but update scheduled time
-                            updatedTakeStatuses.add({
-                              ...existingTakeStatuses[i],
-                              'scheduled_time': intakeTimeStrings[i],
-                            });
-                          } else {
-                            // Add new take status
-                            updatedTakeStatuses.add({
-                              'take_number': i + 1,
-                              'status': 'pending',
-                              'scheduled_time': intakeTimeStrings[i],
-                              'completed_at': null,
-                              'completed_by': null,
-                            });
-                          }
+                        if (currentMinutes <= previousMinutes) {
+                          timesAreValid = false;
+                          validationMessage =
+                              '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
+                          break;
                         }
+                      }
 
-                        final newData = {
-                          'medication_name': selectedMedicationTemp,
-                          'dosage': selectedDosageTemp,
-                          'repeat_interval': selectedIntervalTemp,
-                          'number_of_intakes': numberOfIntakesTemp,
-                          'intake_times': intakeTimeStrings,
-                          'take_statuses': updatedTakeStatuses,
-                          'updated_at': FieldValue.serverTimestamp(),
-                        };
-
-                        // Update medication
-                        await _firestore
-                            .collection('medications')
-                            .doc(medicationId)
-                            .update(newData);
-
-                        // Log the activity
-                        await _logMedicationActivity(
-                          action: 'edit_medication',
-                          medicationId: medicationId,
-                          medicationData: medicationData,
-                          takeNumber: 0, // 0 for whole medication edit
-                          oldData: oldData,
-                          newData: newData,
-                        );
-
-                        Navigator.of(dialogContext).pop();
-                        await _loadUpcomingMedications();
-
+                      if (!timesAreValid) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Medication updated successfully'),
+                            content: Text(validationMessage!),
+                            backgroundColor: Colors.red,
                           ),
                         );
-                      } catch (e) {
-                        print('Error updating medication: $e');
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Error updating medication')),
-                        );
+                        return;
                       }
+
+                      showEditMedicationConfirmation(
+                        dialogContext,
+                        medicationId,
+                        medicationData,
+                        selectedMedicationTemp!,
+                        selectedDosageTemp!,
+                        selectedIntervalTemp!,
+                        numberOfIntakesTemp!,
+                        intakeTimes
+                            .take(numberOfIntakesTemp!)
+                            .where((t) => t != null)
+                            .cast<TimeOfDay>()
+                            .toList(),
+                      );
                     }
                   },
                   child: Text('Update'),
@@ -1772,358 +2719,863 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     );
   }
 
+  Future<void> _updateMedicationInDatabase(
+    String medicationId,
+    Map<String, dynamic> medicationData,
+    String selectedMedicationTemp,
+    String selectedDosageTemp,
+    String selectedIntervalTemp,
+    int numberOfIntakesTemp,
+    List<TimeOfDay> intakeTimes,
+  ) async {
+    try {
+      final oldData = Map<String, dynamic>.from(medicationData);
+      final intakeTimeStrings = intakeTimes
+          .map(
+            (time) =>
+                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
+          )
+          .toList();
+      List<Map<String, dynamic>> updatedTakeStatuses = [];
+      final existingTakeStatuses = List<Map<String, dynamic>>.from(
+        medicationData['take_statuses'] ?? [],
+      );
+      for (int i = 0; i < numberOfIntakesTemp; i++) {
+        if (i < existingTakeStatuses.length) {
+          updatedTakeStatuses.add({
+            ...existingTakeStatuses[i],
+            'scheduled_time': intakeTimeStrings[i],
+          });
+        } else {
+          updatedTakeStatuses.add({
+            'take_number': i + 1,
+            'status': 'pending',
+            'scheduled_time': intakeTimeStrings[i],
+            'completed_at': null,
+            'completed_by': null,
+          });
+        }
+      }
+      final newData = {
+        'medication_name': selectedMedicationTemp,
+        'dosage': selectedDosageTemp,
+        'repeat_interval': selectedIntervalTemp,
+        'number_of_intakes': numberOfIntakesTemp,
+        'intake_times': intakeTimeStrings,
+        'take_statuses': updatedTakeStatuses,
+        'updated_at': Timestamp.fromDate(DateTime.now()),
+      };
+      await _firestore
+          .collection('medications')
+          .doc(medicationId)
+          .update(newData);
+
+      // Update the medication_takes collection with new scheduled times
+      final takesQuery = await _firestore
+          .collection('medication_takes')
+          .where('medication_id', isEqualTo: medicationId)
+          .get();
+
+      final batch = _firestore.batch();
+      for (final takeDoc in takesQuery.docs) {
+        final takeData = takeDoc.data();
+        final takeNumber = takeData['take_number'] as int;
+
+        if (takeNumber <= numberOfIntakesTemp) {
+          // Update existing take with new scheduled time
+          batch.update(takeDoc.reference, {
+            'scheduled_time': intakeTimeStrings[takeNumber - 1],
+            'updated_at': Timestamp.fromDate(DateTime.now()),
+          });
+        } else {
+          // Mark extra takes as cancelled since number of intakes was reduced
+          batch.update(takeDoc.reference, {
+            'status': 'cancelled',
+            'updated_at': Timestamp.fromDate(DateTime.now()),
+          });
+        }
+      }
+
+      // If there are fewer existing takes than new number, add new takes
+      if (takesQuery.docs.length < numberOfIntakesTemp) {
+        for (int i = takesQuery.docs.length; i < numberOfIntakesTemp; i++) {
+          final takeDocRef = _firestore.collection('medication_takes').doc();
+          batch.set(takeDocRef, {
+            'medication_id': medicationId,
+            'take_number': i + 1,
+            'scheduled_time': intakeTimeStrings[i],
+            'status': 'pending',
+            'created_at': Timestamp.fromDate(DateTime.now()),
+            'updated_at': Timestamp.fromDate(DateTime.now()),
+          });
+        }
+      }
+
+      // Commit the batch update
+      await batch.commit();
+
+      await _logMedicationActivity(
+        action: 'edit_medication',
+        medicationId: medicationId,
+        medicationData: medicationData,
+        takeNumber: 0,
+        oldData: oldData,
+        newData: newData,
+      );
+      await _loadUpcomingMedications(forceRefresh: true);
+
+      // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
+      _autoRefreshTimer?.cancel();
+      _startAutoRefreshTimer();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Medication updated successfully')),
+      );
+    } catch (e) {
+      print('Error updating medication: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error updating medication')));
+    }
+  }
+
+  void showEditMedicationConfirmation(
+    BuildContext parentContext,
+    String medicationId,
+    Map<String, dynamic> medicationData,
+    String medicationName,
+    String dosage,
+    String repeatInterval,
+    int numberOfIntakes,
+    List<TimeOfDay> intakeTimes,
+  ) {
+    bool isChecked = false;
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final Future<DocumentSnapshot?> nurseFuture = currentUser != null
+        ? FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUser.uid)
+              .get()
+        : Future.value(null);
+    showDialog(
+      context: parentContext,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          // add a small left-top exit icon and center the title
+          titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top-left X/exit icon only (larger tappable area)
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                iconSize: 28,
+                icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                onPressed: () => Navigator.pop(context),
+                tooltip: 'Close',
+              ),
+              // consume remaining space so header moves to next row (in content)
+              const Expanded(child: SizedBox()),
+              const SizedBox(width: 36),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header moved to content so it sits under the exit icon
+                const Center(
+                  child: Text(
+                    'Confirmation Form',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF00588E),
+                      fontSize: 26,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Divider(color: Color(0xFF00588E), thickness: 2),
+                const SizedBox(height: 12),
+                const Text(
+                  'You are about to update this medication in the system. '
+                  'Please verify all details are correct before proceeding. '
+                  'This action will update medication tasks and cannot be easily undone.',
+                  textAlign: TextAlign.justify,
+                ),
+                const SizedBox(height: 14),
+                // Reporting nurse label (fetched asynchronously) - placed above the checkbox
+                FutureBuilder(
+                  future: nurseFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      );
+                    }
+                    final nurseDoc = snapshot.data;
+                    String nurseName = 'Unknown';
+                    if (nurseDoc != null && nurseDoc.exists) {
+                      final nurseData = nurseDoc.data() as Map<String, dynamic>;
+                      nurseName =
+                          '${nurseData['user_fname']} ${nurseData['user_lname']}';
+                    }
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.person,
+                                  size: 25,
+                                  color: Color(0xFF00588E),
+                                ),
+                                const SizedBox(width: 8),
+                                // Make label colored and value black, and allow wrapping
+                                Expanded(
+                                  child: Text.rich(
+                                    TextSpan(
+                                      children: [
+                                        TextSpan(
+                                          text: 'Reporting Nurse: ',
+                                          style: const TextStyle(
+                                            fontFamily: 'Poppins',
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                            color: Color(0xFF00588E),
+                                          ),
+                                        ),
+                                        TextSpan(
+                                          text: nurseName,
+                                          style: const TextStyle(
+                                            fontFamily: 'Poppins',
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.start,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                // Medication Details Section
+                Container(
+                  margin: const EdgeInsets.only(top: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F8FF),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF00588E),
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Medication Name
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.medication,
+                            size: 20,
+                            color: Color(0xFF00588E),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Medication: ',
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: medicationName,
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Dosage
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.scale,
+                            size: 20,
+                            color: Color(0xFF00588E),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Dosage: ',
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: dosage,
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Repeat Interval
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.repeat,
+                            size: 20,
+                            color: Color(0xFF00588E),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Repeat Interval: ',
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: repeatInterval,
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Number of Intakes
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.format_list_numbered,
+                            size: 20,
+                            color: Color(0xFF00588E),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Number of Intakes: ',
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: numberOfIntakes.toString(),
+                                    style: const TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Intake Times
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.access_time,
+                            size: 20,
+                            color: Color(0xFF00588E),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Intake Times:',
+                                  style: const TextStyle(
+                                    fontFamily: 'Poppins',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                    color: Color(0xFF00588E),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  children: intakeTimes.map((time) {
+                                    final formattedTime =
+                                        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(
+                                          color: const Color(0xFF00588E),
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        formattedTime,
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 12,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Checkbox(
+                      value: isChecked,
+                      onChanged: (val) =>
+                          setState(() => isChecked = val ?? false),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      activeColor: const Color(0xFF00588E),
+                      checkColor: Colors.white,
+                      side: const BorderSide(
+                        color: Color(0xFF00588E),
+                        width: 2,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'I acknowledge that the medication information provided is accurate and complete.',
+                        textAlign: TextAlign.justify,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Submit button (responsive)
+                  Flexible(
+                    flex: 1,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: 160,
+                        minWidth: 100,
+                      ),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00588E),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          minimumSize: const Size.fromHeight(44),
+                        ),
+                        onPressed: isChecked
+                            ? () async {
+                                // Close confirmation dialog
+                                Navigator.of(context).pop();
+
+                                // Check if widget is still mounted
+                                if (!mounted) return;
+
+                                // Show loading indicator
+                                showDialog(
+                                  context: parentContext,
+                                  barrierDismissible: false,
+                                  builder: (context) => Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+
+                                try {
+                                  // Update medication in database
+                                  await _updateMedicationInDatabase(
+                                    medicationId,
+                                    medicationData,
+                                    medicationName,
+                                    dosage,
+                                    repeatInterval,
+                                    numberOfIntakes,
+                                    intakeTimes,
+                                  );
+
+                                  // Check if widget is still mounted
+                                  if (!mounted) return;
+
+                                  // Close loading dialog
+                                  Navigator.of(parentContext).pop();
+
+                                  // Show success message
+                                  ScaffoldMessenger.of(
+                                    parentContext,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Medication updated successfully',
+                                      ),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+
+                                  // Close edit dialog
+                                  Navigator.of(parentContext).pop();
+                                } catch (e) {
+                                  // Check if widget is still mounted
+                                  if (!mounted) return;
+
+                                  // Close loading dialog if it's open
+                                  Navigator.of(parentContext).pop();
+
+                                  // Show error message
+                                  ScaffoldMessenger.of(
+                                    parentContext,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error updating medication: ${e.toString()}',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            : null,
+                        child: const Text(
+                          'Update',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 12),
+
+                  // Cancel button (responsive)
+                  Flexible(
+                    flex: 1,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: 160,
+                        minWidth: 100,
+                      ),
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          minimumSize: const Size.fromHeight(44),
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _deleteIndividualTake(
     String medicationId,
     Map<String, dynamic> medicationData,
     int takeNumber,
   ) async {
     try {
-      // Get current take statuses
-      final takeStatuses = List<Map<String, dynamic>>.from(
-        medicationData['take_statuses'] ?? [],
-      );
-
-      // Find the highest take number that still exists
-      int highestTakeNumber = 0;
-      for (var take in takeStatuses) {
-        int currentTakeNumber = take['take_number'] as int;
-        if (currentTakeNumber > highestTakeNumber) {
-          highestTakeNumber = currentTakeNumber;
-        }
-      }
-
-      // Validation: Can only delete from highest to lowest
-      if (takeNumber < highestTakeNumber) {
+      // Prevent deleting any take except the last one if there are multiple takes
+      if (takeNumber != (medicationData['number_of_intakes'] ?? 1)) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'You can\'t delete the ${_getOrdinal(takeNumber)} take. '
-              'Please delete the ${_getOrdinal(highestTakeNumber)} take first.',
+              'Please delete the last take first (${_getOrdinal(medicationData['number_of_intakes'])} take)',
             ),
             backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
           ),
         );
         return;
       }
 
-      // Show confirmation dialog
-      showDialog(
+      // Get current take statuses
+      final takeStatuses = List<Map<String, dynamic>>.from(
+        medicationData['take_statuses'] ?? [],
+      );
+
+      // Find the take to delete
+      final takeToDelete = takeStatuses.firstWhere(
+        (take) => take['take_number'] == takeNumber,
+        orElse: () => <String, dynamic>{},
+      );
+
+      if (takeToDelete.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Take not found'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      // Show confirmation dialog first
+      final bool? confirm = await showDialog<bool>(
         context: context,
         builder: (BuildContext dialogContext) {
           return AlertDialog(
             title: Text('Delete ${_getOrdinal(takeNumber)} Take'),
             content: Text(
               'Are you sure you want to delete the ${_getOrdinal(takeNumber)} take for ${medicationData['medication_name']}?\n\n'
-              'This will remove this specific take and its schedule.',
+              'This will permanently remove this take and cancel its scheduled notification.',
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
                 child: Text('Cancel'),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () async {
-                  try {
-                    // Determine the index of the take being removed (0-based)
-                    final int removedIndex = takeNumber - 1;
-
-                    // Cancel & delete any medical_tasks associated with this medication
-                    try {
-                      final existingTasks = await _firestore
-                          .collection('medical_tasks')
-                          .where('medication_id', isEqualTo: medicationId)
-                          .get();
-
-                      // Compute scheduled DateTime for the removed take (if available)
-                      DateTime? removedScheduledDate;
-                      try {
-                        final intakeTimesList = List<String>.from(
-                          medicationData['intake_times'] ?? [],
-                        );
-                        if (removedIndex >= 0 &&
-                            removedIndex < intakeTimesList.length) {
-                          final parts = intakeTimesList[removedIndex].split(
-                            ':',
-                          );
-                          if (parts.length == 2) {
-                            final hour = int.tryParse(parts[0]) ?? 0;
-                            final minute = int.tryParse(parts[1]) ?? 0;
-                            final now = DateTime.now();
-                            removedScheduledDate = DateTime(
-                              now.year,
-                              now.month,
-                              now.day,
-                              hour,
-                              minute,
-                            );
-                          }
-                        }
-                      } catch (_) {}
-
-                      for (final t in existingTasks.docs) {
-                        final data = t.data();
-                        final ti = data['take_index'] as int?;
-
-                        bool shouldDelete = false;
-
-                        // Delete if take_index matches removed index
-                        if (ti != null && ti == removedIndex) {
-                          shouldDelete = true;
-                        }
-
-                        // Delete if task_start matches the removed scheduled time
-                        try {
-                          if (!shouldDelete &&
-                              removedScheduledDate != null &&
-                              data['task_start'] != null) {
-                            final taskStart = (data['task_start'] as Timestamp)
-                                .toDate();
-                            if (taskStart.year == removedScheduledDate.year &&
-                                taskStart.month == removedScheduledDate.month &&
-                                taskStart.day == removedScheduledDate.day &&
-                                taskStart.hour == removedScheduledDate.hour &&
-                                taskStart.minute ==
-                                    removedScheduledDate.minute) {
-                              shouldDelete = true;
-                            }
-                          }
-                        } catch (_) {}
-
-                        if (shouldDelete) {
-                          try {
-                            // cancel deterministic notification id
-                            if (ti != null) {
-                              final notifyId = ('${medicationId}_$ti').hashCode;
-                              NotificationService.cancelNotification(notifyId);
-                            }
-                            // also attempt to cancel by document id hash as a fallback
-                            final fallbackId = t.id.hashCode;
-                            NotificationService.cancelNotification(fallbackId);
-                          } catch (e) {
-                            print(
-                              'Error cancelling notification for task ${t.id}: $e',
-                            );
-                          }
-                          await t.reference.delete();
-                        }
-                      }
-                    } catch (e) {
-                      print(
-                        'Error removing medical_tasks for removed take: $e',
-                      );
-                    }
-
-                    // Remove the specific take from take_statuses
-                    takeStatuses.removeWhere(
-                      (take) => take['take_number'] == takeNumber,
-                    );
-
-                    // Also remove from intake_times array
-                    List<String> intakeTimes = List<String>.from(
-                      medicationData['intake_times'] ?? [],
-                    );
-                    if (removedIndex >= 0 &&
-                        removedIndex < intakeTimes.length) {
-                      intakeTimes.removeAt(removedIndex);
-                    }
-
-                    // Re-index remaining take_numbers to maintain consistency
-                    for (int i = 0; i < takeStatuses.length; i++) {
-                      takeStatuses[i]['take_number'] = i + 1;
-                      // keep scheduled_time aligned if intakeTimes available
-                      if (i < intakeTimes.length) {
-                        takeStatuses[i]['scheduled_time'] = intakeTimes[i];
-                      }
-                    }
-
-                    // Update number_of_intakes
-                    int newIntakeCount = takeStatuses.length;
-
-                    // Update the medication document with new arrays
-                    await _firestore
-                        .collection('medications')
-                        .doc(medicationId)
-                        .update({
-                          'take_statuses': takeStatuses,
-                          'intake_times': intakeTimes,
-                          'number_of_intakes': newIntakeCount,
-                          'updated_at': FieldValue.serverTimestamp(),
-                        });
-
-                    // Log the deletion activity
-                    await _logMedicationActivity(
-                      action: 'delete_individual_take',
-                      medicationId: medicationId,
-                      medicationData: medicationData,
-                      takeNumber: takeNumber,
-                      oldData: {
-                        'take_number': takeNumber,
-                        'take_statuses': medicationData['take_statuses'],
-                      },
-                    );
-
-                    // If there are no remaining takes, delete the medication entirely
-                    if (takeStatuses.isEmpty) {
-                      try {
-                        // Delete any medical_tasks for this medication and cancel notifications
-                        final orphanTasks = await _firestore
-                            .collection('medical_tasks')
-                            .where('medication_id', isEqualTo: medicationId)
-                            .get();
-                        for (final t in orphanTasks.docs) {
-                          final d = t.data();
-                          final ti = d['take_index'] as int?;
-                          if (ti != null) {
-                            final notifyId = ('${medicationId}_$ti').hashCode;
-                            NotificationService.cancelNotification(notifyId);
-                          }
-                          await t.reference.delete();
-                        }
-
-                        // Delete medication document
-                        await _firestore
-                            .collection('medications')
-                            .doc(medicationId)
-                            .delete();
-
-                        // Clear cached meds for this house
-                        try {
-                          final keys = _medsCache.keys.toList();
-                          for (final k in keys) {
-                            if (k.startsWith('${widget.houseId}|')) {
-                              _medsCache.remove(k);
-                              _medsCacheTime.remove(k);
-                            }
-                          }
-                        } catch (e) {
-                          print(
-                            'Error clearing meds cache after deleting medication $medicationId: $e',
-                          );
-                        }
-
-                        // Update in-memory UI
-                        if (mounted) {
-                          setState(() {
-                            _upcomingMedications.removeWhere(
-                              (m) => m['id'] == medicationId,
-                            );
-                          });
-                        }
-
-                        Navigator.of(dialogContext).pop();
-                        await _loadUpcomingMedications(forceRefresh: true);
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Medication deleted as last take was removed',
-                            ),
-                            backgroundColor: Colors.green,
-                          ),
-                        );
-                        return;
-                      } catch (e) {
-                        print(
-                          'Error deleting medication after last take removal: $e',
-                        );
-                        // proceed to continue with fallback cleanup below
-                      }
-                    }
-
-                    // After updating the doc, delete any remaining tasks (to avoid index mismatch)
-                    try {
-                      final allTasks = await _firestore
-                          .collection('medical_tasks')
-                          .where('medication_id', isEqualTo: medicationId)
-                          .get();
-
-                      for (final t in allTasks.docs) {
-                        final data = t.data();
-                        final ti = data['take_index'] as int?;
-                        if (ti != null) {
-                          final notifyId = ('${medicationId}_$ti').hashCode;
-                          NotificationService.cancelNotification(notifyId);
-                        }
-                        await t.reference.delete();
-                      }
-                    } catch (e) {
-                      print(
-                        'Error clearing remaining medical_tasks after take deletion: $e',
-                      );
-                    }
-
-                    // Recreate medical_tasks for remaining pending takes using updated medication doc
-                    try {
-                      final updatedDoc = await _firestore
-                          .collection('medications')
-                          .doc(medicationId)
-                          .get();
-                      if (updatedDoc.exists) {
-                        final updatedData =
-                            updatedDoc.data() as Map<String, dynamic>;
-                        await _createTasksForMedication(
-                          medicationId,
-                          updatedData,
-                        );
-                      }
-                    } catch (e) {
-                      print('Error recreating tasks after take deletion: $e');
-                    }
-
-                    // Optimistically update UI in memory
-                    if (mounted) {
-                      setState(() {
-                        // find medication in memory and update it
-                        final idx = _upcomingMedications.indexWhere(
-                          (m) => m['id'] == medicationId,
-                        );
-                        if (idx != -1) {
-                          if (takeStatuses.isEmpty) {
-                            _upcomingMedications.removeAt(idx);
-                          } else {
-                            _upcomingMedications[idx]['take_statuses'] =
-                                takeStatuses;
-                            _upcomingMedications[idx]['intake_times'] =
-                                intakeTimes;
-                            _upcomingMedications[idx]['number_of_intakes'] =
-                                newIntakeCount;
-                          }
-                        }
-                      });
-                    }
-
-                    Navigator.of(dialogContext).pop();
-                    // Force refresh from server to ensure UI and cache are consistent
-                    await _loadUpcomingMedications(forceRefresh: true);
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '${_getOrdinal(takeNumber)} take deleted successfully',
-                        ),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  } catch (e) {
-                    print('Error deleting individual take: $e');
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error deleting take'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                },
-                child: Text(
-                  'Delete Take',
-                  style: TextStyle(color: Colors.white),
-                ),
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text('Delete', style: TextStyle(color: Colors.white)),
               ),
             ],
           );
         },
+      );
+
+      if (confirm != true) {
+        return;
+      }
+
+      // Determine the index of the take being removed (0-based)
+      final int removedIndex = takeNumber - 1;
+
+      // Cancel notification for this specific take
+      try {
+        final notifyId = ('${medicationId}_${removedIndex}').hashCode;
+        NotificationService.cancelNotification(notifyId);
+      } catch (e) {
+        print('Error cancelling notification: $e');
+      }
+
+      // Delete the corresponding medical_task
+      try {
+        final taskQuery = await _firestore
+            .collection('medical_tasks')
+            .where('medication_id', isEqualTo: medicationId)
+            .where('take_index', isEqualTo: removedIndex)
+            .get();
+
+        for (final doc in taskQuery.docs) {
+          await doc.reference.delete();
+        }
+      } catch (e) {
+        print('Error deleting medical task: $e');
+      }
+
+      // Delete the take from medication_takes collection
+      try {
+        final takeQuery = await _firestore
+            .collection('medication_takes')
+            .where('medication_id', isEqualTo: medicationId)
+            .where('take_number', isEqualTo: takeNumber)
+            .get();
+
+        for (final doc in takeQuery.docs) {
+          await doc.reference.delete();
+        }
+      } catch (e) {
+        print('Error deleting medication take: $e');
+      }
+
+      // Update remaining takes in medication_takes collection
+      try {
+        final remainingTakesQuery = await _firestore
+            .collection('medication_takes')
+            .where('medication_id', isEqualTo: medicationId)
+            .where('take_number', isGreaterThan: takeNumber)
+            .get();
+
+        final batch = _firestore.batch();
+        for (final doc in remainingTakesQuery.docs) {
+          final takeData = doc.data();
+          final currentTakeNumber = takeData['take_number'] as int;
+          batch.update(doc.reference, {
+            'take_number': currentTakeNumber - 1,
+            'updated_at': Timestamp.fromDate(DateTime.now()),
+          });
+        }
+        await batch.commit();
+      } catch (e) {
+        print('Error updating remaining takes: $e');
+      }
+
+      // Remove the specific take from take_statuses
+      takeStatuses.removeWhere((take) => take['take_number'] == takeNumber);
+
+      // Also remove from intake_times array (same index)
+      List<String> intakeTimes = List<String>.from(
+        medicationData['intake_times'] ?? [],
+      );
+      if (removedIndex >= 0 && removedIndex < intakeTimes.length) {
+        intakeTimes.removeAt(removedIndex);
+      }
+
+      // Re-index remaining takes to maintain sequential numbering
+      for (int i = 0; i < takeStatuses.length; i++) {
+        takeStatuses[i]['take_number'] = i + 1;
+        // Update scheduled_time to match new intake_times array
+        if (i < intakeTimes.length) {
+          takeStatuses[i]['scheduled_time'] = intakeTimes[i];
+        }
+      }
+
+      // Update number_of_intakes
+      final newIntakeCount = takeStatuses.length;
+
+      // Update the medication document
+      await _firestore.collection('medications').doc(medicationId).update({
+        'take_statuses': takeStatuses,
+        'intake_times': intakeTimes,
+        'number_of_intakes': newIntakeCount,
+        'updated_at': Timestamp.fromDate(DateTime.now()),
+      });
+
+      // Log the deletion activity
+      await _logMedicationActivity(
+        action: 'delete_individual_take',
+        medicationId: medicationId,
+        medicationData: medicationData,
+        takeNumber: takeNumber,
+        oldData: takeToDelete,
+      );
+
+      // If no takes remain, delete the entire medication
+      if (takeStatuses.isEmpty) {
+        await _deleteMedication(medicationId, medicationData);
+        return;
+      }
+
+      // Refresh the UI
+      await _loadUpcomingMedications(forceRefresh: true);
+
+      // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
+      _autoRefreshTimer?.cancel();
+      _startAutoRefreshTimer();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${_getOrdinal(takeNumber)} take deleted successfully'),
+          backgroundColor: Colors.green,
+        ),
       );
     } catch (e) {
       print('Error in _deleteIndividualTake: $e');
@@ -2264,6 +3716,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                   Navigator.of(dialogContext).pop();
                   // Force refresh to bypass any stale cache so UI updates immediately
                   await _loadUpcomingMedications(forceRefresh: true);
+
+                  // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
+                  _autoRefreshTimer?.cancel();
+                  _startAutoRefreshTimer();
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('Medication deleted successfully')),
@@ -2530,8 +3986,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             // Action buttons section
             SizedBox(height: 12),
 
-            // Individual Take Delete Button (only if this take is pending)
-            if (status == 'pending')
+            // Individual Take Delete Button (only if this take is pending and it is the last take)
+            if (status == 'pending' &&
+                takeNumber == (medication['number_of_intakes'] ?? 1))
               Padding(
                 padding: EdgeInsets.only(bottom: 8),
                 child: Center(
@@ -2596,91 +4053,116 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   ) async {
     try {
       final nurseId = await _getNurseId();
+      if (nurseId == null) {
+        print('Error: Could not get nurse ID');
+        return;
+      }
+      print('Updating take status for nurse: $nurseId');
 
-      // Get the medication document
+      // Get the medication document to get elderly_id and other info
       final medicationDoc = await _firestore
           .collection('medications')
           .doc(medicationId)
           .get();
       if (!medicationDoc.exists) return;
 
-      final data = medicationDoc.data() as Map<String, dynamic>;
-      final takeStatuses = List<Map<String, dynamic>>.from(
-        data['take_statuses'] ?? [],
-      );
+      final medicationData = medicationDoc.data() as Map<String, dynamic>;
+      final elderlyId = medicationData['elderly_id'] as String;
 
-      // Find and update the specific take
-      Map<String, dynamic>? originalTake;
-      final currentTime = DateTime.now();
+      // Find the specific take document
+      final takeQuery = await _firestore
+          .collection('medication_takes')
+          .where('medication_id', isEqualTo: medicationId)
+          .where('take_number', isEqualTo: takeNumber)
+          .get();
 
-      for (int i = 0; i < takeStatuses.length; i++) {
-        if (takeStatuses[i]['take_number'] == takeNumber) {
-          // Store original take data before modification
-          originalTake = Map<String, dynamic>.from(takeStatuses[i]);
+      if (takeQuery.docs.isEmpty) return;
 
-          takeStatuses[i]['status'] = newStatus;
-          if (newStatus == 'complete') {
-            takeStatuses[i]['completed_at'] = currentTime;
-            takeStatuses[i]['completed_by'] = nurseId;
-          } else {
-            takeStatuses[i]['completed_at'] = null;
-            takeStatuses[i]['completed_by'] = null;
-          }
-          break;
-        }
-      }
+      final takeDoc = takeQuery.docs.first;
+      final takeData = takeDoc.data();
+      final originalStatus = takeData['status'] as String;
 
-      // Handle activity logging
-      if (originalTake != null) {
-        final originalStatus = originalTake['status'] as String;
+      // Update the take status
+      final updateData = <String, dynamic>{
+        'status': newStatus,
+        'updated_at': Timestamp.fromDate(DateTime.now()),
+      };
+
+      if (newStatus == 'complete') {
+        updateData['completed_at'] = Timestamp.fromDate(DateTime.now());
+        updateData['completed_by'] = nurseId;
         print(
-          'Status change: $originalStatus -> $newStatus for take $takeNumber',
+          'Setting completed_at and completed_by for take $takeNumber: completed_at=${updateData['completed_at']}, completed_by=$nurseId',
         );
-
-        // Log the activity based on the new status
-        if (newStatus == 'complete' && originalStatus != 'complete') {
-          await _logMedicationActivity(
-            action: 'complete_take',
-            medicationId: medicationId,
-            medicationData: data,
-            takeNumber: takeNumber,
-            takeData: originalTake,
-          );
-        } else if (newStatus == 'missed' && originalStatus != 'missed') {
-          await _logMedicationActivity(
-            action: 'miss_take',
-            medicationId: medicationId,
-            medicationData: data,
-            takeNumber: takeNumber,
-            takeData: originalTake,
-          );
-        }
+      } else {
+        updateData['completed_at'] = null;
+        updateData['completed_by'] = null;
+        print('Clearing completed_at and completed_by for take $takeNumber');
       }
 
-      // Update the document
-      // Determine overall medication status: if all takes complete -> completed,
-      // if all takes missed -> missed, else remain upcoming.
-      String overallStatus = 'upcoming';
-      final statuses = takeStatuses.map((t) => t['status'] as String).toList();
-      if (statuses.isNotEmpty && statuses.every((s) => s == 'complete')) {
+      await takeDoc.reference.update(updateData);
+      print('Updated take document with status: $newStatus');
+
+      // Log the activity to Medication_Activity_Logs
+      final scheduledTime = takeData['scheduled_time'] as String;
+      if (newStatus == 'complete' && originalStatus != 'complete') {
+        await _logMedicationActivityNew(
+          action: 'take_completed',
+          medicationId: medicationId,
+          elderlyId: elderlyId,
+          nurseId: nurseId,
+          houseId: medicationData['house_id'] ?? widget.houseId,
+          shift: medicationData['shift'] ?? _getCurrentShift(),
+          medicationName: medicationData['medication_name'] ?? '',
+          dosage: medicationData['dosage'] ?? '',
+          repeatInterval: medicationData['repeat_interval'] ?? '',
+          takeNumber: takeNumber,
+          scheduledTime: scheduledTime,
+        );
+      } else if (newStatus == 'missed' && originalStatus != 'missed') {
+        await _logMedicationActivityNew(
+          action: 'take_missed',
+          medicationId: medicationId,
+          elderlyId: elderlyId,
+          nurseId: nurseId,
+          houseId: medicationData['house_id'] ?? widget.houseId,
+          shift: medicationData['shift'] ?? _getCurrentShift(),
+          medicationName: medicationData['medication_name'] ?? '',
+          dosage: medicationData['dosage'] ?? '',
+          repeatInterval: medicationData['repeat_interval'] ?? '',
+          takeNumber: takeNumber,
+          scheduledTime: scheduledTime,
+        );
+      }
+
+      // Check if all takes are completed to update medication status
+      final allTakesQuery = await _firestore
+          .collection('medication_takes')
+          .where('medication_id', isEqualTo: medicationId)
+          .get();
+
+      final allStatuses = allTakesQuery.docs
+          .map((doc) => doc.data()['status'] as String)
+          .toList();
+      String overallStatus = 'active';
+      if (allStatuses.every((status) => status == 'completed')) {
         overallStatus = 'completed';
-      } else if (statuses.isNotEmpty && statuses.every((s) => s == 'missed')) {
-        overallStatus = 'missed';
       }
 
-      await _firestore.collection('medications').doc(medicationId).update({
-        'take_statuses': takeStatuses,
+      // Update medication status if needed
+      await medicationDoc.reference.update({
         'status': overallStatus,
+        'updated_at': Timestamp.fromDate(DateTime.now()),
       });
 
-      // If this take was marked complete or missed, remove any pending
+      // If this take was marked completed or missed, remove any pending
       // medical_tasks created for this medication take so Home/upcoming no
       // longer shows it.
-      if (newStatus == 'complete' || newStatus == 'missed') {
+      if (newStatus == 'completed' || newStatus == 'missed') {
         try {
           final tasksQuery = await _firestore
               .collection('medical_tasks')
-              .where('task_source', isEqualTo: 'medication')
+              .where('task_source', isEqualTo: 'Medication')
               .where('medication_id', isEqualTo: medicationId)
               .where('take_index', isEqualTo: takeNumber - 1)
               .get();
@@ -2698,11 +4180,15 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       // Refresh the UI and force refresh cache to reflect the changes
       await _loadUpcomingMedications(forceRefresh: true);
 
+      // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
+      _autoRefreshTimer?.cancel();
+      _startAutoRefreshTimer();
+
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Take status updated to ${newStatus.toUpperCase()}'),
-          backgroundColor: newStatus == 'complete'
+          backgroundColor: newStatus == 'completed'
               ? Colors.green
               : newStatus == 'missed'
               ? Colors.red
@@ -2819,6 +4305,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                             style: TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
+                              fontSize: 16,
                             ),
                           ),
                           icon: Icon(Icons.add, color: Colors.white),

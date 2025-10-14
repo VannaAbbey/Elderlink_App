@@ -13,6 +13,7 @@ import 'incident_report.dart';
 import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import 'activity_logs.dart';
+import '../main.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -33,6 +34,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   final AudioPlayer _taskAudioPlayer = AudioPlayer();
   final Map<String, bool> _shownTaskDialogs =
       {}; // track which tasks have been shown
+
+  List<Map<String, dynamic>> _currentTasks =
+      []; // Store current tasks for See All
+
+  bool _isNurseScheduled = false; // Track if nurse is currently scheduled
+  String _nurseShiftInfo = ''; // Store shift information for dialog
 
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
@@ -124,8 +131,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           final notifyTime = taskStart.subtract(Duration(minutes: 5));
           if (notifyTime.isAfter(now)) {
             debugPrint('Scheduling 5-min reminder for $medName at $notifyTime');
+            final notificationId = ('${medicationId}_$takeIndex').hashCode;
+            NotificationService.cancelNotification(notificationId);
             NotificationService.scheduleTaskNotification(
-              id: ('${medicationId}_$takeIndex').hashCode,
+              id: notificationId,
               title: 'Medication Reminder',
               body: '$medName for $elderlyName in 5 minutes',
               dateTime: notifyTime,
@@ -136,8 +145,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           debugPrint(
             'Scheduling exact time notification for $medName at $taskStart',
           );
+          final exactNotificationId =
+              ('${medicationId}_$takeIndex'
+                      '_exact')
+                  .hashCode;
+          NotificationService.cancelNotification(exactNotificationId);
           NotificationService.scheduleTaskNotification(
-            id: ('${medicationId}_$takeIndex' + '_exact').hashCode,
+            id: exactNotificationId,
             title: 'Medication Time - $medName',
             body: 'Time to administer $medName to $elderlyName',
             dateTime: taskStart,
@@ -160,6 +174,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     // After first frame we can access context safely and generate medication tasks
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
+      _checkNurseScheduleAndShift(); // Check if nurse is scheduled
     });
   }
 
@@ -272,6 +287,75 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     } catch (e) {
       print('Error getting nurse working days: $e');
       return [];
+    }
+  }
+
+  Future<void> _checkNurseScheduleAndShift() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) {
+        setState(() {
+          _isNurseScheduled = false;
+          _nurseShiftInfo = '';
+        });
+        return;
+      }
+
+      final currentShift = _getCurrentShift();
+      final currentDay = _getCurrentDay();
+
+      // Get nurse's shift assignment
+      final shiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .get();
+
+      String assignedShift = '';
+      List<String> assignedDays = [];
+      if (shiftQuery.docs.isNotEmpty) {
+        final data = shiftQuery.docs.first.data();
+        assignedShift = data['shift'] ?? '';
+        assignedDays = List<String>.from(data['days_assigned'] ?? []);
+      }
+
+      final isScheduled =
+          assignedShift == currentShift && assignedDays.contains(currentDay);
+
+      // Get shift time information based on assigned shift
+      String shiftInfo = '';
+      if (assignedShift == "1st") {
+        shiftInfo = "1st shift (6:00 AM to 2:00 PM)";
+      } else if (assignedShift == "2nd") {
+        shiftInfo = "2nd shift (2:00 PM to 10:00 PM)";
+      } else if (assignedShift == "3rd") {
+        shiftInfo = "3rd shift (10:00 PM to 6:00 AM)";
+      } else {
+        // Fallback to current shift if no assignment
+        if (currentShift == "1st") {
+          shiftInfo = "1st shift (6:00 AM to 2:00 PM)";
+        } else if (currentShift == "2nd") {
+          shiftInfo = "2nd shift (2:00 PM to 10:00 PM)";
+        } else {
+          shiftInfo = "3rd shift (10:00 PM to 6:00 AM)";
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isNurseScheduled = isScheduled;
+          _nurseShiftInfo = shiftInfo;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error checking nurse schedule: $e');
+      if (mounted) {
+        setState(() {
+          _isNurseScheduled = false;
+          _nurseShiftInfo = '';
+        });
+      }
     }
   }
 
@@ -440,8 +524,11 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               // schedule notification 5 minutes before (only if in future)
               final notifyTime = taskStart.subtract(Duration(minutes: 5));
               if (notifyTime.isAfter(DateTime.now())) {
+                final notificationId =
+                    ('${medicationId}_${taskDay}_$t').hashCode;
+                NotificationService.cancelNotification(notificationId);
                 NotificationService.scheduleTaskNotification(
-                  id: ('${medicationId}_${taskDay}_$t').hashCode,
+                  id: notificationId,
                   title: 'Medication Reminder',
                   body: '$medName for $elderlyName in 5 minutes',
                   dateTime: notifyTime,
@@ -450,8 +537,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
               // schedule notification at exact medication time (only if in future)
               if (taskStart.isAfter(DateTime.now())) {
+                final exactNotificationId =
+                    ('${medicationId}_${taskDay}_$t'
+                            '_exact')
+                        .hashCode;
+                NotificationService.cancelNotification(exactNotificationId);
                 NotificationService.scheduleTaskNotification(
-                  id: ('${medicationId}_${taskDay}_$t' + '_exact').hashCode,
+                  id: exactNotificationId,
                   title: 'Medication Time - $medName',
                   body: 'Time to administer $medName to $elderlyName',
                   dateTime: taskStart,
@@ -463,6 +555,49 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       }
     } catch (e) {
       debugPrint('Error generating medication tasks: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>?> getCaregiverStatus() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) return null;
+
+      final currentShift = _getCurrentShift();
+
+      final shiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      if (shiftQuery.docs.isNotEmpty) {
+        final data = shiftQuery.docs.first.data();
+        return data;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error getting caregiver status: $e');
+      return null;
+    }
+  }
+
+  String _convertTo12HourFormat(String time24) {
+    try {
+      final parts = time24.split(':');
+      if (parts.length != 2) return time24;
+
+      final hour = int.tryParse(parts[0]) ?? 0;
+      final minute = int.tryParse(parts[1]) ?? 0;
+
+      final period = hour >= 12 ? 'PM' : 'AM';
+      final hour12 = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+
+      return '${hour12.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
+    } catch (e) {
+      return time24;
     }
   }
 
@@ -487,6 +622,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   }
 
   void toggleSidebar() {
+    if (EmergencyService.isModalOpen) return;
     setState(() {
       isSidebarOpen = !isSidebarOpen;
     });
@@ -528,15 +664,284 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       child: ListView(
                         children: [
                           _headerSection(),
-                          const SizedBox(height: 40),
+                          const SizedBox(height: 20),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Color(0x3EB7DDF5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: const [
+                                Text(
+                                  'Welcome to ElderLink!',
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF00588E),
+                                  ),
+                                ),
+                                SizedBox(height: 10),
+                                Text(
+                                  'Manage your tasks, view your schedule, and stay connected with your elderly residents.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
                           _medicalTasksSection(),
                           const SizedBox(height: 30),
                           _housesSection(),
+                          const SizedBox(height: 30),
+
+                          // Your Status Section
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Color(0x3EB7DDF5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.accessibility,
+                                      color: Color(0xFF00588E),
+                                      size: 45,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      "Your Status",
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 15),
+
+                                FutureBuilder<Map<String, dynamic>?>(
+                                  future: getCaregiverStatus(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.connectionState ==
+                                        ConnectionState.waiting) {
+                                      return const Center(
+                                        child: CircularProgressIndicator(),
+                                      );
+                                    }
+
+                                    final statusData = snapshot.data;
+                                    final daysAssigned =
+                                        statusData?['days_assigned']
+                                            as List<dynamic>? ??
+                                        [];
+
+                                    // Handle shift field - could be String or Map
+                                    final shiftData = statusData?['shift'];
+                                    final shift = shiftData is String
+                                        ? shiftData
+                                        : shiftData is Map<String, dynamic>
+                                        ? (shiftData['name'] ??
+                                              shiftData['shift_name'] ??
+                                              'Not assigned')
+                                        : 'Not assigned';
+
+                                    // Handle start_time and end_time fields (NEW structure)
+                                    final startTime =
+                                        statusData?['start_time'] as String? ??
+                                        '';
+                                    final endTime =
+                                        statusData?['end_time'] as String? ??
+                                        '';
+
+                                    final timeRange =
+                                        (startTime.isNotEmpty &&
+                                            endTime.isNotEmpty)
+                                        ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
+                                        : 'Not specified';
+
+                                    return Column(
+                                      children: [
+                                        // Current Work Schedule
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Color(0xFFB7DDF5),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              const Text(
+                                                'Current Work Schedule',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color(0xFF00588E),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 15),
+                                              Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment
+                                                        .spaceEvenly,
+                                                children: [
+                                                  for (int i = 0; i < 7; i++)
+                                                    Column(
+                                                      children: [
+                                                        Container(
+                                                          width: 32,
+                                                          height: 32,
+                                                          decoration: BoxDecoration(
+                                                            shape:
+                                                                BoxShape.circle,
+                                                            color:
+                                                                daysAssigned.contains(
+                                                                  [
+                                                                    'Sunday',
+                                                                    'Monday',
+                                                                    'Tuesday',
+                                                                    'Wednesday',
+                                                                    'Thursday',
+                                                                    'Friday',
+                                                                    'Saturday',
+                                                                  ][i],
+                                                                )
+                                                                ? Color(
+                                                                    0xFF00588E,
+                                                                  )
+                                                                : Colors
+                                                                      .grey
+                                                                      .shade300,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Text(
+                                                          [
+                                                            'Sun',
+                                                            'Mon',
+                                                            'Tue',
+                                                            'Wed',
+                                                            'Thu',
+                                                            'Fri',
+                                                            'Sat',
+                                                          ][i],
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                            color: Color(
+                                                              0xFF00588E,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+
+                                        const SizedBox(height: 15),
+
+                                        // Current Shift Schedule
+                                        Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Color(0xFFB7DDF5),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              const Icon(
+                                                Icons.access_time,
+                                                color: Color(0xFF00588E),
+                                                size: 70,
+                                              ),
+                                              const SizedBox(width: 20),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.center,
+                                                  children: [
+                                                    const Text(
+                                                      'Current Shift Schedule',
+                                                      style: TextStyle(
+                                                        fontSize: 16,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Color(
+                                                          0xFF00588E,
+                                                        ),
+                                                      ),
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      '${shift.toUpperCase()} SHIFT',
+                                                      style: TextStyle(
+                                                        fontSize: 24,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Color(
+                                                          0xFF00588E,
+                                                        ),
+                                                      ),
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Text(
+                                                      timeRange,
+                                                      style: TextStyle(
+                                                        fontSize: 18,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: Color(
+                                                          0xFF00588E,
+                                                        ),
+                                                      ),
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+
+                                        const SizedBox(height: 15),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ),
                   ),
-                  if (isSidebarOpen)
+                  if (isSidebarOpen && !EmergencyService.isModalOpen)
                     NurseSidebar(
                       isSidebarOpen: isSidebarOpen,
                       toggleSidebar: toggleSidebar,
@@ -545,10 +950,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                 ],
               )
             : _screens[selectedIndex],
-        bottomNavigationBar: NurseBottomNavBar(
-          selectedIndex: selectedIndex,
-          onNavTap: onNavTap,
-        ),
+        bottomNavigationBar: EmergencyService.isModalOpen
+            ? null
+            : NurseBottomNavBar(
+                selectedIndex: selectedIndex,
+                onNavTap: onNavTap,
+              ),
       ),
     );
   }
@@ -560,7 +967,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         Row(
           children: [
             GestureDetector(
-              onTap: toggleSidebar,
+              onTap: EmergencyService.isModalOpen ? null : toggleSidebar,
               child: Consumer<AuthProvider>(
                 builder: (context, authProvider, child) {
                   final profilePic = authProvider.userData?['user_profilePic'];
@@ -586,7 +993,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         (firstName.isEmpty || firstName == 'User')
                         ? ''
                         : firstName;
-
                     return Text(
                       displayName.isEmpty
                           ? 'Hello Nurse,'
@@ -604,18 +1010,20 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ],
         ),
         GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ActivityLogsScreen(
-                  houseId: 'H001', // Default house
-                  nurseName:
-                      '${Provider.of<AuthProvider>(context, listen: false).userFirstName} ${Provider.of<AuthProvider>(context, listen: false).userLastName}',
-                ),
-              ),
-            );
-          },
+          onTap: EmergencyService.isModalOpen
+              ? null
+              : () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ActivityLogsScreen(
+                        houseId: 'H001', // Default house
+                        nurseName:
+                            '${Provider.of<AuthProvider>(context, listen: false).userFirstName} ${Provider.of<AuthProvider>(context, listen: false).userLastName}',
+                      ),
+                    ),
+                  );
+                },
           child: const Icon(
             Icons.notifications,
             color: Color(0XFF1D66A0),
@@ -637,16 +1045,36 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.medical_services, color: Color(0xFF1D66A0), size: 45),
-              SizedBox(width: 6),
-              Text(
-                "Medical Tasks",
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1D66A0),
+              const Row(
+                children: [
+                  Icon(
+                    Icons.medical_services,
+                    color: Color(0xFF1D66A0),
+                    size: 45,
+                  ),
+                  SizedBox(width: 6),
+                  Text(
+                    "Medical Tasks",
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1D66A0),
+                    ),
+                  ),
+                ],
+              ),
+              GestureDetector(
+                onTap: () => _showAllTasksDialog(_currentTasks),
+                child: const Text(
+                  'See All',
+                  style: TextStyle(
+                    color: Colors.blue,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -680,12 +1108,18 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       }).toList()
                     : [];
 
+                // Store current tasks for See All functionality
+                _currentTasks = tasks;
+
                 // Filter tasks for today and tomorrow (only future tasks)
                 final filteredTasks = tasks.where((task) {
                   final start = task['task_start'] != null
                       ? (task['task_start'] as Timestamp).toDate()
                       : DateTime.now();
-                  final taskDays = List<String>.from(task['days'] ?? []);
+                  final taskDaysRaw = task['days'];
+                  final taskDays = taskDaysRaw is List
+                      ? List<String>.from(taskDaysRaw)
+                      : [];
                   final frequency = task['task_frequency'] ?? 'Once';
                   final now = DateTime.now();
                   final todayStart = DateTime(now.year, now.month, now.day);
@@ -732,15 +1166,15 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                           child: CircularProgressIndicator(),
                         ),
                       )
-                    else if (tasks.isEmpty)
+                    else if (filteredTasks.isEmpty)
                       const Center(
                         child: Padding(
-                          padding: EdgeInsets.all(20),
+                          padding: EdgeInsets.all(10),
                           child: Text(
-                            "No tasks available.",
+                            "No medical task available.",
                             style: TextStyle(
                               fontSize: 16,
-                              color: Colors.grey,
+                              color: Colors.black,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -779,8 +1213,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                 !_shownTaskDialogs.containsKey(taskId)) {
                               _shownTaskDialogs[taskId] = true;
 
+                              final notificationId = taskId.hashCode;
+                              NotificationService.cancelNotification(
+                                notificationId,
+                              );
                               NotificationService.scheduleTaskNotification(
-                                id: taskId.hashCode,
+                                id: notificationId,
                                 title: title,
                                 body: description,
                                 dateTime: todayAtTime,
@@ -804,8 +1242,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               start.isAfter(DateTime.now())) {
                             _shownTaskDialogs[taskId] = true;
 
+                            final notificationId = taskId.hashCode;
+                            NotificationService.cancelNotification(
+                              notificationId,
+                            );
                             NotificationService.scheduleTaskNotification(
-                              id: taskId.hashCode,
+                              id: notificationId,
                               title: title,
                               body: description,
                               dateTime: start,
@@ -826,22 +1268,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             );
                           }
 
-                          // Color based on category
-                          final category = task['task_category'] ?? 'Other';
-                          Color bgColor;
-                          switch (category) {
-                            case 'Vitals':
-                              bgColor = Colors.orange[200]!;
-                              break;
-                            case 'Medication':
-                              bgColor = Colors.yellow[200]!;
-                              break;
-                            case 'Assessment':
-                              bgColor = Colors.blue[200]!;
-                              break;
-                            default:
-                              bgColor = Colors.grey[200]!;
-                          }
+                          // All medical tasks use the same blue color
+                          Color bgColor = const Color.fromARGB(
+                            255,
+                            153,
+                            209,
+                            255,
+                          );
 
                           // Check if task is for tomorrow
                           String displayTime = formattedTime;
@@ -871,27 +1304,25 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           ElevatedButton.icon(
-                            onPressed: _showAddTaskDialog,
+                            onPressed: _isNurseScheduled
+                                ? _showAddTaskDialog
+                                : _showNotScheduledDialog,
                             icon: const Icon(Icons.add),
                             label: const Text(
                               "Add Task",
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(width: 30),
-                          ElevatedButton(
-                            onPressed: () => _showAllTasksDialog(tasks),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue,
-                              foregroundColor: Colors.white,
-                            ),
-                            child: const Text(
-                              'View All Tasks',
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                              backgroundColor: _isNurseScheduled
+                                  ? const Color(0xFF22688E)
+                                  : Colors.grey.shade400,
+                              foregroundColor: _isNurseScheduled
+                                  ? Colors.white
+                                  : const Color.fromARGB(255, 250, 249, 249),
+                              elevation: _isNurseScheduled ? null : 0,
                             ),
                           ),
                         ],
@@ -904,6 +1335,86 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // ---------------------- SHOW NOT SCHEDULED WARNING DIALOG ----------------------
+  void _showNotScheduledDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
+              SizedBox(height: 8),
+              Text(
+                'Not Scheduled Today',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF00588E),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'You are not scheduled to work today. You cannot add tasks when you are not on duty.',
+                style: TextStyle(fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 12),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Color(0xFF00588E).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Color(0xFF00588E).withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.access_time, color: Color(0xFF00588E), size: 20),
+                    SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Your shift: $_nurseShiftInfo',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF00588E),
+                        ),
+                        softWrap: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xFF00588E),
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+                child: Text(
+                  'OK',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -956,95 +1467,93 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: const [
-                        Icon(
-                          Icons.medical_services,
-                          color: Color(0xFF00588E),
-                          size: 35,
-                        ),
                         SizedBox(width: 10),
                         Text(
                           "Add Task",
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF00588E),
-                            fontSize: 30,
+                            color: Color(0xFF216386),
+                            fontSize: 26,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    const Divider(color: Color(0xFF00588E), thickness: 2),
+                    const Divider(
+                      color: Color.fromARGB(255, 204, 203, 203),
+                      thickness: 2,
+                    ),
                     const SizedBox(height: 12),
 
                     // Task Title (combo box with editable custom option)
-                    DropdownButtonFormField<String>(
-                      value: taskTitle.isEmpty ? null : taskTitle,
-                      decoration: InputDecoration(
-                        labelText: 'Task Title',
-                        hintText: 'Select Task Title',
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 1.5,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        const SizedBox(width: 8),
+                        Text(
+                          'Task Title',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Color(0xFF216386),
                           ),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 1.5,
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 2,
-                          ),
-                        ),
-                        contentPadding: EdgeInsets.only(
-                          left: 12,
-                          top: 15,
-                          bottom: 15,
-                          right: 12,
-                        ),
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'Vitals',
-                          child: Text('Vitals'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Medication',
-                          child: Text('Medication'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Assessment',
-                          child: Text('Assessment'),
-                        ),
-                        DropdownMenuItem(value: 'Other', child: Text('Other')),
-                        DropdownMenuItem(
-                          value: 'Custom',
-                          child: Text('Custom'),
                         ),
                       ],
-                      onChanged: (value) {
-                        if (value != null) {
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: MediaQuery.of(context).size.width * 0.9,
+                      height: 50,
+                      child: DropdownButtonFormField<String>(
+                        value: taskTitle.isEmpty ? null : taskTitle,
+                        decoration: InputDecoration(
+                          hintText: 'Select a task title',
+                          filled: true,
+                          fillColor: Color.fromARGB(255, 222, 241, 246),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 2,
+                            ),
+                          ),
+                          contentPadding: EdgeInsets.only(
+                            left: 12,
+                            top: 12,
+                            bottom: 12,
+                            right: 12,
+                          ),
+                        ),
+                        items: _commonTaskDescriptions.keys
+                            .map(
+                              (title) => DropdownMenuItem(
+                                value: title,
+                                child: Text(title),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
                           setState(() {
-                            taskTitle = value;
-                            if (value == 'Vitals') {
-                              taskCategory = 'Vitals';
-                            } else if (value == 'Medication') {
-                              taskCategory = 'Medication';
-                            } else if (value == 'Assessment') {
-                              taskCategory = 'Assessment';
-                            } else {
-                              taskCategory = 'Other';
-                            }
+                            taskTitle = value ?? '';
+                            taskCategory = value ?? 'Vitals';
                           });
-                        }
-                      },
+                        },
+                      ),
                     ),
                     const SizedBox(height: 8),
                     // If custom selected, allow typing an exact title
@@ -1090,31 +1599,53 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
                         return Column(
                           children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.edit,
+                                  color: Color(0xFF216386),
+                                  size: 25,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Task Description',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Color(0xFF216386),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
                             SizedBox(
                               width: MediaQuery.of(context).size.width * 0.9,
                               height: 50,
                               child: DropdownButtonFormField<String>(
                                 value: initial,
                                 decoration: InputDecoration(
-                                  labelText: 'Task Description',
                                   hintText: 'Select a description',
                                   filled: true,
-                                  fillColor: Colors.white,
+                                  fillColor: Color.fromARGB(255, 222, 241, 246),
                                   border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(30),
                                     borderSide: BorderSide(
-                                      color: const Color(0xFF00588E),
+                                      color: Colors.white,
                                       width: 1.5,
                                     ),
                                   ),
                                   enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(30),
                                     borderSide: BorderSide(
-                                      color: const Color(0xFF00588E),
+                                      color: Colors.white,
                                       width: 1.5,
                                     ),
                                   ),
                                   focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(30),
                                     borderSide: BorderSide(
-                                      color: const Color(0xFF00588E),
+                                      color: Colors.white,
                                       width: 2,
                                     ),
                                   ),
@@ -1177,78 +1708,126 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         );
                       },
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 5),
 
                     // Note: removed separate Category field; category will be derived from Task Title
 
                     // Repeat Interval
-                    DropdownButtonFormField<String>(
-                      value: taskFrequency,
-                      decoration: InputDecoration(
-                        labelText: 'Repeat Interval',
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 1.5,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        Icon(Icons.repeat, color: Color(0xFF216386), size: 25),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Repeat Interval',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Color(0xFF216386),
                           ),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 1.5,
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 2,
-                          ),
-                        ),
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: 'Once', child: Text('Once')),
-                        DropdownMenuItem(
-                          value: 'Every Assigned Days',
-                          child: Text('Every Assigned Days'),
                         ),
                       ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => taskFrequency = value);
-                        }
-                      },
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: MediaQuery.of(context).size.width * 0.9,
+                      height: 50,
+                      child: DropdownButtonFormField<String>(
+                        value: taskFrequency,
+                        decoration: InputDecoration(
+                          hintText: 'Select repeat interval',
+                          filled: true,
+                          fillColor: Color.fromARGB(255, 222, 241, 246),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30),
+                            borderSide: BorderSide(
+                              color: Colors.white,
+                              width: 2,
+                            ),
+                          ),
+                          contentPadding: EdgeInsets.only(
+                            left: 12,
+                            top: 12,
+                            bottom: 12,
+                            right: 12,
+                          ),
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 'Once', child: Text('Once')),
+                          DropdownMenuItem(
+                            value: 'Every Assigned Days',
+                            child: Text('Every Assigned Days'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => taskFrequency = value);
+                          }
+                        },
+                      ),
                     ),
                     const SizedBox(height: 20),
 
                     // Task Time
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.access_time,
+                          color: Color(0xFF216386),
+                          size: 25,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Time',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Color(0xFF216386),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
                     TextField(
                       readOnly: true,
                       controller: TextEditingController(
                         text: taskTime.format(context),
                       ),
                       decoration: InputDecoration(
-                        labelText: 'Time',
                         filled: true,
-                        fillColor: Colors.white,
+                        fillColor: Color.fromARGB(255, 222, 241, 246),
                         border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(30),
                           borderSide: BorderSide(
                             color: const Color(0xFF00588E),
                             width: 1.5,
                           ),
                         ),
                         enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(30),
                           borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
+                            color: Colors.white,
                             width: 1.5,
                           ),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                            color: const Color(0xFF00588E),
-                            width: 2,
-                          ),
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: BorderSide(color: Colors.white, width: 2),
                         ),
                         suffixIcon: Icon(
                           Icons.access_time,
@@ -1365,8 +1944,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               if (taskDate.isAtSameMomentAs(today) &&
                                   taskStart.isAfter(futureThreshold)) {
                                 // Schedule notification for the task time
+                                final notificationId = docRef.id.hashCode;
+                                NotificationService.cancelNotification(
+                                  notificationId,
+                                );
                                 NotificationService.scheduleTaskNotification(
-                                  id: docRef.id.hashCode,
+                                  id: notificationId,
                                   title: taskTitle,
                                   body: taskDescription,
                                   dateTime: taskStart,
@@ -1459,7 +2042,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     final start = task['task_start'] != null
                         ? (task['task_start'] as Timestamp).toDate()
                         : DateTime.now();
-                    final taskDays = List<String>.from(task['days'] ?? []);
+                    final taskDaysRaw = task['days'];
+                    final taskDays = taskDaysRaw is List
+                        ? List<String>.from(taskDaysRaw)
+                        : [];
                     final frequency = task['task_frequency'] ?? 'Once';
                     if (frequency == 'Every Assigned Days') {
                       final selectedDayName = DateFormat(
@@ -1498,7 +2084,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF00588E),
-                      fontSize: 28,
+                      fontSize: 26,
                     ),
                   ),
                 ],
@@ -1708,24 +2294,22 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.start,
                 children: const [
-                  Icon(
-                    Icons.medical_services,
-                    color: Color(0xFF00588E),
-                    size: 35,
-                  ),
                   SizedBox(width: 8),
                   Text(
                     "Task Reminder",
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF00588E),
-                      fontSize: 28,
+                      fontSize: 26,
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 5),
-              const Divider(color: Color(0xFF00588E), thickness: 2),
+              const Divider(
+                color: Color.fromARGB(255, 204, 203, 203),
+                thickness: 2,
+              ),
               const SizedBox(height: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1736,7 +2320,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       Row(
                         children: [
                           Text(
-                            'Task:',
+                            'Task Title:',
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 18,
@@ -1966,13 +2550,15 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                 child: Text(
                   tomorrowMark,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 14,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF00588E),
                   ),
                 ),
               ),
             ),
+
+          const SizedBox(height: 8),
           // Header row with icon and title
           Row(
             children: [
@@ -2039,12 +2625,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               ),
               if (taskId != null)
                 IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+                  icon: const Icon(Icons.delete, color: Colors.red, size: 30),
                   onPressed: () async {
                     final confirm = await showDialog<bool>(
                       context: context,
                       barrierDismissible: false,
-                      builder: (_) => AlertDialog(
+                      builder: (context) => AlertDialog(
                         backgroundColor: Colors.white,
                         titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                         title: Row(
@@ -2080,11 +2666,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: const [
-                                Icon(
-                                  Icons.delete,
-                                  color: Color(0xFF00588E),
-                                  size: 35,
-                                ),
                                 SizedBox(width: 10),
                                 Text(
                                   "Delete Task",
@@ -2092,14 +2673,14 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     color: Color(0xFF00588E),
-                                    fontSize: 30,
+                                    fontSize: 25,
                                   ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 8),
                             const Divider(
-                              color: Color(0xFF00588E),
+                              color: Color.fromARGB(255, 204, 203, 203),
                               thickness: 2,
                             ),
                             const SizedBox(height: 12),
@@ -2207,6 +2788,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       ),
     );
   }
+
+  // ---------------------- HOUSES SECTION ----------------------
 
   // ---------------------- HOUSES SECTION ----------------------
   Widget _housesSection() {

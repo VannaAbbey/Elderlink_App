@@ -113,7 +113,6 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
             'last_vital': lastVital,
             'status': 'missed',
             'missed_date': assignmentData['assigned_date'],
-            'assigned_nurse_name': assignmentData['assigned_nurse_name'],
             'assigned_nurse_id': assignmentData['assigned_nurse_id'],
             'updated_at': assignmentData['updated_at'],
           });
@@ -275,7 +274,7 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
                                   ),
                                 ),
                                 Text(
-                                  'Assigned to: ${elderlyInfo['assigned_nurse_name'] ?? 'Unknown'}',
+                                  'Assigned to: ${elderlyInfo['assigned_nurse_id'] ?? 'Unknown'}',
                                   style: TextStyle(
                                     fontSize: 14,
                                     color: Colors.grey[700],

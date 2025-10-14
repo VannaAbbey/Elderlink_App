@@ -308,7 +308,7 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
                             houseName,
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              fontSize: 16,
+                              fontSize: 18,
                               fontWeight: FontWeight.bold,
                               color: Color(0xFF00588E),
                               fontFamily: 'Poppins',

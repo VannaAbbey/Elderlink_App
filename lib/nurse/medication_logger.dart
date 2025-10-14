@@ -10,14 +10,19 @@ Future<void> logMedicationAction({
   required Map<String, dynamic>? oldValue,
   required Map<String, dynamic>? newValue,
 }) async {
-  await FirebaseFirestore.instance.collection("medication_logs").add({
+  final docRef = FirebaseFirestore.instance
+      .collection("Medication_Activity_Logs")
+      .doc();
+  await docRef.set({
+    "med_activity_log_id": docRef.id,
     "medication_id": medicationId,
     "elderly_id": elderlyId,
-    "elderly_name": elderlyName,
     "nurse_name": nurseName,
-    "action_type": actionType,
+    "action": actionType,
+    "elderly_name": elderlyName,
+    "timestamp": Timestamp.fromDate(DateTime.now()),
+    // Keep old fields for backward compatibility if needed
     "old_value": oldValue ?? {},
     "new_value": newValue ?? {},
-    "timestamp": FieldValue.serverTimestamp(),
   });
 }

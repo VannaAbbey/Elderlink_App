@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 import 'vital_upcoming.dart';
 import 'vital_completed.dart';
 import 'vital_missed.dart';
@@ -180,6 +181,120 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
     return list;
   }
 
+  // Build the Upcoming tab with red circle count
+  Widget _buildUpcomingTabWithCount(Map<String, dynamic> house) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Upcoming'),
+        const SizedBox(width: 4),
+        StreamBuilder<QuerySnapshot>(
+          stream: _getUpcomingVitalsCountStream(house['house_id']),
+          builder: (context, snapshot) {
+            int count = 0;
+            if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+              count = snapshot.data!.docs.length;
+            }
+
+            if (count == 0) {
+              return const SizedBox.shrink();
+            }
+
+            return Container(
+              padding: const EdgeInsets.all(4),
+              decoration: const BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+              child: Text(
+                count.toString(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  // Get stream for upcoming vitals count
+  Stream<QuerySnapshot> _getUpcomingVitalsCountStream(String houseId) {
+    // Get current shift and day
+    final currentShift = _getCurrentShift();
+    final today = _getTodayDateString();
+
+    // Get nurse ID
+    return Stream.fromFuture(_getNurseId()).asyncExpand((nurseId) {
+      if (nurseId == null) {
+        // Return empty stream
+        return Stream<QuerySnapshot>.empty();
+      }
+
+      return _firestore
+          .collection('vitals')
+          .where('assigned_nurse_id', isEqualTo: nurseId)
+          .where('house_id', isEqualTo: houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('shift', isEqualTo: currentShift)
+          .where('status', isEqualTo: 'pending')
+          .snapshots();
+    });
+  } // Get current shift
+
+  String _getCurrentShift() {
+    final currentHour = DateTime.now().hour;
+    if (currentHour >= 6 && currentHour < 14) return "1st";
+    if (currentHour >= 14 && currentHour < 22) return "2nd";
+    return "3rd";
+  }
+
+  // Get current day
+  String _getCurrentDay() {
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    if (currentHour >= 0 && currentHour < 6) {
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('EEEE').format(previousDay);
+    }
+    return DateFormat('EEEE').format(now);
+  }
+
+  // Get today date string
+  String _getTodayDateString() {
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    if (currentHour >= 0 && currentHour < 6) {
+      final previousDay = now.subtract(Duration(days: 1));
+      return DateFormat('yyyy-MM-dd').format(previousDay);
+    }
+    return DateFormat('yyyy-MM-dd').format(now);
+  }
+
+  // Get nurse ID from name
+  Future<String?> _getNurseId() async {
+    if (nurseName == null) return null;
+
+    final nameParts = nurseName!.split(' ');
+    if (nameParts.length < 2) return null;
+
+    final firstName = nameParts[0];
+    final lastName = nameParts[1];
+
+    final userQuery = await _firestore
+        .collection('users')
+        .where('user_fname', isEqualTo: firstName)
+        .where('user_lname', isEqualTo: lastName)
+        .where('user_type', isEqualTo: 'nurse')
+        .get();
+
+    if (userQuery.docs.isEmpty) return null;
+    return userQuery.docs.first.id;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -335,6 +450,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                                                     style: const TextStyle(
                                                       fontWeight:
                                                           FontWeight.w600,
+                                                      fontSize: 15,
                                                     ),
                                                   ),
                                                 ],
@@ -363,8 +479,12 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                                           indicatorColor: const Color(
                                             0xFF00588E,
                                           ),
-                                          tabs: const [
-                                            Tab(text: 'Upcoming'),
+                                          tabs: [
+                                            Tab(
+                                              child: _buildUpcomingTabWithCount(
+                                                house,
+                                              ),
+                                            ),
                                             Tab(text: 'Completed'),
                                             Tab(text: 'Missed'),
                                           ],

@@ -1167,24 +1167,25 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           }
 
                                                                           // 4️⃣ Save incident report for each nurse
-                                                                          // 4️⃣ Save incident report once, with all nurses in an array
-                                                                          if (nurseIdsToSend
-                                                                              .isNotEmpty) {
+                                                                          // 4️⃣ Save incident report for each nurse separately
+                                                                          for (final nurseId
+                                                                              in nurseIdsToSend) {
                                                                             final incidentDocRef = _firestore
                                                                                 .collection(
                                                                                   'incident_report',
                                                                                 )
                                                                                 .doc(); // Auto ID
                                                                             await incidentDocRef.set({
+                                                                              'incident_id': incidentDocRef.id,
                                                                               'elderly_id': selectedElderlyId,
-                                                                              'house_id': houseId,
+                                                                              'user_id_cg': caregiverId,
+                                                                              'house_id': [
+                                                                                houseId,
+                                                                              ], // Now an array
+                                                                              'user_id_nu': nurseId, // Now a string for each nurse
                                                                               'incident_date_time': formattedDate,
                                                                               'incident_type': 'Incident Report',
                                                                               'additional_info': reportController.text.trim(),
-                                                                              'incident_id': incidentDocRef.id,
-                                                                              'incident_verify': true,
-                                                                              'user_id_cg': caregiverId,
-                                                                              'user_id_nu': nurseIdsToSend, // ✅ array of all nurses
                                                                             });
                                                                           }
 

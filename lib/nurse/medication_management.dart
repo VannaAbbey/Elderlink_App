@@ -159,7 +159,7 @@ class _MedicationManagementScreenState
     if (!userDoc.exists) return [];
     final nurseId = userDoc.id; // ✅ Firestore doc ID is nurse_id
 
-    // 🔹 Step 2: Determine today's day string
+    // 🔹 Step 2: Determine today's day string and current shift
     final days = [
       'Monday',
       'Tuesday',
@@ -169,7 +169,27 @@ class _MedicationManagementScreenState
       'Saturday',
       'Sunday',
     ];
-    final today = days[DateTime.now().weekday - 1];
+    final now = DateTime.now();
+    final today = days[now.weekday - 1];
+
+    // Determine current shift with midnight spanning logic
+    String currentShift;
+    String assignmentDay = today;
+
+    final currentHour = now.hour;
+    if (currentHour >= 6 && currentHour < 14) {
+      currentShift = "1st";
+    } else if (currentHour >= 14 && currentHour < 22) {
+      currentShift = "2nd";
+    } else {
+      currentShift = "3rd";
+      // For 3rd shift before 6 AM, check if assigned to previous day
+      if (currentHour < 6) {
+        final currentDayIndex = days.indexOf(today);
+        final previousDayIndex = currentDayIndex == 0 ? 6 : currentDayIndex - 1;
+        assignmentDay = days[previousDayIndex];
+      }
+    }
 
     // 🔹 Step 3: Get current shift assignment
     final shiftSnap = await _firestore
@@ -177,13 +197,11 @@ class _MedicationManagementScreenState
         .where('user_id', isEqualTo: nurseId)
         .where('user_type', isEqualTo: 'nurse')
         .where('is_current', isEqualTo: true)
-        .where('days_assigned', arrayContains: today)
+        .where('shift', isEqualTo: currentShift)
+        .where('days_assigned', arrayContains: assignmentDay)
         .get();
 
-    if (shiftSnap.docs.isEmpty) return []; // No shift assigned today
-
-    final currentShift = shiftSnap.docs.first.data()['shift'] as String?;
-    if (currentShift == null) return [];
+    if (shiftSnap.docs.isEmpty) return []; // No shift assigned
 
     // 🔹 Step 4: Get elderly assignments for this nurse + today + shift
     final assignSnap = await _firestore

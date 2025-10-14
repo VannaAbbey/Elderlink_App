@@ -38,9 +38,14 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  bool _isNurseScheduled = false;
+
   @override
   void initState() {
     super.initState();
+    _isNurseScheduledForToday().then((scheduled) {
+      if (mounted) setState(() => _isNurseScheduled = scheduled);
+    });
   }
 
   String _getSelectedDay() {
@@ -109,6 +114,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -187,6 +193,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
           return AlertDialog(
+            backgroundColor: Colors.white,
             titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
             title: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,7 +228,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Divider(color: Color(0xFF00588E), thickness: 2),
+                  const Divider(
+                    color: Color.fromARGB(255, 204, 203, 203),
+                    thickness: 2,
+                  ),
                   const SizedBox(height: 12),
                   const Text(
                     'Please choose the appropriate option from the list below. Your selection will be submitted for administrator review.',
@@ -305,13 +315,13 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                   horizontal: 12,
                                 ),
                                 enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(6),
+                                  borderRadius: BorderRadius.circular(30),
                                   borderSide: const BorderSide(
-                                    color: Color(0xFF00588E),
+                                    color: Colors.white,
                                   ),
                                 ),
                                 filled: true,
-                                fillColor: Colors.white,
+                                fillColor: Color(0xFFB7DDF5),
                                 suffixIcon: const Icon(
                                   Icons.arrow_drop_down,
                                   color: Color(0xFF00588E),
@@ -403,6 +413,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
         // confirmation-form style: left-top close icon, title in content, divider and centered actions
         titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
         title: Row(
@@ -437,13 +448,20 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Divider(color: Color(0xFF00588E), thickness: 2),
+              const Divider(
+                color: Color.fromARGB(255, 204, 203, 203),
+                thickness: 2,
+              ),
               const SizedBox(height: 12),
 
               // Date of Death
               const Text(
                 'Date of Death:',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Color(0xFF00588E),
+                ),
               ),
               const SizedBox(height: 6),
               TextField(
@@ -452,15 +470,15 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                 decoration: InputDecoration(
                   hintText: 'Select Date of Death',
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFF00588E)),
+                    borderRadius: BorderRadius.circular(30),
+                    borderSide: const BorderSide(color: Colors.white),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: Color(0xFF00588E)),
+                    borderRadius: BorderRadius.circular(30),
+                    borderSide: const BorderSide(color: Colors.white),
                   ),
                   filled: true,
-                  fillColor: Colors.white,
+                  fillColor: Color(0xFFB7DDF5),
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.calendar_today),
                     onPressed: () async {
@@ -486,7 +504,11 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
               // Cause of Death
               const Text(
                 'Cause of Death:',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Color(0xFF00588E),
+                ),
               ),
               const SizedBox(height: 6),
               Builder(
@@ -508,15 +530,15 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                     decoration: InputDecoration(
                       hintText: 'Enter or select cause of death',
                       enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFF00588E)),
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: const BorderSide(color: Colors.white),
                       ),
                       focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(30),
                         borderSide: const BorderSide(color: Color(0xFF00588E)),
                       ),
                       filled: true,
-                      fillColor: Colors.white,
+                      fillColor: Color(0xFFB7DDF5),
                       suffixIcon: IconButton(
                         icon: const Icon(Icons.arrow_drop_down),
                         onPressed: () async {
@@ -670,6 +692,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
+          backgroundColor: Colors.white,
           // add a small left-top exit icon and center the title
           titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
           title: Row(
@@ -704,7 +727,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Divider(color: Color(0xFF00588E), thickness: 2),
+              const Divider(
+                color: Color.fromARGB(255, 204, 203, 203),
+                thickness: 2,
+              ),
               const SizedBox(height: 12),
               const Text(
                 'You are requested to change the details in the elderly profile. '
@@ -1068,6 +1094,9 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
 
         const double fieldFontSize = 17;
 
+        final deathDateToShow = pendingDeathDate ?? dateOfDeath;
+        final causeToShow = pendingCause ?? causeController.text;
+
         return Scaffold(
           appBar: AppBar(
             backgroundColor: Colors.white,
@@ -1118,6 +1147,30 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                 ? Image.network(
                                     elderly['elderly_profilePic'],
                                     fit: BoxFit.cover,
+                                    loadingBuilder:
+                                        (context, child, loadingProgress) {
+                                          if (loadingProgress == null)
+                                            return child;
+                                          return Container(
+                                            color: const Color(
+                                              0xFF00588E,
+                                            ).withOpacity(0.3),
+                                            child: const Center(
+                                              child: CircularProgressIndicator(
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Color(0xFF00588E)),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Image.asset(
+                                        'assets/images/people_icon.png',
+                                        fit: BoxFit.cover,
+                                      );
+                                    },
                                   )
                                 : Image.asset(
                                     'assets/images/people_icon.png',
@@ -1157,7 +1210,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                               color: Color(0xFF00588e),
                             ),
                           ),
-                          const Divider(color: Color(0xFF00588e), thickness: 1),
+                          const Divider(
+                            color: Color.fromARGB(255, 204, 203, 203),
+                            thickness: 1,
+                          ),
                           const SizedBox(height: 20),
                           buildField(
                             'Full Name',
@@ -1188,68 +1244,87 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                           buildEditableRow(
                             'Mobility Status',
                             displayMobility,
-                            () {
-                              showDropdownOverlay(
-                                'Edit Mobility Status',
-                                'elderly_mobilityStatus',
-                                [
-                                  'Independent',
-                                  'Assisted',
-                                  'Wheelchair-bound',
-                                  'Bedridden',
-                                  'Needs Supervision',
-                                ],
-                                displayMobility,
-                                displayLifeStatus,
-                              );
-                            },
+                            displayLifeStatus == 'Deceased'
+                                ? null
+                                : () {
+                                    showDropdownOverlay(
+                                      'Edit Mobility Status',
+                                      'elderly_mobilityStatus',
+                                      [
+                                        'Independent',
+                                        'Assisted',
+                                        'Wheelchair-bound',
+                                        'Bedridden',
+                                        'Needs Supervision',
+                                      ],
+                                      displayMobility,
+                                      displayLifeStatus,
+                                    );
+                                  },
                             fieldFontSize,
                           ),
-                          const SizedBox(height: 2),
+                          SizedBox(
+                            height: displayLifeStatus == 'Deceased'
+                                ? 20.0
+                                : 10.0,
+                          ),
                           buildEditableRow(
                             'Dietary Notes',
                             displayDiet,
-                            () => showDietOverlay(displayDiet),
+                            displayLifeStatus == 'Deceased'
+                                ? null
+                                : () => showDietOverlay(displayDiet),
                             fieldFontSize,
                           ),
-                          const SizedBox(height: 2),
+                          SizedBox(
+                            height: displayLifeStatus == 'Deceased'
+                                ? 20.0
+                                : 10.0,
+                          ),
                           buildEditableRow(
                             'Health Condition',
                             displayHealth,
-                            () => showHealthOverlay(displayHealth),
+                            displayLifeStatus == 'Deceased'
+                                ? null
+                                : () => showHealthOverlay(displayHealth),
                             fieldFontSize,
                           ),
-                          const SizedBox(height: 2),
+                          SizedBox(
+                            height: displayLifeStatus == 'Deceased'
+                                ? 20.0
+                                : 10.0,
+                          ),
                           buildEditableRow(
                             'Life Status',
                             displayLifeStatus,
-                            () {
-                              showDropdownOverlay(
-                                'Edit Life Status',
-                                'life_status',
-                                ['Alive', 'Deceased'],
-                                displayMobility,
-                                displayLifeStatus,
-                              );
-                            },
+                            displayLifeStatus == 'Deceased'
+                                ? null
+                                : () {
+                                    showDropdownOverlay(
+                                      'Edit Life Status',
+                                      'life_status',
+                                      ['Alive', 'Deceased'],
+                                      displayMobility,
+                                      displayLifeStatus,
+                                    );
+                                  },
                             fieldFontSize,
                           ),
-                          if (pendingLifeStatus == 'Deceased' &&
-                              pendingDeathDate != null &&
-                              pendingCause != null &&
-                              pendingCause!.isNotEmpty) ...[
-                            const SizedBox(height: 15),
+                          if (displayLifeStatus == 'Deceased' &&
+                              deathDateToShow != null &&
+                              causeToShow.isNotEmpty) ...[
+                            const SizedBox(height: 20),
                             buildField(
                               'Date of Death',
                               DateFormat(
                                 'MMMM d, yyyy',
-                              ).format(pendingDeathDate!),
+                              ).format(deathDateToShow),
                               fieldFontSize,
                             ),
                             const SizedBox(height: 25),
                             buildField(
                               'Cause of Death',
-                              pendingCause!,
+                              causeToShow,
                               fieldFontSize,
                             ),
                           ],
@@ -1261,9 +1336,18 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                             future: _isNurseScheduledForToday(),
                             builder: (context, snapshot) {
                               final isScheduled = snapshot.data ?? false;
+                              final hasEdits =
+                                  pendingMobilityStatus != null ||
+                                  pendingLifeStatus != null ||
+                                  pendingHealthCondition != null ||
+                                  pendingDietNotes != null;
+                              final canSubmit = isScheduled && hasEdits;
+                              if (displayLifeStatus == 'Deceased') {
+                                return const SizedBox.shrink();
+                              }
                               return ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: isScheduled
+                                  backgroundColor: canSubmit
                                       ? const Color(0xFF00588E)
                                       : Colors.grey,
                                   foregroundColor: Colors.white,
@@ -1271,7 +1355,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                     vertical: 14,
                                   ),
                                   shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(30),
                                   ),
                                   // Use the Poppins family and the Bold (700) weight which
                                   // is actually included in pubspec.yaml. w900 may fall back
@@ -1283,15 +1367,17 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                     letterSpacing: 0.25,
                                   ),
                                 ),
-                                onPressed: isScheduled
+                                onPressed: canSubmit
                                     ? () => showSubmitConfirmation(
                                         elderly,
                                         lifeStatus,
                                         houseName,
                                       )
-                                    : () => _showNotScheduledDialog(),
+                                    : (isScheduled
+                                          ? null
+                                          : () => _showNotScheduledDialog()),
                                 child: const Text(
-                                  "Update and Submit to Admin",
+                                  "Submit to Supervisor",
                                   style: TextStyle(
                                     fontFamily: 'Poppins',
                                     fontWeight: FontWeight.w700,
@@ -1343,16 +1429,22 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
   Widget buildEditableRow(
     String label,
     String value,
-    VoidCallback onEdit,
+    VoidCallback? onEdit,
     double fontSize,
   ) {
     return Row(
       children: [
         Expanded(child: buildField(label, value, fontSize)),
-        IconButton(
-          icon: const Icon(Icons.edit, color: Color(0xFF00588E)),
-          onPressed: onEdit,
-        ),
+        if (onEdit != null && _isNurseScheduled)
+          IconButton(
+            icon: const Icon(Icons.edit, color: Color(0xFF00588E)),
+            onPressed: onEdit,
+          )
+        else if (onEdit != null)
+          IconButton(
+            icon: const Icon(Icons.edit, color: Colors.grey),
+            onPressed: null,
+          ),
       ],
     );
   }
@@ -1377,6 +1469,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
+          backgroundColor: Colors.white,
           titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1410,7 +1503,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Divider(color: Color(0xFF00588E), thickness: 2),
+                const Divider(
+                  color: Color.fromARGB(255, 204, 203, 203),
+                  thickness: 2,
+                ),
                 const SizedBox(height: 12),
                 const Text(
                   'Please choose the appropriate option from the list below or type a custom value. Your submission will be reviewed by an administrator.',
@@ -1432,19 +1528,17 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                           horizontal: 12,
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(
-                            color: Color(0xFF00588E),
-                          ),
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: const BorderSide(color: Colors.white),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(30),
                           borderSide: const BorderSide(
                             color: Color(0xFF00588E),
                           ),
                         ),
                         filled: true,
-                        fillColor: Colors.white,
+                        fillColor: Color(0xFFB7DDF5),
                         suffixIcon: IconButton(
                           icon: const Icon(
                             Icons.arrow_drop_down,
@@ -1577,6 +1671,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
+          backgroundColor: Colors.white,
           titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1609,7 +1704,10 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Divider(color: Color(0xFF00588E), thickness: 2),
+                const Divider(
+                  color: Color.fromARGB(255, 204, 203, 203),
+                  thickness: 2,
+                ),
                 const SizedBox(height: 12),
                 const Text(
                   'Please choose the appropriate option from the list below or type a custom value. Your selection will be submitted for administrator review.',
@@ -1631,19 +1729,17 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                           horizontal: 12,
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(
-                            color: Color(0xFF00588E),
-                          ),
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: const BorderSide(color: Colors.white),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(30),
                           borderSide: const BorderSide(
                             color: Color(0xFF00588E),
                           ),
                         ),
                         filled: true,
-                        fillColor: Colors.white,
+                        fillColor: Color(0xFFB7DDF5),
                         suffixIcon: IconButton(
                           icon: const Icon(
                             Icons.arrow_drop_down,

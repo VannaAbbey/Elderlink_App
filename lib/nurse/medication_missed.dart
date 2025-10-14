@@ -109,9 +109,9 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
 
       // Get missed medications from activity logs
       final missedLogsQuery = await _firestore
-          .collection('medication_activity_logs')
+          .collection('Medication_Activity_Logs')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('action', isEqualTo: 'miss_take')
+          .where('action', isEqualTo: 'take_missed')
           .get();
 
       final missedMedications = <Map<String, dynamic>>[];

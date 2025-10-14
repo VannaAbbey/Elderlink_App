@@ -236,10 +236,10 @@ class _OptimizedUpcomingVitalsTabState
 
       final isInherited = data['inherited_from_shift'] != null;
       String originalNurseForDisplay =
-          data['assigned_nurse_name'] ?? 'Unknown Nurse';
+          data['assigned_nurse_id'] ?? 'Unknown Nurse';
 
-      if (isInherited && data['inherited_from_nurse_name'] != null) {
-        originalNurseForDisplay = data['inherited_from_nurse_name'];
+      if (isInherited && data['inherited_from_nurse_id'] != null) {
+        originalNurseForDisplay = data['inherited_from_nurse_id'];
       }
 
       upcomingVitals.add({
@@ -384,11 +384,9 @@ class _OptimizedUpcomingVitalsTabState
             final assignmentData = <String, dynamic>{
               // Assignment fields
               'elderly_id': elderly['id'],
-              'elderly_name': elderly['name'],
               'elderly_profilePic': elderly['profilePic'],
               'house_id': elderly['house_id'],
               'assigned_nurse_id': nurseId,
-              'assigned_nurse_name': widget.nurseName ?? 'Unknown',
               'status': 'pending',
               'assigned_date': today,
               'shift': currentShift,

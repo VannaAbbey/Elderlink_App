@@ -46,6 +46,38 @@ class MedicationManagementLayout extends StatefulWidget {
 
 class _MedicationManagementLayoutState
     extends State<MedicationManagementLayout> {
+  final Map<String, int> _houseCounts = {};
+
+  // Build the Upcoming tab with red circle count
+  Widget _buildUpcomingTabWithCount(Map<String, dynamic> house) {
+    final count = _houseCounts[house['house_id']] ?? 0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Upcoming'),
+        if (count > 0) ...[
+          const SizedBox(width: 4),
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: const BoxDecoration(
+              color: Colors.red,
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              count.toString(),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // Get stream for upcoming medications count
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -201,6 +233,7 @@ class _MedicationManagementLayoutState
                                                     style: const TextStyle(
                                                       fontWeight:
                                                           FontWeight.w600,
+                                                      fontSize: 15,
                                                     ),
                                                   ),
                                                 ],
@@ -230,8 +263,12 @@ class _MedicationManagementLayoutState
                                           indicatorColor: const Color(
                                             0xFF00588E,
                                           ),
-                                          tabs: const [
-                                            Tab(text: 'Upcoming'),
+                                          tabs: [
+                                            Tab(
+                                              child: _buildUpcomingTabWithCount(
+                                                house,
+                                              ),
+                                            ),
                                             Tab(text: 'Completed'),
                                             Tab(text: 'Missed'),
                                           ],
@@ -244,6 +281,12 @@ class _MedicationManagementLayoutState
                                               UpcomingMedicationsTab(
                                                 houseId: house['house_id'],
                                                 nurseName: widget.nurseName,
+                                                onCountChanged: (count) {
+                                                  setState(() {
+                                                    _houseCounts[house['house_id']] =
+                                                        count;
+                                                  });
+                                                },
                                               ),
                                               CompletedMedicationsTab(
                                                 houseId: house['house_id'],

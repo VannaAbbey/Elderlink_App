@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
+import 'dart:async';
 import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import '../providers/auth_provider.dart' as my_auth;
@@ -26,6 +27,8 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
   String? nurseId;
   final Map<String, bool> _shownIncidentNotifications = {};
+  bool _isLoading = true;
+  Timer? _refreshTimer;
 
   void _pickDate() async {
     if (_mounted) {
@@ -57,12 +60,22 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
     _loadNurseData();
     _loadNurseId();
     _loadIncidents();
+    _startAutoRefresh();
   }
 
   @override
   void dispose() {
     _mounted = false;
+    _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
+      if (_mounted && !_isLoading) {
+        _loadIncidents();
+      }
+    });
   }
 
   Future<void> _loadNurseData() async {
@@ -123,7 +136,10 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
       if (snapshot.docs.isEmpty) {
         if (_mounted) {
-          setState(() => emergencies = []);
+          setState(() {
+            emergencies = [];
+            _isLoading = false;
+          });
         }
         return;
       }
@@ -135,7 +151,15 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
       for (var doc in snapshot.docs) {
         final data = doc.data();
-        if (data['house_id'] != null) houseIds.add(data['house_id'].toString());
+        if (data['house_id'] != null) {
+          List<String> houseIdList = [];
+          if (data['house_id'] is List) {
+            houseIdList = List<String>.from(data['house_id']);
+          } else if (data['house_id'] is String) {
+            houseIdList = [data['house_id']];
+          }
+          houseIds.addAll(houseIdList);
+        }
         if (data['elderly_id'] != null) {
           elderlyIds.add(data['elderly_id'].toString());
         }
@@ -168,38 +192,34 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
       // Fetch elderly names
       if (elderlyIds.isNotEmpty) {
-        for (String elderlyId in elderlyIds) {
-          futures.add(
-            FirebaseFirestore.instance
-                .collection('elderly')
-                .doc(elderlyId)
-                .get()
-                .then((doc) {
-                  if (doc.exists) {
-                    elderlyNames[elderlyId] =
-                        "${doc['elderly_fname']} ${doc['elderly_lname']}";
-                  }
-                }),
-          );
-        }
+        futures.add(
+          FirebaseFirestore.instance
+              .collection('elderly')
+              .where(FieldPath.documentId, whereIn: elderlyIds.toList())
+              .get()
+              .then((snapshot) {
+                for (var doc in snapshot.docs) {
+                  elderlyNames[doc.id] =
+                      "${doc['elderly_fname']} ${doc['elderly_lname']}";
+                }
+              }),
+        );
       }
 
       // Fetch caregiver names
       if (caregiverIds.isNotEmpty) {
-        for (String caregiverId in caregiverIds) {
-          futures.add(
-            FirebaseFirestore.instance
-                .collection('users')
-                .doc(caregiverId)
-                .get()
-                .then((doc) {
-                  if (doc.exists) {
-                    caregiverNames[caregiverId] =
-                        "${doc['user_fname']} ${doc['user_lname']}";
-                  }
-                }),
-          );
-        }
+        futures.add(
+          FirebaseFirestore.instance
+              .collection('users')
+              .where(FieldPath.documentId, whereIn: caregiverIds.toList())
+              .get()
+              .then((snapshot) {
+                for (var doc in snapshot.docs) {
+                  caregiverNames[doc.id] =
+                      "${doc['user_fname']} ${doc['user_lname']}";
+                }
+              }),
+        );
       }
 
       // Wait for all fetches to complete
@@ -210,8 +230,16 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
       for (var doc in snapshot.docs) {
         final data = doc.data();
 
-        final houseName =
-            houseNames[data['house_id']?.toString()] ?? "Unknown House";
+        // Handle house_id as string or array - take the first house for display
+        List<String> houseIdList = [];
+        if (data['house_id'] is List) {
+          houseIdList = List<String>.from(data['house_id']);
+        } else if (data['house_id'] is String) {
+          houseIdList = [data['house_id']];
+        }
+        final houseId = houseIdList.isNotEmpty ? houseIdList[0] : '';
+        final houseName = houseNames[houseId] ?? "Unknown House";
+
         final elderlyName =
             elderlyNames[data['elderly_id']?.toString()] ?? "Unknown Elderly";
         final caregiverName =
@@ -229,21 +257,27 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
           'additional_info': data['additional_info'] ?? '',
           'incident_id': doc.id,
           'user_id_nu': data['user_id_nu'],
-          'verified': data['incident_verify'] ?? false,
           'timestamp': (data['incident_date_time'] as Timestamp).toDate(),
         });
       }
 
       if (_mounted) {
-        setState(() => emergencies = loaded);
+        setState(() {
+          emergencies = loaded;
+          _isLoading = false;
+        });
       }
 
-      // Send notifications for new incidents assigned to this nurse
+      // Send notifications for new incidents assigned to this nurse (only recent ones)
       if (nurseId != null) {
+        final now = DateTime.now();
         for (final em in loaded) {
-          final nurseIds = List<String>.from(em['user_id_nu'] ?? []);
-          if (nurseIds.contains(nurseId) &&
-              !_shownIncidentNotifications.containsKey(em['incident_id'])) {
+          final assignedNurses = em['user_id_nu'];
+          final incidentTime = em['timestamp'] as DateTime;
+          if (assignedNurses is List &&
+              assignedNurses.contains(nurseId) &&
+              !_shownIncidentNotifications.containsKey(em['incident_id']) &&
+              incidentTime.isAfter(now.subtract(const Duration(seconds: 10)))) {
             NotificationService.scheduleTaskNotification(
               id: em['incident_id'].hashCode,
               title: 'Incident Report',
@@ -258,7 +292,10 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
     } catch (e) {
       print("❌ Error loading incidents: $e");
       if (_mounted) {
-        setState(() => emergencies = []);
+        setState(() {
+          emergencies = [];
+          _isLoading = false;
+        });
       }
     }
   }
@@ -348,7 +385,9 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
 
                   // Emergency Cards
                   Expanded(
-                    child: emergencies.isEmpty
+                    child: _isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : emergencies.isEmpty
                         ? Center(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -370,194 +409,194 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                               ],
                             ),
                           )
-                        : ListView.builder(
-                            itemCount: emergencies.length,
-                            itemBuilder: (context, index) {
-                              final em = emergencies[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 16),
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: em['verified']
-                                      ? const Color.fromARGB(255, 220, 247, 220)
-                                      : const Color.fromARGB(
-                                          255,
-                                          255,
-                                          248,
-                                          220,
-                                        ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    // Top row with incident icon, house name, time
-                                    Row(
-                                      children: [
-                                        Container(
-                                          width: 50,
-                                          height: 50,
-                                          decoration: BoxDecoration(
-                                            color: Colors.green,
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.report,
-                                            color: Colors.white,
-                                            size: 28,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Text(
-                                            em['house'],
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 20,
+                        : RefreshIndicator(
+                            onRefresh: _loadIncidents,
+                            child: ListView.builder(
+                              itemCount: emergencies.length,
+                              itemBuilder: (context, index) {
+                                final em = emergencies[index];
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 16),
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      220,
+                                      247,
+                                      220,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      // Top row with incident icon, house name, time
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 50,
+                                            height: 50,
+                                            decoration: BoxDecoration(
                                               color: Colors.green,
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: const Icon(
+                                              Icons.report,
+                                              color: Colors.white,
+                                              size: 28,
                                             ),
                                           ),
-                                        ),
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              em['time'],
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              em['house'],
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.bold,
-                                                color: Color.fromARGB(
-                                                  255,
-                                                  82,
-                                                  81,
-                                                  81,
-                                                ),
+                                                fontSize: 20,
+                                                color: Colors.green,
                                               ),
                                             ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-
-                                    const SizedBox(height: 8),
-                                    // Elderly and caregiver info in separate rows
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          "Elderly: ",
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black,
                                           ),
-                                        ),
-                                        Expanded(
-                                          child: Text(
-                                            em['elderly'],
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.normal,
-                                              color: Colors.black,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          "Submitted by: ",
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black,
-                                          ),
-                                        ),
-                                        Expanded(
-                                          child: Text(
-                                            em['submitted_by'],
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.normal,
-                                              color: Colors.black,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    // What happened label
-                                    const Text(
-                                      "What happened?",
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    // Centered description box
-                                    Center(
-                                      child: Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.all(16),
-                                        decoration: BoxDecoration(
-                                          color: em['verified']
-                                              ? Colors.green[50]
-                                              : Colors.orange[50],
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            // Incident Type (Main description)
-                                            Text(
-                                              em['incident_type'].isNotEmpty
-                                                  ? em['incident_type']
-                                                  : 'No incident type specified',
-                                              textAlign: TextAlign.justify,
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w600,
-                                                color: Colors.black87,
-                                              ),
-                                            ),
-                                            // Additional Info (Optional)
-                                            if (em['additional_info']
-                                                .isNotEmpty) ...[
-                                              const SizedBox(height: 12),
-                                              const Text(
-                                                'Additional Information:',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.black54,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
+                                          Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            children: [
                                               Text(
-                                                em['additional_info'],
-                                                textAlign: TextAlign.justify,
+                                                em['time'],
                                                 style: const TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.normal,
-                                                  color: Colors.black54,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color.fromARGB(
+                                                    255,
+                                                    82,
+                                                    81,
+                                                    81,
+                                                  ),
                                                 ),
                                               ),
                                             ],
-                                          ],
+                                          ),
+                                        ],
+                                      ),
+
+                                      const SizedBox(height: 8),
+                                      // Elderly and caregiver info in separate rows
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            "Elderly: ",
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                          Expanded(
+                                            child: Text(
+                                              em['elderly'],
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.normal,
+                                                color: Colors.black,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            "Submitted by: ",
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                          Expanded(
+                                            child: Text(
+                                              em['submitted_by'],
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.normal,
+                                                color: Colors.black,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      // What happened label
+                                      const Text(
+                                        "What happened?",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black,
                                         ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
+                                      const SizedBox(height: 8),
+                                      // Centered description box
+                                      Center(
+                                        child: Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green[50],
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              // Incident Type (Main description)
+                                              Text(
+                                                em['incident_type'].isNotEmpty
+                                                    ? em['incident_type']
+                                                    : 'No incident type specified',
+                                                textAlign: TextAlign.justify,
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              // Additional Info (Optional)
+                                              if (em['additional_info']
+                                                  .isNotEmpty) ...[
+                                                const SizedBox(height: 12),
+                                                const Text(
+                                                  'Additional Information:',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  em['additional_info'],
+                                                  textAlign: TextAlign.justify,
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight:
+                                                        FontWeight.normal,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                   ),
                 ],

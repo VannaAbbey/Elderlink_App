@@ -169,6 +169,11 @@ class NotificationService {
     required String body,
     required DateTime dateTime,
   }) async {
+    // Don't schedule notifications for past times
+    if (dateTime.isBefore(DateTime.now())) {
+      return;
+    }
+
     await _notifications.zonedSchedule(
       id,
       title,

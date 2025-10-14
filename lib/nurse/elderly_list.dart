@@ -101,12 +101,14 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
         final diet = (e['elderly_dietNotes'] ?? '').toLowerCase();
         final mobility = (e['elderly_mobilityStatus'] ?? '').toLowerCase();
         final sex = (e['elderly_sex'] ?? '').toLowerCase();
+        final causeOfDeath = (e['elderly_causeOfDeath'] ?? '').toLowerCase();
 
         return fullName.contains(query) ||
             condition.contains(query) ||
             diet.contains(query) ||
             mobility.contains(query) ||
-            sex.contains(query);
+            sex.contains(query) ||
+            causeOfDeath.contains(query);
       }).toList();
     }
 
@@ -227,7 +229,8 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                             Icons.search,
                             color: Colors.grey,
                           ),
-                          hintText: "Search by Name, Condition, or Mobility...",
+                          hintText:
+                              "Search by Name, Condition, Mobility, or Cause of Death...",
                           hintStyle: const TextStyle(
                             color: Colors.grey,
                             fontSize: 12,
