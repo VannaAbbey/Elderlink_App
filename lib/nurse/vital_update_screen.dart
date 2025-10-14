@@ -354,6 +354,8 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
         'respiratory_rate': _respiratoryRateController.text.trim(),
         'remarks': _notesController.text.trim(),
         'updated_by_nurse_id': _currentNurseId ?? 'Unknown',
+        'recorded_by': _currentNurseId ?? 'Unknown',
+        'recorded_by_name': widget.nurseName ?? 'Unknown Nurse',
       };
 
       if (assignmentData['inherited_from_shift'] != null) {

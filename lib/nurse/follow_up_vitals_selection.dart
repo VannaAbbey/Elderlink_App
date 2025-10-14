@@ -111,42 +111,68 @@ class _FollowUpVitalsSelectionScreenState
       print('📋 Found ${allVitalsQuery.docs.length} total vitals for today');
 
       // 🔧 FIXED: Get ALL elderly assigned to current nurse from elderly_assignments collection
-      // This gives us ALL elderly that should be assigned to this nurse for ANY shift today
+      // This gives us ALL elderly that should be assigned to this nurse for CURRENT shift today
       final nurseAssignedElderlyIds = <String>{};
 
-      // Check all possible shifts and current day to get complete assignment list
+      // Check ONLY current shift and current day to get assignment list
       final currentDay = _getCurrentDay();
-      final allShifts = ["1st", "2nd", "3rd"];
+      final currentShift = _getCurrentShift();
 
-      for (final shift in allShifts) {
-        final nurseElderlyQuery = await _firestore
-            .collection('elderly_assignments')
-            .where('user_id', isEqualTo: nurseId)
-            .where('user_type', isEqualTo: 'nurse')
-            .where('is_current', isEqualTo: true)
-            .where('house_id', arrayContains: widget.houseId)
-            .where('shift', isEqualTo: shift)
-            .where('day', isEqualTo: currentDay)
-            .get();
+      final nurseElderlyQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('day', isEqualTo: currentDay)
+          .get();
 
-        for (final doc in nurseElderlyQuery.docs) {
-          final assignmentData = doc.data();
-          final elderlyIds = List<String>.from(
-            assignmentData['elderly_ids'] ?? [],
-          );
-          nurseAssignedElderlyIds.addAll(elderlyIds);
-        }
+      for (final doc in nurseElderlyQuery.docs) {
+        final assignmentData = doc.data();
+        final elderlyIds = List<String>.from(
+          assignmentData['elderly_ids'] ?? [],
+        );
+        nurseAssignedElderlyIds.addAll(elderlyIds);
       }
 
       print('🔍 Assigned elderly IDs: $nurseAssignedElderlyIds');
 
-      // 🔧 STEP 1.5: Pre-fetch elderly names for all assigned elderly
-      final elderlyNamesCache = <String, String>{};
-      final nurseNamesCache = <String, String>{};
+      // 🔧 Filter elderly by house - only include elderly in the selected house
+      final filteredElderlyIds = <String>{};
       if (nurseAssignedElderlyIds.isNotEmpty) {
         // Split into chunks of 30 (Firestore limit for whereIn)
         final chunks = <List<String>>[];
         final idsList = nurseAssignedElderlyIds.toList();
+        for (var i = 0; i < idsList.length; i += 30) {
+          final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
+          chunks.add(idsList.sublist(i, end));
+        }
+
+        for (final chunk in chunks) {
+          final elderlyQuery = await _firestore
+              .collection('elderly')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .where('house_id', isEqualTo: widget.houseId)
+              .get();
+
+          for (final doc in elderlyQuery.docs) {
+            filteredElderlyIds.add(doc.id);
+          }
+        }
+      }
+
+      print(
+        '🔍 Filtered elderly IDs for house ${widget.houseId}: $filteredElderlyIds',
+      );
+
+      // Use filtered IDs instead of all assigned IDs
+      final finalAssignedElderlyIds = filteredElderlyIds;
+      final elderlyNamesCache = <String, String>{};
+      final nurseNamesCache = <String, String>{};
+      if (finalAssignedElderlyIds.isNotEmpty) {
+        // Split into chunks of 30 (Firestore limit for whereIn)
+        final chunks = <List<String>>[];
+        final idsList = finalAssignedElderlyIds.toList();
         for (var i = 0; i < idsList.length; i += 30) {
           final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
           chunks.add(idsList.sublist(i, end));
@@ -243,7 +269,7 @@ class _FollowUpVitalsSelectionScreenState
         );
 
         // Only include elderly that are assigned to current nurse
-        if (!nurseAssignedElderlyIds.contains(elderlyId)) {
+        if (!finalAssignedElderlyIds.contains(elderlyId)) {
           print('   ❌ Skipping - not assigned to current nurse');
           continue;
         }
@@ -286,14 +312,18 @@ class _FollowUpVitalsSelectionScreenState
               'respiratory_rate': vitalData['respiratory_rate'],
               'completed_at': vitalData['completed_at'],
               'recorded_by_name':
-                  nurseNamesCache[vitalData['recorded_by']] ?? 'Unknown Nurse',
+                  vitalData['recorded_by_name'] ??
+                  nurseNamesCache[vitalData['assigned_nurse_id']] ??
+                  nurseNamesCache[vitalData['updated_by_nurse_id']] ??
+                  nurseNamesCache[vitalData['recorded_by']] ??
+                  'Unknown Nurse',
             },
           };
         }
       }
 
       // 🔧 STEP 3: Build the final elderly list - include ALL assigned elderly
-      for (final elderlyId in nurseAssignedElderlyIds) {
+      for (final elderlyId in finalAssignedElderlyIds) {
         final elderlyName = elderlyNamesCache[elderlyId] ?? 'Unknown';
         print('🔍 Processing elderly $elderlyId: cached name = "$elderlyName"');
 
