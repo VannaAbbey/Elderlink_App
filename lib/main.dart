@@ -13,6 +13,7 @@ import 'auth/register_success.dart';
 import 'caregiver/home.dart';
 import 'nurse/home.dart';
 import 'services/cg_services/task_reminder_service.dart';
+import 'services/cg_services/missed_task_monitor_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,6 +37,15 @@ void main() async {
     } catch (e) {
       print('❌ TaskReminderService initialization failed: $e');
       print('❌ Stack trace: ${StackTrace.current}');
+    }
+    
+    // Start missed task monitor service (runs every 30 seconds)
+    try {
+      print('🔧 Starting MissedTaskMonitorService...');
+      await MissedTaskMonitorService().startMonitoring();
+      print('✅ MissedTaskMonitorService started successfully');
+    } catch (e) {
+      print('❌ MissedTaskMonitorService failed to start: $e');
     }
     
     // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)

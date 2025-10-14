@@ -429,26 +429,12 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
             }
           }
 
-          // Sort by closest to current date and time (chronological order)
-          // This prioritizes date first, then time within the same date
-          final currentDateTime = DateTime.now();
-          
+          // Sort by task start time (chronological order - earliest first)
+          // This matches the sorting logic in upcoming_tasks_screen.dart
           tasks.sort((a, b) {
-            final aStart = a['task_start'] as DateTime?;
-            final bStart = b['task_start'] as DateTime?;
-            final aDate = a['task_date'] as DateTime?;
-            final bDate = b['task_date'] as DateTime?;
-            final aFreqOnce = a['freq_once_date'] as DateTime?;
-            final bFreqOnce = b['freq_once_date'] as DateTime?;
-
-            // Use the same priority as in filtering: task_date -> task_start -> freq_once_date
-            final aDateTime = aDate ?? aStart ?? aFreqOnce ?? currentDateTime;
-            final bDateTime = bDate ?? bStart ?? bFreqOnce ?? currentDateTime;
-
-            // Compare full DateTime objects - this naturally prioritizes:
-            // 1. Tasks due earlier (closer to current time)
-            // 2. Date first, then time within the same date
-            return aDateTime.compareTo(bDateTime);
+            final aStart = a['task_start'] as DateTime? ?? DateTime.now();
+            final bStart = b['task_start'] as DateTime? ?? DateTime.now();
+            return aStart.compareTo(bStart);
           });
           return tasks;
         });

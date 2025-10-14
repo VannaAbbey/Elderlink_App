@@ -8,8 +8,106 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'package:workmanager/workmanager.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'notification_service.dart';
 import '../../models/cg_models/notification_model.dart';
+import 'caregiver_shift_log_service.dart';
+
+/// Background callback for WorkManager - must be a top-level function
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    try {
+      print('🔄 Background task started: $task');
+      
+      // Initialize Firebase if not already initialized
+      await Firebase.initializeApp();
+      
+      // Check for missed tasks and update their status
+      await _checkAndUpdateMissedTasks();
+      
+      print('✅ Background task completed successfully');
+      return Future.value(true);
+    } catch (e) {
+      print('❌ Background task failed: $e');
+      return Future.value(false);
+    }
+  });
+}
+
+/// Check for overdue tasks and mark them as missed
+Future<void> _checkAndUpdateMissedTasks() async {
+  try {
+    print('🔍 Checking for missed tasks in background...');
+    
+    final now = DateTime.now();
+    
+    // Query all upcoming tasks
+    final tasksSnapshot = await FirebaseFirestore.instance
+        .collection('care_tasks')
+        .where('task_status', arrayContains: 'Upcoming')
+        .get();
+    
+    print('📋 Found ${tasksSnapshot.docs.length} upcoming tasks to check');
+    
+    int missedCount = 0;
+    
+    for (var doc in tasksSnapshot.docs) {
+      final data = doc.data();
+      
+      // Calculate task end time
+      final taskEnd = (data['task_end'] is Timestamp) 
+          ? (data['task_end'] as Timestamp).toDate() 
+          : data['task_end'] as DateTime?;
+      
+      final taskDate = (data['task_date'] is Timestamp) 
+          ? (data['task_date'] as Timestamp).toDate() 
+          : data['task_date'] as DateTime?;
+      
+      if (taskEnd != null && taskDate != null) {
+        // Combine date and time
+        final taskEndDateTime = DateTime(
+          taskDate.year,
+          taskDate.month,
+          taskDate.day,
+          taskEnd.hour,
+          taskEnd.minute,
+        );
+        
+        // Check if task is overdue
+        if (now.isAfter(taskEndDateTime)) {
+          print('⏰ Found missed task: ${data['task_description']} - Marking as missed');
+          
+          // Update task status to Missed
+          await doc.reference.update({
+            'task_status': ['Missed'],
+            'last_updated': FieldValue.serverTimestamp(),
+          });
+          
+          // Create task log using proper shift log service
+          await CaregiverShiftLogService.createTaskLog(
+            taskId: doc.id,
+            caregiverId: data['caregiver_id'] ?? '',
+            elderlyId: data['elderly_id'] ?? '',
+            elderlyFname: data['elderly_fname'] ?? '',
+            taskDescription: data['task_description'] ?? '',
+            status: 'Missed',
+            taskDate: taskDate,
+            reason: 'Task marked as missed by background system',
+          );
+          
+          missedCount++;
+        }
+      }
+    }
+    
+    print('✅ Background check complete. Marked $missedCount tasks as missed.');
+  } catch (e) {
+    print('❌ Error checking missed tasks: $e');
+    rethrow;
+  }
+}
 
 class TaskReminderService {
   static final TaskReminderService _instance = TaskReminderService._internal();
@@ -157,9 +255,25 @@ class TaskReminderService {
       await AndroidAlarmManager.initialize();
       print('✅ Android alarm manager initialized');
       
-      // Workmanager removed due to compatibility issues
-      print('ℹ️ Workmanager disabled for now');
+      // Initialize WorkManager for background task checking
+      print('🔧 Initializing WorkManager for background tasks...');
+      await Workmanager().initialize(
+        callbackDispatcher,
+        isInDebugMode: false, // Set to true for debugging
+      );
       
+      // Register periodic task to check for missed tasks every 15 minutes
+      await Workmanager().registerPeriodicTask(
+        'check-missed-tasks',
+        'checkMissedTasks',
+        frequency: const Duration(minutes: 15),
+        constraints: Constraints(
+          networkType: NetworkType.connected,
+        ),
+        existingWorkPolicy: ExistingWorkPolicy.replace,
+      );
+      
+      print('✅ WorkManager initialized and periodic task registered');
       print('✅ All Android services initialized');
     } catch (e) {
       print('❌ Error initializing Android services: $e');

@@ -60,6 +60,7 @@ dependencies:
   permission_handler: ^11.3.1
   flutter_ringtone_player: ^4.0.0+3
   timezone: ^0.9.4
+  workmanager: ^0.6.0
 
 dev_dependencies:
   flutter_test:

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cg_providers/absence_provider.dart';
 import '../services/cg_services/leave_notification_listener.dart';
+import '../services/cg_services/missed_task_monitor_service.dart';
 import '../auth/get_started.dart';
 import '../caregiver/home.dart';
 import '../nurse/home.dart';
@@ -17,6 +18,7 @@ class AuthWrapper extends StatefulWidget {
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _absenceInitialized = false;
   bool _leaveListenerInitialized = false;
+  bool _missedTaskMonitorInitialized = false;
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +60,16 @@ class _AuthWrapperState extends State<AuthWrapper> {
           // Initialize leave notification listener in the background
           WidgetsBinding.instance.addPostFrameCallback((_) {
             LeaveNotificationListener().initialize();
+          });
+        }
+        
+        // Initialize or restart missed task monitor for caregivers
+        if (userId != null && !_missedTaskMonitorInitialized && userRole == 'caregiver') {
+          _missedTaskMonitorInitialized = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            if (!MissedTaskMonitorService().isMonitoring) {
+              await MissedTaskMonitorService().startMonitoring();
+            }
           });
         }
         
