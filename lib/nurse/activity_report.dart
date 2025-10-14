@@ -610,10 +610,12 @@ class ActivityReport {
                                   color: () {
                                     final status = (activity['status'] ?? '')
                                         .toLowerCase();
-                                    if (status == 'comp.')
+                                    if (status == 'comp.') {
                                       return PdfColors.green;
-                                    if (status == 'pending')
+                                    }
+                                    if (status == 'pending') {
                                       return PdfColors.orange;
+                                    }
                                     return PdfColors.red;
                                   }(),
                                   fontWeight: pw.FontWeight.bold,

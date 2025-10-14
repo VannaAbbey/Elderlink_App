@@ -2193,9 +2193,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   }) async {
     try {
       // Set default take number if not provided (for create actions)
-      if (takeNumber == null) {
-        takeNumber = 1;
-      }
+      takeNumber ??= 1;
 
       // Get elderly name
       final elderlyDoc = await _firestore
@@ -2299,19 +2297,22 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     // Function to check if any changes were made
     bool hasChanges() {
       // Check medication name
-      if (selectedMedicationTemp != medicationData['medication_name'])
+      if (selectedMedicationTemp != medicationData['medication_name']) {
         return true;
+      }
 
       // Check dosage
       if (selectedDosageTemp != medicationData['dosage']) return true;
 
       // Check repeat interval
-      if (selectedIntervalTemp != medicationData['repeat_interval'])
+      if (selectedIntervalTemp != medicationData['repeat_interval']) {
         return true;
+      }
 
       // Check number of intakes
-      if (numberOfIntakesTemp != medicationData['number_of_intakes'])
+      if (numberOfIntakesTemp != medicationData['number_of_intakes']) {
         return true;
+      }
 
       // Check intake times
       final existingTimes = List<String>.from(
@@ -3396,7 +3397,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                         ? 12
                                         : (hour > 12 ? hour - 12 : hour);
                                     final formattedTime =
-                                        '${displayHour}:${minute.toString().padLeft(2, '0')}$period';
+                                        '$displayHour:${minute.toString().padLeft(2, '0')}$period';
                                     return Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 8,
@@ -3673,7 +3674,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Cancel notification for this specific take
       try {
-        final notifyId = ('${medicationId}_${removedIndex}').hashCode;
+        final notifyId = ('${medicationId}_$removedIndex').hashCode;
         NotificationService.cancelNotification(notifyId);
       } catch (e) {
         print('Error cancelling notification: $e');
@@ -4006,7 +4007,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final period = hour >= 12 ? 'PM' : 'AM';
       final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
 
-      return '${displayHour}:${minute.toString().padLeft(2, '0')}$period';
+      return '$displayHour:${minute.toString().padLeft(2, '0')}$period';
     } catch (e) {
       return timeString; // Return original if parsing fails
     }

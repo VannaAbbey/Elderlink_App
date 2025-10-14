@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import 'edit_profile.dart';
-import 'settings.dart';
-import 'help_support.dart';
+import 'leave_form.dart';
+
 
 class CaregiverSidebar extends StatelessWidget {
   final VoidCallback onLogout;
@@ -90,27 +90,17 @@ class CaregiverSidebar extends StatelessWidget {
                     },
                   ),
                   ListTile(
-                    leading: Icon(Icons.settings, color: Color(0xFF00588e)),
-                    title: Text('Settings'),
+                    leading: Icon(Icons.calendar_today, color: Color(0xFF00588e)),
+                    title: Text('Request Leave'),
                     onTap: () {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
-                        MaterialPageRoute(builder: (context) => const Settings()),
+                        MaterialPageRoute(builder: (context) => const LeaveForm()),
                       );
                     },
                   ),
-                  ListTile(
-                    leading: Icon(Icons.help, color: Color(0xFF00588e)),
-                    title: Text('Help & Support'),
-                    onTap: () {
-                      toggleSidebar();
-                      Navigator.push(
-                        parentContext,
-                        MaterialPageRoute(builder: (context) => const HelpSupport()),
-                      );
-                    },
-                  ),
+
                   const Divider(),
                   const SizedBox(height: 20),
                   Center(

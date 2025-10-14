@@ -53,11 +53,17 @@ dependencies:
   # State management
   provider: ^6.0.5
   dropdown_button2: ^2.3.9
-
-  # << Add Flutter Local Notifications here >>
-  firebase_messaging: ^16.0.1
-  flutter_local_notifications: ^13.0.0
+  
+  # Notification and alarm packages
+  flutter_local_notifications: ^17.2.2
+  android_alarm_manager_plus: ^4.0.4
   permission_handler: ^11.3.1
+  flutter_ringtone_player: ^4.0.0+3
+  timezone: ^0.9.4
+  workmanager: ^0.6.0
+
+  # Firebase messaging
+  firebase_messaging: ^16.0.1
   audioplayers: ^6.5.1
   csv: ^6.0.0
   share_plus: ^10.0.2
@@ -117,9 +123,8 @@ flutter:
     - assets/images/Gabriel_Logo.png
     - assets/images/Rose_Logo.png
     - assets/sounds/alarm.mp3
+    - assets/houses_img/
 
-
-  
   fonts:
     - family: Poppins
       fonts:

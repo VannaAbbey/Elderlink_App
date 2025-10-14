@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'widgets/auth_wrapper.dart';
+import 'providers/cg_providers/absence_provider.dart';
 import 'auth/get_started.dart';
 import 'auth/login.dart';
 import 'auth/register_choose_role.dart';
@@ -19,6 +20,8 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
+import 'services/cg_services/task_reminder_service.dart';
+import 'services/cg_services/missed_task_monitor_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -510,14 +513,43 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
+    // Only initialize Firebase if not already initialized
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
-      print('✅ Firebase initialized');
+      print('Firebase initialized successfully');
     } else {
-      print('⚠️ Firebase already initialized');
+      print('Firebase already initialized');
     }
+
+    // Initialize task reminder service
+    try {
+      print('🔧 Starting TaskReminderService initialization...');
+      await TaskReminderService().initialize();
+      print('✅ TaskReminderService initialization completed');
+
+      // Schedule reminders for existing upcoming tasks
+      print('🔧 Scheduling reminders for existing tasks...');
+      await TaskReminderService().scheduleAllUpcomingTaskReminders();
+      print('✅ Existing task reminders scheduled');
+    } catch (e) {
+      print('❌ TaskReminderService initialization failed: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
+    }
+
+    // Start missed task monitor service (runs every 30 seconds)
+    try {
+      print('🔧 Starting MissedTaskMonitorService...');
+      await MissedTaskMonitorService().startMonitoring();
+      print('✅ MissedTaskMonitorService started successfully');
+    } catch (e) {
+      print('❌ MissedTaskMonitorService failed to start: $e');
+    }
+
+    // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
+    // WARNING: This will delete ALL user data!
+    // await _initializeDatabase();
   } catch (e) {
     print('❌ Firebase init failed: $e');
   }
@@ -528,7 +560,15 @@ void main() async {
   // <-- Add this for task notifications
   await NotificationService.init();
 
-  runApp(MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => my_auth.AuthProvider()),
+        ChangeNotifierProvider(create: (_) => AbsenceProvider()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {

@@ -1,8 +1,83 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'upcoming_tasks_screen.dart';
 
-class IncompleteTasksScreen extends StatelessWidget {
+class IncompleteTasksScreen extends StatefulWidget {
+  const IncompleteTasksScreen({super.key});
+
+  @override
+  State<IncompleteTasksScreen> createState() => _IncompleteTasksScreenState();
+}
+
+class _IncompleteTasksScreenState extends State<IncompleteTasksScreen> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  int _refreshKey = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Trigger initial progressive task system check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProgressiveTaskSystem(context);
+    });
+    // Set up periodic refresh every 30 seconds
+    _startPeriodicRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // App came back into focus, refresh the data
+      _checkProgressiveTaskSystem(context);
+      _triggerRefresh();
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _triggerRefresh();
+      }
+    });
+  }
+
+  void _triggerRefresh() {
+    if (mounted) {
+      setState(() {
+        _refreshKey++;
+      });
+    }
+  }
+  void _checkProgressiveTaskSystem(BuildContext context) async {
+    try {
+      print('🔄 IncompleteTasksScreen: Progressive system triggered at ${DateTime.now()}');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        // Call the Progressive Task System from UpcomingTasksScreen
+        final progressedTasks = await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
+        if (progressedTasks > 0) {
+          print('✅ IncompleteTasksScreen: Progressed $progressedTasks recurring tasks');
+        } else {
+          print('ℹ️ IncompleteTasksScreen: No tasks needed progression');
+        }
+      }
+    } catch (e) {
+      print('❌ IncompleteTasksScreen: Error in progressive system: $e');
+    }
+  }
+
   String _formatSingleTime(DateTime? dateTime) {
     if (dateTime == null) return '';
     final hour = dateTime.hour;
@@ -16,8 +91,45 @@ class IncompleteTasksScreen extends StatelessWidget {
     return '$hour12:$minute $ampm';
   }
 
+  String _formatFrequency(Map<String, dynamic> task) {
+    final frequency = task['task_frequency'];
+    
+    if (frequency is List && frequency.isNotEmpty) {
+      final firstFreq = frequency[0].toString();
+      if (firstFreq == 'Custom') {
+        final customDays = task['custom_days'] as List<dynamic>? ?? [];
+        if (customDays.isNotEmpty) {
+          return 'Custom (${customDays.join(', ')})';
+        }
+        return 'Custom';
+      }
+      return frequency.join(', ');
+    }
+    
+    return frequency?.toString() ?? '';
+  }
+
+  String _getNextRecurringDate(Map<String, dynamic> task) {
+    final nextTaskDate = task['next_taskdate'];
+    
+    if (nextTaskDate != null) {
+      DateTime dateTime;
+      if (nextTaskDate is Timestamp) {
+        dateTime = nextTaskDate.toDate();
+      } else if (nextTaskDate is DateTime) {
+        dateTime = nextTaskDate;
+      } else {
+        return '';
+      }
+      
+      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+    }
+    
+    return '';
+  }
+
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
-  static String formatHeaderDate(String key) {
+  String formatHeaderDate(String key) {
     try {
       final date = DateTime.parse(key);
       const months = [
@@ -42,8 +154,9 @@ class IncompleteTasksScreen extends StatelessWidget {
     }
   }
 
-  final DateTime? selectedFilterDate;
-  const IncompleteTasksScreen({super.key, this.selectedFilterDate});
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // final DateTime? selectedFilterDate;
+
 
   /// Returns a stream of incomplete tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -58,11 +171,31 @@ class IncompleteTasksScreen extends StatelessWidget {
         .where('task_status', arrayContains: 'Incomplete')
         .where('created_by', isEqualTo: caregiverId)
         .snapshots()
-        .map((snapshot) {
+        .asyncMap((snapshot) async {
           final now = DateTime.now();
-          List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+          List<Map<String, dynamic>> tasks = [];
+          
+          for (var doc in snapshot.docs) {
             final data = doc.data();
-            return {
+            
+            // Fetch elderly profile picture
+            String? profilePicUrl;
+            try {
+              final elderlyQuery = await FirebaseFirestore.instance
+                  .collection('elderly')
+                  .where('elderly_fname', isEqualTo: data['elderly_fname'] ?? '')
+                  .limit(1)
+                  .get();
+              
+              if (elderlyQuery.docs.isNotEmpty) {
+                final elderlyData = elderlyQuery.docs.first.data();
+                profilePicUrl = elderlyData['elderly_profilePic'] as String?;
+              }
+            } catch (e) {
+              print('Error fetching elderly profile picture: $e');
+            }
+            
+            tasks.add({
               'task_id': data['task_id'] ?? doc.id,
               'elderly_fname': data['elderly_fname'] ?? '',
               'task_description': data['task_description'] ?? '',
@@ -76,49 +209,11 @@ class IncompleteTasksScreen extends StatelessWidget {
                   ? (data['task_date'] as Timestamp).toDate()
                   : data['task_date'],
               'task_frequency': data['task_frequency'] ?? ['Only once'],
+              'custom_days': data['custom_days'] ?? [],
+              'next_taskdate': data['next_taskdate'],
               'inc_reason': data['inc_reason'] ?? '',
-            };
-          }).toList();
-          // Filter by selected date if set
-          if (selectedFilterDate != null) {
-            final filterDate = DateTime(
-              selectedFilterDate!.year,
-              selectedFilterDate!.month,
-              selectedFilterDate!.day,
-            );
-            tasks = tasks.where((task) {
-              final taskDate = task['task_date'] as DateTime?;
-              final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-              final freq = freqList.isNotEmpty
-                  ? freqList[0] as String
-                  : 'Only once';
-              if (taskDate == null) return false;
-              final startDate = DateTime(
-                taskDate.year,
-                taskDate.month,
-                taskDate.day,
-              );
-              switch (freq) {
-                case 'Only once':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Every Workday':
-                  return !filterDate.isBefore(startDate);
-                case 'Every other day':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && diff % 2 == 0;
-                  }
-                case 'Once a week':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && filterDate.weekday == startDate.weekday;
-                  }
-                default:
-                  return false;
-              }
-            }).toList();
+              'elderly_profilePic': profilePicUrl,
+            });
           }
           // Sort by task_start ascending
           tasks.sort((a, b) {
@@ -130,12 +225,53 @@ class IncompleteTasksScreen extends StatelessWidget {
         });
   }
 
+  Future<void> _onRefresh(BuildContext context) async {
+    // Trigger progressive task system when user pulls to refresh
+    _checkProgressiveTaskSystem(context);
+  }
+
   @override
   Widget build(BuildContext context) {
+    _checkProgressiveTaskSystem(context);
     // Placeholder data for demonstration
-    return StreamBuilder<List<Map<String, dynamic>>>(
+    return RefreshIndicator(
+      onRefresh: () => _onRefresh(context),
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
       stream: getTasksStream(),
       builder: (context, snapshot) {
+        // Show loading spinner while data is loading
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+            ),
+          );
+        }
+        
+        // Handle errors
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 60),
+                const SizedBox(height: 16),
+                Text(
+                  'Error loading incomplete tasks',
+                  style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+        
         final tasks = snapshot.data ?? [];
         // Group tasks by date
         Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -181,7 +317,7 @@ class IncompleteTasksScreen extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(12.0),
                         child: Text(
-                          IncompleteTasksScreen.formatHeaderDate(key),
+                          formatHeaderDate(key),
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
@@ -355,16 +491,7 @@ class IncompleteTasksScreen extends StatelessWidget {
                                               const SizedBox(width: 8),
                                               Expanded(
                                                 child: Text(
-                                                  (task['task_frequency']
-                                                              is List &&
-                                                          task['task_frequency']
-                                                              .isNotEmpty)
-                                                      ? (task['task_frequency']
-                                                                as List)
-                                                            .join(', ')
-                                                      : (task['task_frequency']
-                                                                ?.toString() ??
-                                                            ''),
+                                                  _formatFrequency(task),
                                                   style: const TextStyle(
                                                     fontSize: 16,
                                                   ),
@@ -435,6 +562,35 @@ class IncompleteTasksScreen extends StatelessWidget {
                                               ),
                                             ],
                                           ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              const Icon(
+                                                Icons.schedule,
+                                                color: Color(0xFF22688E),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              const Text(
+                                                'Next Recurring:',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: Color(0xFF22688E),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  _getNextRecurringDate(task),
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                  ),
+                                                  softWrap: true,
+                                                  overflow: TextOverflow.visible,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -461,16 +617,40 @@ class IncompleteTasksScreen extends StatelessWidget {
                                   Container(
                                     width: 56,
                                     height: 56,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1B7F5A),
-                                      borderRadius: BorderRadius.circular(12),
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF1B7F5A),
                                     ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Image.asset(
-                                        'assets/images/people_icon.png',
-                                        fit: BoxFit.cover,
-                                      ),
+                                    child: ClipOval(
+                                      child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
+                                        ? CachedNetworkImage(
+                                            imageUrl: task['elderly_profilePic'],
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover,
+                                            placeholder: (context, url) => Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: Colors.grey,
+                                                size: 28,
+                                              ),
+                                            ),
+                                            errorWidget: (context, url, error) => Image.asset(
+                                              'assets/images/people_icon.png',
+                                              width: 56,
+                                              height: 56,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          )
+                                        : Image.asset(
+                                            'assets/images/people_icon.png',
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover,
+                                          ),
                                     ),
                                   ),
                                   const SizedBox(width: 12),
@@ -569,6 +749,7 @@ class IncompleteTasksScreen extends StatelessWidget {
           ),
         );
       },
+    ),
     );
   }
 }

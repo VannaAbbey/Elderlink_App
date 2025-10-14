@@ -1149,8 +1149,9 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                     fit: BoxFit.cover,
                                     loadingBuilder:
                                         (context, child, loadingProgress) {
-                                          if (loadingProgress == null)
+                                          if (loadingProgress == null) {
                                             return child;
+                                          }
                                           return Container(
                                             color: const Color(
                                               0xFF00588E,

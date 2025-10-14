@@ -1,8 +1,63 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+import 'cg_services/notification_service.dart';
+import '../models/cg_models/notification_model.dart';
 
 class LeaveRequestService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final NotificationService _notificationService = NotificationService();
+
+  /// Helper method to determine user type based on user_id
+  /// Checks house_shift_assignments collection to identify if user is caregiver or nurse
+  static Future<String> _getUserType(String userId) async {
+    try {
+      // Check if user is a caregiver
+      final caregiverSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: userId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .limit(1)
+          .get();
+      
+      if (caregiverSnapshot.docs.isNotEmpty) {
+        return 'caregiver';
+      }
+
+      // Check if user is a nurse
+      final nurseSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: userId)
+          .where('user_type', isEqualTo: 'nurse')
+          .limit(1)
+          .get();
+      
+      if (nurseSnapshot.docs.isNotEmpty) {
+        return 'nurse';
+      }
+
+      // If not found in house_shift_assignments, check users collection
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(userId)
+          .get();
+      
+      if (userDoc.exists) {
+        final userData = userDoc.data();
+        final userType = userData?['user_type'] as String?;
+        if (userType != null && (userType == 'caregiver' || userType == 'nurse')) {
+          return userType;
+        }
+      }
+
+      // Default to caregiver for backward compatibility
+      print('⚠️ User type not found for user $userId, defaulting to caregiver');
+      return 'caregiver';
+    } catch (e) {
+      print('❌ Error determining user type: $e');
+      return 'caregiver'; // Default fallback
+    }
+  }
 
   /// Submits a leave request to the database
   static Future<String> submitLeaveRequest({
@@ -30,6 +85,10 @@ class LeaveRequestService {
         throw Exception('User not authenticated');
       }
 
+      // Determine user type dynamically
+      final userType = await _getUserType(currentUser.uid);
+      print('   - User Type: $userType');
+
       // Calculate leave duration in days
       final duration = endDate.difference(startDate).inDays + 1;
 
@@ -37,6 +96,7 @@ class LeaveRequestService {
       final leaveRequestData = {
         'leave_request_id': '', // Will be updated with document ID
         'user_id': currentUser.uid,
+        'user_type': userType,
         'user_email': currentUser.email ?? '',
         'full_name': fullName.trim(),
         'contact_info': contactInfo.trim(),
@@ -56,10 +116,8 @@ class LeaveRequestService {
       };
 
       // Add the document to Firestore
-      final docRef = await _firestore
-          .collection('leave_requests')
-          .add(leaveRequestData);
-
+      final docRef = await _firestore.collection('leave_requests').add(leaveRequestData);
+      
       // Update the document with its own ID
       await docRef.update({
         'leave_request_id': docRef.id,
@@ -67,7 +125,7 @@ class LeaveRequestService {
       });
 
       print('✅ Leave request submitted successfully with ID: ${docRef.id}');
-
+      
       return docRef.id;
     } catch (e) {
       print('❌ Error submitting leave request: $e');
@@ -82,31 +140,28 @@ class LeaveRequestService {
       return Stream.value([]);
     }
 
+    // No need to filter by user_type since user_id is unique across all user types
     return _firestore
         .collection('leave_requests')
         .where('user_id', isEqualTo: currentUser.uid)
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['id'] = doc.id; // Include document ID
-            return data;
-          }).toList();
-        });
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id; // Include document ID
+        return data;
+      }).toList();
+    });
   }
 
   /// Gets a specific leave request by ID
-  static Future<Map<String, dynamic>?> getLeaveRequestById(
-    String requestId,
-  ) async {
+  static Future<Map<String, dynamic>?> getLeaveRequestById(String requestId) async {
     try {
-      final doc = await _firestore
-          .collection('leave_requests')
-          .doc(requestId)
-          .get();
+      final doc = await _firestore.collection('leave_requests').doc(requestId).get();
       if (doc.exists) {
-        final data = doc.data()!;
+        final data = doc.data();
+        if (data == null) return null;
         data['id'] = doc.id;
         return data;
       }
@@ -125,6 +180,21 @@ class LeaveRequestService {
     String? reviewerComments,
   }) async {
     try {
+      // First, get the leave request data to extract user info
+      final leaveRequestDoc = await _firestore.collection('leave_requests').doc(requestId).get();
+      
+      if (!leaveRequestDoc.exists) {
+        throw Exception('Leave request not found');
+      }
+      
+      final leaveData = leaveRequestDoc.data()!;
+      final userId = leaveData['user_id'] as String;
+      final userType = leaveData['user_type'] as String? ?? 'caregiver'; // Get user type from document
+      final leaveType = leaveData['leave_type'] as String? ?? 'Leave';
+      final startDate = (leaveData['start_date'] as Timestamp?)?.toDate();
+      final endDate = (leaveData['end_date'] as Timestamp?)?.toDate();
+      
+      // Update the leave request status
       await _firestore.collection('leave_requests').doc(requestId).update({
         'status': status,
         'reviewed_at': FieldValue.serverTimestamp(),
@@ -134,6 +204,60 @@ class LeaveRequestService {
       });
 
       print('✅ Leave request $requestId status updated to: $status');
+      
+      // Create notification for the user (caregiver or nurse)
+      String notificationTitle;
+      String notificationMessage;
+      NotificationType notificationType;
+      
+      if (status.toLowerCase() == 'approved') {
+        notificationTitle = 'Leave Request Approved';
+        notificationMessage = 'Your $leaveType request';
+        if (startDate != null && endDate != null) {
+          final dateFormat = DateFormat('MMM dd, yyyy');
+          notificationMessage += ' from ${dateFormat.format(startDate)} to ${dateFormat.format(endDate)}';
+        }
+        notificationMessage += ' has been approved.';
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          notificationMessage += '\n\nReviewer\'s comment: $reviewerComments';
+        }
+        notificationType = NotificationType.leaveApproved;
+      } else {
+        notificationTitle = 'Leave Request Denied';
+        notificationMessage = 'Your $leaveType request';
+        if (startDate != null && endDate != null) {
+          final dateFormat = DateFormat('MMM dd, yyyy');
+          notificationMessage += ' from ${dateFormat.format(startDate)} to ${dateFormat.format(endDate)}';
+        }
+        notificationMessage += ' has been denied.';
+        if (reviewerComments != null && reviewerComments.isNotEmpty) {
+          notificationMessage += '\n\nReason: $reviewerComments';
+        } else {
+          notificationMessage += ' Please contact your supervisor for more details.';
+        }
+        notificationType = NotificationType.leaveDenied;
+      }
+      
+      // Send notification to the user (caregiver or nurse)
+      await _notificationService.createNotification(
+        title: notificationTitle,
+        message: notificationMessage,
+        userId: userId,
+        userType: userType,
+        type: notificationType,
+        referenceId: requestId,
+        referenceType: 'leave_request',
+        priority: NotificationPriority.high,
+        category: 'Leave Management',
+        metadata: {
+          'leave_type': leaveType,
+          'status': status,
+          'reviewed_by': reviewerId,
+          'reviewer_comments': reviewerComments ?? '',
+        },
+      );
+      
+      print('✅ Notification sent to $userType for leave request $status');
     } catch (e) {
       print('❌ Error updating leave request status: $e');
       rethrow;
@@ -147,30 +271,28 @@ class LeaveRequestService {
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['id'] = doc.id;
-            return data;
-          }).toList();
-        });
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+    });
   }
 
   /// Gets leave requests by status
-  static Stream<List<Map<String, dynamic>>> getLeaveRequestsByStatus(
-    String status,
-  ) {
+  static Stream<List<Map<String, dynamic>>> getLeaveRequestsByStatus(String status) {
     return _firestore
         .collection('leave_requests')
         .where('status', isEqualTo: status)
         .orderBy('submitted_at', descending: true)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['id'] = doc.id;
-            return data;
-          }).toList();
-        });
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+    });
   }
 
   /// Gets pending leave requests count for the current user
@@ -181,12 +303,13 @@ class LeaveRequestService {
     }
 
     try {
+      // No need to filter by user_type since user_id is unique
       final snapshot = await _firestore
           .collection('leave_requests')
           .where('user_id', isEqualTo: currentUser.uid)
           .where('status', isEqualTo: 'pending')
           .get();
-
+      
       return snapshot.docs.length;
     } catch (e) {
       print('❌ Error getting pending leave count: $e');
@@ -199,12 +322,8 @@ class LeaveRequestService {
     // Start date cannot be in the past (allow today)
     final today = DateTime.now();
     final todayOnly = DateTime(today.year, today.month, today.day);
-    final startDateOnly = DateTime(
-      startDate.year,
-      startDate.month,
-      startDate.day,
-    );
-
+    final startDateOnly = DateTime(startDate.year, startDate.month, startDate.day);
+    
     if (startDateOnly.isBefore(todayOnly)) {
       return false;
     }
@@ -218,17 +337,14 @@ class LeaveRequestService {
   }
 
   /// Checks for overlapping leave requests
-  static Future<bool> hasOverlappingLeave(
-    DateTime startDate,
-    DateTime endDate,
-  ) async {
+  static Future<bool> hasOverlappingLeave(DateTime startDate, DateTime endDate) async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
       return false;
     }
 
     try {
-      // Get all approved leave requests for the current user
+      // Get all approved leave requests for the current user (no need to filter by user_type)
       final snapshot = await _firestore
           .collection('leave_requests')
           .where('user_id', isEqualTo: currentUser.uid)
@@ -241,8 +357,7 @@ class LeaveRequestService {
         final existingEnd = (data['end_date'] as Timestamp).toDate();
 
         // Check for overlap
-        if (!(endDate.isBefore(existingStart) ||
-            startDate.isAfter(existingEnd))) {
+        if (!(endDate.isBefore(existingStart) || startDate.isAfter(existingEnd))) {
           return true; // Overlap found
         }
       }

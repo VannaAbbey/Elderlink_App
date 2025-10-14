@@ -191,41 +191,58 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
             color: Color(0xFF2D5260),
           ),
         ),
-        content: const SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Terms of Service',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF216386),
-                ),
+        content: SizedBox(
+          height: 400, // Fixed height to ensure scrollbar is visible
+          width: double.maxFinite,
+          child: Scrollbar(
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Terms of Service',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF216386),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'By using ElderLink, you agree to:\n\n'
+                    '• Use the app responsibly and in accordance with applicable laws\n'
+                    '• Provide accurate and truthful information during registration\n'
+                    '• Maintain the confidentiality of your login credentials\n'
+                    '• Respect the privacy and dignity of elderly residents\n'
+                    '• Not share sensitive resident information outside the app\n\n'
+                    'ElderLink reserves the right to suspend or terminate accounts that violate these terms.\n',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'Privacy Policy',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF216386),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'ElderLink is committed to protecting your privacy:\n\n'
+                    '• Personal Information: We collect name, email, phone, and role information necessary for app functionality\n'
+                    '• Data Security: All data is encrypted and stored securely using industry-standard practices\n'
+                    '• Data Usage: Your information is used solely for care management and communication within your facility\n'
+                    '• Data Sharing: We do not sell or share your personal information with third parties\n'
+                    '• Access Rights: You can request access to, correction of, or deletion of your personal data\n\n'
+                    'By registering, you consent to the collection and use of your information as described above.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                ],
               ),
-              SizedBox(height: 8),
-              Text(
-                'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\n'
-                '[PLACEHOLDER FOR TERMS OF SERVICE CONTENT]\n\n',
-                style: TextStyle(fontSize: 14),
-              ),
-              SizedBox(height: 16),
-              Text(
-                'Privacy Policy',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF216386),
-                ),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.\n\n'
-                '[PLACEHOLDER FOR PRIVACY CONTENT]',
-                style: TextStyle(fontSize: 14),
-              ),
-            ],
+            ),
           ),
         ),
         actions: [

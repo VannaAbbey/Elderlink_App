@@ -13,7 +13,7 @@ import 'incident_report.dart';
 import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import 'activity_logs.dart';
-import '../main.dart';
+import '../main.dart' as main;
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -622,7 +622,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   }
 
   void toggleSidebar() {
-    if (EmergencyService.isModalOpen) return;
+    if (main.EmergencyService.isModalOpen) return;
     setState(() {
       isSidebarOpen = !isSidebarOpen;
     });
@@ -941,7 +941,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       ),
                     ),
                   ),
-                  if (isSidebarOpen && !EmergencyService.isModalOpen)
+                  if (isSidebarOpen && !main.EmergencyService.isModalOpen)
                     NurseSidebar(
                       isSidebarOpen: isSidebarOpen,
                       toggleSidebar: toggleSidebar,
@@ -950,7 +950,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                 ],
               )
             : _screens[selectedIndex],
-        bottomNavigationBar: EmergencyService.isModalOpen
+        bottomNavigationBar: main.EmergencyService.isModalOpen
             ? null
             : NurseBottomNavBar(
                 selectedIndex: selectedIndex,
@@ -967,7 +967,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         Row(
           children: [
             GestureDetector(
-              onTap: EmergencyService.isModalOpen ? null : toggleSidebar,
+              onTap: main.EmergencyService.isModalOpen ? null : toggleSidebar,
               child: Consumer<AuthProvider>(
                 builder: (context, authProvider, child) {
                   final profilePic = authProvider.userData?['user_profilePic'];
@@ -1010,7 +1010,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ],
         ),
         GestureDetector(
-          onTap: EmergencyService.isModalOpen
+          onTap: main.EmergencyService.isModalOpen
               ? null
               : () {
                   Navigator.push(

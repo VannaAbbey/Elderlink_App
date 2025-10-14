@@ -2,11 +2,64 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'caregiver_sidebar.dart';
-import 'notifications.dart';
+import '../widgets/cg_widgets/notification_icon_button.dart';
+import '../services/cg_services/caregiver_shift_log_service.dart';
+import '../services/cg_services/absence_service.dart';
+import '../providers/cg_providers/absence_provider.dart';
+
+// Helper function to show error modal
+void _showErrorModal(BuildContext context, String message) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 60, color: Colors.red),
+          const SizedBox(height: 12),
+          const Text(
+            "Can't submit incident report",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15),
+          ),
+        ],
+      ),
+      actions: [
+        Center(
+          child: TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: Color(0xFF00588e),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 10),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "OK",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 class IncidentScreen extends StatefulWidget {
-  const IncidentScreen({super.key});
+  final VoidCallback? onResetToHome;
+  
+  const IncidentScreen({super.key, this.onResetToHome});
 
   @override
   State<IncidentScreen> createState() => _IncidentScreenState();
@@ -18,6 +71,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   String? selectedElderlyId;
   String? selectedElderlyName;
+  String? selectedIncidentType; // new incident type variable
   final TextEditingController reportController = TextEditingController();
   bool isLoading = true;
   bool isOnDuty = false;
@@ -26,24 +80,195 @@ class _IncidentScreenState extends State<IncidentScreen> {
   // caregiver name
   String? caregiverName;
 
+  // Incident types list
+  final List<String> incidentTypes = [
+    'Elderly fought with another elderly',
+    'Verbal abuse or aggressive behavior',
+    'Refusal of care (e.g., won\'t bathe, won\'t eat)',
+    'Wandering into another residential house',
+    'Equipment malfunction/not working as intended',
+    'Personal belongings lost or damaged',
+    'Refusal to participate in activities',
+    'Crying, agitation, or loneliness episodes',
+    'Elderly showing confusion or disorientation',
+    'Others (please specify below)',
+  ];
+
   // Shift state
   DateTime shiftStart = DateTime.now();
   DateTime shiftEnd = DateTime.now();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  
+  // Save reference to ScaffoldMessenger to avoid context issues
+  ScaffoldMessengerState? _scaffoldMessenger;
+  bool _dialogShown = false;
+
+  void _showAbsenceDialog(BuildContext context, String absenceType) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Row(
+              children: [
+                Icon(
+                  absenceType == 'leave' ? Icons.event_busy : Icons.cancel_outlined,
+                  color: Colors.orange,
+                  size: 28,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: const Text(
+              'You are currently Absent/On Leave for the day, come back soon!',
+              style: TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(); // Close dialog only
+                },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) {
+      // After dialog closes, reset to home tab
+      // Use post frame callback to avoid crashes during build/dispose
+      if (mounted && widget.onResetToHome != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            try {
+              widget.onResetToHome?.call();
+            } catch (e) {
+              print('Error resetting to home: $e');
+            }
+          }
+        });
+      }
+    });
+  }
+
+  void _checkAbsenceStatus() {
+    if (_dialogShown) return;
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    if (absenceProvider.isAbsentToday) {
+      _dialogShown = true;
+      _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _loadElderlyAssignments();
     _loadCaregiverName();
+    // Check absence status after frame is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAbsenceStatus();
+      // Set up listener for absence status changes
+      _setupAbsenceListener();
+    });
+  }
+  
+  void _setupAbsenceListener() {
+    print('👂 [Incident] Setting up absence listener');
+    // Listen to absence provider changes
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    absenceProvider.addListener(_onAbsenceStatusChanged);
+    print('✅ [Incident] Absence listener attached');
+  }
+  
+  void _onAbsenceStatusChanged() {
+    print('🔔 [Incident] Absence status changed callback fired');
+    print('   mounted: $mounted, _dialogShown: $_dialogShown');
+    
+    if (!mounted) {
+      print('⚠️ [Incident] Widget not mounted, ignoring');
+      return;
+    }
+    
+    final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+    print('   isAbsentToday: ${absenceProvider.isAbsentToday}');
+    print('   absenceType: ${absenceProvider.absenceType}');
+    
+    // If caregiver becomes absent and dialog not yet shown
+    if (absenceProvider.isAbsentToday && !_dialogShown) {
+      print('✅ [Incident] Will show absence dialog');
+      _dialogShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          print('📱 [Incident] Showing absence dialog now');
+          _showAbsenceDialog(context, absenceProvider.absenceType ?? 'absent');
+        } else {
+          print('⚠️ [Incident] Widget unmounted before showing dialog');
+        }
+      });
+    }
+    
+    // If caregiver is no longer absent, reset dialog flag
+    if (!absenceProvider.isAbsentToday && _dialogShown) {
+      print('✅ [Incident] Resetting dialog flag (no longer absent)');
+      _dialogShown = false;
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Save reference to ScaffoldMessenger to use safely later
+    try {
+      _scaffoldMessenger = ScaffoldMessenger.of(context);
+    } catch (e) {
+      // Context might not be available yet, ignore
+      _scaffoldMessenger = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    // Remove listener to prevent memory leaks
+    try {
+      final absenceProvider = Provider.of<AbsenceProvider>(context, listen: false);
+      absenceProvider.removeListener(_onAbsenceStatusChanged);
+    } catch (e) {
+      // Provider might not be available, ignore
+    }
+    reportController.dispose();
+    _scaffoldMessenger = null;
+    super.dispose();
   }
 
   Future<void> _loadCaregiverName() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       final doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
+      if (doc.exists && mounted) {
         setState(() {
           caregiverName = "${doc['user_fname']} ${doc['user_lname']}";
         });
@@ -52,76 +277,178 @@ class _IncidentScreenState extends State<IncidentScreen> {
   }
 
   Future<void> _loadElderlyAssignments() async {
-    setState(() => isLoading = true);
+    if (mounted) setState(() => isLoading = true);
 
     final now = DateTime.now();
-    final dayName = DateFormat('EEEE').format(now);
 
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        print('🔴 INCIDENT: No user logged in');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
       final caregiverId = user.uid;
+      print('🔍 INCIDENT: Checking for caregiver $caregiverId at ${now.toString()}');
 
       final houseSnapshot = await _firestore
-          .collection('cg_house_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
           .where('is_current', isEqualTo: true)
-          .where('is_absent', isEqualTo: false)
           .limit(1)
           .get();
 
+      print('🔍 INCIDENT: Found ${houseSnapshot.docs.length} house assignments with is_current=true');
+
       if (houseSnapshot.docs.isEmpty) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        print('🔴 INCIDENT: No valid house assignment found');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
       final houseData = houseSnapshot.docs.first.data();
+      print('🔍 INCIDENT: Raw house data: $houseData');
+      
+      // Safe parsing with detailed error checking
       final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
-      final houseId = houseData['house_id'] as String;
-      final startDate = (houseData['start_date'] as Timestamp).toDate();
-      final endDate = (houseData['end_date'] as Timestamp).toDate();
+      print('🔍 INCIDENT: Days assigned parsed: $daysAssigned');
+      
+      final houseId = houseData['house_id'] as String?;
+      if (houseId == null) {
+        print('🔴 INCIDENT: house_id is null!');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      print('🔍 INCIDENT: House ID parsed: $houseId');
+      
+      // Get dates from nested schedule_period object
+      final schedulePeriod = houseData['schedule_period'] as Map<String, dynamic>?;
+      
+      if (schedulePeriod == null) {
+        print('🔴 INCIDENT: schedule_period is null!');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      final startDateTimestamp = schedulePeriod['start_date'] as Timestamp?;
+      final endDateTimestamp = schedulePeriod['end_date'] as Timestamp?;
+      
+      if (startDateTimestamp == null || endDateTimestamp == null) {
+        print('🔴 INCIDENT: start_date or end_date is null in schedule_period!');
+        print('🔴 INCIDENT: start_date: $startDateTimestamp, end_date: $endDateTimestamp');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      final startDate = startDateTimestamp.toDate();
+      final endDate = endDateTimestamp.toDate();
+      print('🔍 INCIDENT: Dates parsed - start: $startDate, end: $endDate');
 
-      if (now.isBefore(startDate) || now.isAfter(endDate)) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+      // Normalize dates to compare only date parts (ignore time)
+      final nowDate = DateTime(now.year, now.month, now.day);
+      final normalizedStartDate = DateTime(startDate.year, startDate.month, startDate.day);
+      final normalizedEndDate = DateTime(endDate.year, endDate.month, endDate.day);
+
+      print('🔍 INCIDENT: ========== HOUSE ASSIGNMENT DATA ==========');
+      print('🔍 INCIDENT: House ID: $houseId');
+      print('🔍 INCIDENT: Days assigned: $daysAssigned');
+      print('🔍 INCIDENT: Start date: ${startDate.toString()}');
+      print('🔍 INCIDENT: End date: ${endDate.toString()}');
+      print('🔍 INCIDENT: Current date/time: ${now.toString()}');
+      print('🔍 INCIDENT: nowDate.isBefore(normalizedStartDate): ${nowDate.isBefore(normalizedStartDate)}');
+      print('🔍 INCIDENT: nowDate.isAfter(normalizedEndDate): ${nowDate.isAfter(normalizedEndDate)}');
+      print('🔍 INCIDENT: ================================================');
+
+      if (nowDate.isBefore(normalizedStartDate) || nowDate.isAfter(normalizedEndDate)) {
+        print('🔴 INCIDENT: Current date outside assignment period');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
-      if (!daysAssigned.contains(dayName)) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
-        return;
-      }
-
-      final timeRange = Map<String, dynamic>.from(
-        houseData['time_range'] ?? {},
-      );
+      final startTime = houseData['start_time'] as String?;
+      final endTime = houseData['end_time'] as String?;
+      
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
-      if (timeRange.isNotEmpty) {
-        final startParts = (timeRange['start'] as String).split(':');
-        final endParts = (timeRange['end'] as String).split(':');
+      
+      if (startTime != null && endTime != null && startTime.isNotEmpty && endTime.isNotEmpty) {
+        final startParts = startTime.split(':');
+        final endParts = endTime.split(':');
         startHour = int.parse(startParts[0]);
         startMinute = int.parse(startParts[1]);
         endHour = int.parse(endParts[0]);
         endMinute = int.parse(endParts[1]);
+      }
+
+      // Determine if this is an overnight shift
+      final isOvernightShift = endHour < startHour || (endHour == startHour && endMinute <= startMinute);
+
+      // For overnight shifts, determine which day to check based on current time
+      String dayToCheck;
+      if (isOvernightShift && now.hour >= 0 && now.hour < endHour) {
+        // Current time is in the "end period" of an overnight shift (e.g., 12:01 AM - 6:00 AM)
+        // Check if the previous day is assigned (e.g., if it's Monday 1 AM, check if Sunday is assigned)
+        final previousDay = now.subtract(const Duration(days: 1));
+        dayToCheck = DateFormat('EEEE').format(previousDay);
+        print('🌙 INCIDENT: Overnight shift end period - checking previous day: $dayToCheck');
+      } else {
+        // Regular shift or "start period" of overnight shift or after shift ends
+        dayToCheck = DateFormat('EEEE').format(now);
+        print('☀️ INCIDENT: Regular/overnight start - checking current day: $dayToCheck');
+      }
+
+      print('🔍 INCIDENT: Shift times: $startHour:${startMinute.toString().padLeft(2, '0')} - $endHour:${endMinute.toString().padLeft(2, '0')}');
+      print('🔍 INCIDENT: Is overnight shift: $isOvernightShift');
+      print('🔍 INCIDENT: Day to check: $dayToCheck');
+      print('🔍 INCIDENT: Days assigned contains day? ${daysAssigned.contains(dayToCheck)}');
+
+      if (!daysAssigned.contains(dayToCheck)) {
+        print('🔴 INCIDENT: Day $dayToCheck not in assigned days $daysAssigned');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
       }
 
       DateTime calculatedShiftStart = DateTime(
@@ -153,70 +480,156 @@ class _IncidentScreenState extends State<IncidentScreen> {
           !(now.isBefore(calculatedShiftStart) ||
               now.isAfter(calculatedShiftEnd));
 
+      print('🔍 INCIDENT: ========== SHIFT TIME VALIDATION ==========');
+      print('🔍 INCIDENT: Start time from DB: $startTime');
+      print('🔍 INCIDENT: End time from DB: $endTime');
+      print('🔍 INCIDENT: Parsed start hour:minute: $startHour:$startMinute');
+      print('🔍 INCIDENT: Parsed end hour:minute: $endHour:$endMinute');
+      print('🔍 INCIDENT: Calculated shift start: $calculatedShiftStart');
+      print('🔍 INCIDENT: Calculated shift end: $calculatedShiftEnd');
+      print('🔍 INCIDENT: Current time (now): $now');
+      print('🔍 INCIDENT: now.isBefore(calculatedShiftStart): ${now.isBefore(calculatedShiftStart)}');
+      print('🔍 INCIDENT: now.isAfter(calculatedShiftEnd): ${now.isAfter(calculatedShiftEnd)}');
+      print('🔍 INCIDENT: Is within shift: $isWithinShift');
+      print('🔍 INCIDENT: =======================================');
+
       if (!isWithinShift) {
-        setState(() {
-          elderlyList = [];
-          isOnDuty = false;
-          isLoading = false;
-        });
+        print('🔴 INCIDENT: Not within shift hours');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
         return;
       }
 
       final assignSnapshot = await _firestore
-          .collection('elderly_caregiver_assign')
-          .where('caregiver_id', isEqualTo: caregiverId)
-          .where('day', isEqualTo: dayName)
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .where('day', isEqualTo: dayToCheck)
           .get();
+
+      print('🔍 INCIDENT: Found ${assignSnapshot.docs.length} elderly assignment documents for day $dayToCheck');
 
       List<Map<String, dynamic>> elderlyDetails = [];
 
       if (assignSnapshot.docs.isNotEmpty) {
-        final elderlyIds = assignSnapshot.docs
-            .map((doc) => doc.data()['elderly_id'] as String)
-            .toSet()
-            .toList();
-
-        for (int i = 0; i < elderlyIds.length; i += 30) {
-          final chunk = elderlyIds.skip(i).take(30).toList();
-          final chunkSnapshot = await _firestore
-              .collection('elderly')
-              .where(FieldPath.documentId, whereIn: chunk)
-              .get();
-
-          for (var doc in chunkSnapshot.docs) {
-            final data = doc.data();
-            if (data['house_id'] == houseId) {
-              elderlyDetails.add({
-                'id': doc.id,
-                'name':
-                    '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
-              });
-            }
-          }
+        // NEW STRUCTURE: Each document has elderly_ids array instead of individual elderly_id
+        Set<String> elderlyIds = {};
+        for (var doc in assignSnapshot.docs) {
+          final data = doc.data();
+          // Get elderly_ids array from the document
+          final idsFromDoc = List<String>.from(data['elderly_ids'] ?? []);
+          elderlyIds.addAll(idsFromDoc);
+          print('🔍 INCIDENT: Document has ${idsFromDoc.length} elderly IDs: $idsFromDoc');
         }
 
-        elderlyDetails.sort(
-          (a, b) => (a['name'] as String).compareTo(b['name'] as String),
-        );
+        print('🔍 INCIDENT: Total unique elderly IDs: ${elderlyIds.length}');
+
+        if (elderlyIds.isNotEmpty) {
+          // Fetch elderly details in chunks (max 30 per query due to Firestore limit)
+          final elderlyIdsList = elderlyIds.toList();
+          for (int i = 0; i < elderlyIdsList.length; i += 30) {
+            final chunk = elderlyIdsList.skip(i).take(30).toList();
+            final chunkSnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .get();
+
+            for (var doc in chunkSnapshot.docs) {
+              final data = doc.data();
+              // Filter out deceased elderly and only include those in the same house
+              if (data['house_id'] == houseId &&
+                  data['elderly_status'] != 'Deceased') {
+                elderlyDetails.add({
+                  'id': doc.id,
+                  'name':
+                      '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
+                });
+              }
+            }
+          }
+
+          elderlyDetails.sort(
+            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+          );
+        }
       }
 
-      setState(() {
-        elderlyList = elderlyDetails;
-        isOnDuty = true;
-        isLoading = false;
-        selectedElderlyId = null;
-        selectedElderlyName = null;
-        shiftStart = calculatedShiftStart;
-        shiftEnd = calculatedShiftEnd;
-      });
-    } catch (e) {
-      setState(() {
-        elderlyList = [];
-        isOnDuty = false;
-        isLoading = false;
-        selectedElderlyId = null;
-        selectedElderlyName = null;
-      });
+      // Fetch temporary elderly assignments from absent caregivers
+      print('🔍 INCIDENT: Fetching temporary elderly assignments...');
+      try {
+        final temporaryElderlyIds = await AbsenceService.getTodayTemporaryElderlyIds(caregiverId);
+        print('🔍 INCIDENT: Found ${temporaryElderlyIds.length} temporary elderly IDs');
+        
+        if (temporaryElderlyIds.isNotEmpty) {
+          // Fetch temporary elderly details in chunks (max 30 per query due to Firestore limit)
+          for (int i = 0; i < temporaryElderlyIds.length; i += 30) {
+            final chunk = temporaryElderlyIds.skip(i).take(30).toList();
+            final chunkSnapshot = await _firestore
+                .collection('elderly')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .get();
+
+            for (var doc in chunkSnapshot.docs) {
+              final data = doc.data();
+              // Filter out deceased elderly and only include those in the same house
+              if (data['house_id'] == houseId &&
+                  data['elderly_status'] != 'Deceased') {
+                // Check if this elderly is not already in the list (avoid duplicates)
+                final alreadyExists = elderlyDetails.any((e) => e['id'] == doc.id);
+                if (!alreadyExists) {
+                  elderlyDetails.add({
+                    'id': doc.id,
+                    'name':
+                        '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''} (TEMP)',
+                  });
+                  print('🔍 INCIDENT: Added temporary elderly: ${data['elderly_fname']} ${data['elderly_lname']}');
+                }
+              }
+            }
+          }
+
+          // Re-sort after adding temporary elderly
+          elderlyDetails.sort(
+            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+          );
+        }
+      } catch (e) {
+        print('🔴 INCIDENT: Error fetching temporary elderly: $e');
+        // Continue even if temporary fetch fails - regular elderly will still be shown
+      }
+
+      print('🔍 INCIDENT: Final elderly list count: ${elderlyDetails.length}');
+
+      if (mounted) {
+        setState(() {
+          elderlyList = elderlyDetails;
+          isOnDuty = true;
+          isLoading = false;
+          selectedElderlyId = null;
+          selectedElderlyName = null;
+          shiftStart = calculatedShiftStart;
+          shiftEnd = calculatedShiftEnd;
+        });
+      }
+    } catch (e, stackTrace) {
+      print('🔴 INCIDENT: ========== ERROR OCCURRED ==========');
+      print('🔴 INCIDENT: Error: $e');
+      print('🔴 INCIDENT: Stack trace: $stackTrace');
+      print('🔴 INCIDENT: =======================================');
+      if (mounted) {
+        setState(() {
+          elderlyList = [];
+          isOnDuty = false;
+          isLoading = false;
+          selectedElderlyId = null;
+          selectedElderlyName = null;
+        });
+      }
     }
   }
 
@@ -237,7 +650,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
           .get();
 
       if (scheduleSnap.docs.isEmpty) {
-        _showError(context, "No schedule found for this caregiver.");
+        if (mounted) _showError(context, "No schedule found for this caregiver.");
         return;
       }
 
@@ -250,10 +663,12 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final todayDay = _getDayName(today.weekday);
 
       if (todayDay != scheduledDay) {
-        _showError(
-          context,
-          "You are not scheduled today.\n\nYour schedule: $scheduledDay ($shiftTime)",
-        );
+        if (mounted) {
+          _showError(
+            context,
+            "You are not scheduled today.\n\nYour schedule: $scheduledDay ($shiftTime)",
+          );
+        }
         return;
       }
 
@@ -274,71 +689,94 @@ class _IncidentScreenState extends State<IncidentScreen> {
         );
 
         if (!_isWithinShift(now, start, end)) {
-          _showError(
-            context,
-            "You are outside your shift time.\n\n $shiftTime",
-          );
+          if (mounted) {
+            _showError(
+              context,
+              "You are outside your shift time.\n\n $shiftTime",
+            );
+          }
           return;
         }
       }
 
       // ✅ If all good (within schedule & shift), proceed normally
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Access granted — within schedule ✅")),
-      );
+      _safeShowSnackBar("Access granted — within schedule ✅");
     } catch (e) {
-      _showError(context, "Error checking schedule: $e");
+      if (mounted) _showError(context, "Error checking schedule: $e");
     }
+  }
+
+  /// 🔴 Safe message display helper
+  void _safeShowSnackBar(String message, {bool isError = false}) {
+    if (!mounted || _scaffoldMessenger == null) return;
+    
+    // Use post-frame callback to ensure the widget is still mounted
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _scaffoldMessenger == null) return;
+      _scaffoldMessenger!.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Colors.red : Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    });
   }
 
   /// 🔴 Error Dialog UI
   void _showError(BuildContext context, String msg) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
-            const SizedBox(height: 12),
-            const Text(
-              "Incident Report Not Sent",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-                color: Colors.black87,
+    if (!mounted) return;
+    
+    // Use a post-frame callback to ensure the widget is still in the tree
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 60, color: Colors.red),
+              const SizedBox(height: 12),
+              const Text(
+                "Incident Report Not Sent",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  color: Colors.black87,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              msg,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15),
+              const SizedBox(height: 16),
+              Text(
+                msg,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15),
+              ),
+            ],
+          ),
+          actions: [
+            Center(
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFF00588e),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 60,
+                    vertical: 10,
+                  ),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text(
+                  "OK",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
             ),
           ],
         ),
-        actions: [
-          Center(
-            child: TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF00588e),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 60,
-                  vertical: 10,
-                ),
-              ),
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text(
-                "OK",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+      );
+    });
   }
 
   /// 🔧 Helper: Get day name
@@ -369,7 +807,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
     final startMinutes = start.hour * 60 + start.minute;
     final endMinutes = end.hour * 60 + end.minute;
 
-    return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+    // Handle overnight shifts (e.g., 22:00 - 06:00)
+    if (endMinutes < startMinutes) {
+      // Overnight shift: current time should be either after start OR before end
+      return nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+    } else {
+      // Regular shift: current time should be between start and end
+      return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+    }
   }
 
   /// ⚠️ Warning Dialog (Out of Shift)
@@ -432,10 +877,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
     // 1. Get caregiver assignment
     final query = await FirebaseFirestore.instance
-        .collection('cg_house_assign')
-        .where('caregiver_id', isEqualTo: user.uid)
+        .collection('house_shift_assignments')
+        .where('user_id', isEqualTo: user.uid)
+        .where('user_type', isEqualTo: 'caregiver')
         .where('is_current', isEqualTo: true)
-        .where('is_absent', isEqualTo: false)
         .get();
 
     if (query.docs.isEmpty) {
@@ -444,11 +889,15 @@ class _IncidentScreenState extends State<IncidentScreen> {
     }
 
     final data = query.docs.first.data();
-    final List daysAssigned = data['days_assigned'] ?? [];
-    final String shift = data['shift'] ?? "";
-    final Map<String, dynamic> timeRange = Map<String, dynamic>.from(
-      data['time_range'],
-    );
+    final daysAssigned = data['days_assigned'] as List<dynamic>? ?? [];
+    final shift = data['shift'] as String? ?? "";
+    final startTime = data['start_time'] as String?;
+    final endTime = data['end_time'] as String?;
+    
+    if (startTime == null || endTime == null || startTime.isEmpty || endTime.isEmpty) {
+      _showWarningDialog(context, "Invalid shift time configuration.");
+      return;
+    }
 
     // 2. Check if today is included
     if (!daysAssigned.contains(currentDay)) {
@@ -457,8 +906,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
     }
 
     // 3. Parse time range
-    final startParts = (timeRange['start'] as String).split(":");
-    final endParts = (timeRange['end'] as String).split(":");
+    final startParts = startTime.split(":");
+    final endParts = endTime.split(":");
 
     DateTime start = DateTime(
       now.year,
@@ -500,8 +949,6 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
     Future<void> handleLogout() async {
       Navigator.pushNamedAndRemoveUntil(
         context,
@@ -539,20 +986,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                     onPressed: toggleSidebar,
                   ),
                   actions: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.notifications,
-                        color: Color(0xFF00588e),
-                        size: 35,
-                      ),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => const NotificationsScreen(),
-                          ),
-                        );
-                      },
-                    ),
+                    const NotificationIconButton(),
                   ],
                 ),
                 body: Center(
@@ -594,7 +1028,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                       ? 'Loading...'
                                       : (isOnDuty
                                             ? 'Select Elderly'
-                                            : 'Not your schedule today/shift'),
+                                            : 'Shift ended/Not scheduled today'),
                                 ),
                                 isExpanded: true,
                                 icon: const Icon(
@@ -603,9 +1037,35 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                 ),
                                 menuMaxHeight: 200,
                                 items: elderlyList.map((elderly) {
+                                  // Check if this elderly has (TEMP) in the name
+                                  final elderlyName = elderly['name'] as String;
+                                  final isTemporary = elderlyName.contains('(TEMP)');
+                                  // Remove (TEMP) from display name
+                                  final displayName = elderlyName.replaceAll(' (TEMP)', '');
+                                  
                                   return DropdownMenuItem<String>(
                                     value: elderly['id'],
-                                    child: Text(elderly['name']),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(displayName),
+                                        ),
+                                        if (isTemporary)
+                                          Container(
+                                            width: 10,
+                                            height: 10,
+                                            margin: const EdgeInsets.only(left: 8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.orange,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 1,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   );
                                 }).toList(),
                                 onChanged: isOnDuty
@@ -623,6 +1083,82 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             ),
                           ),
                           const SizedBox(height: 18),
+
+                          // Incident Type
+                          Row(
+                            children: const [
+                              Icon(Icons.warning, color: Color(0xFF00588e)),
+                              SizedBox(width: 8),
+                              Text(
+                                'What is the Incident?',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Color(0xFF00588e),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Color(0xFFE6F3FA),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: selectedIncidentType,
+                                hint: Text(
+                                  isLoading
+                                      ? 'Loading...'
+                                      : (isOnDuty
+                                            ? 'Select incident type'
+                                            : 'Shift ended/Not scheduled today'),
+                                ),
+                                isExpanded: true,
+                                icon: const Icon(
+                                  Icons.arrow_drop_down,
+                                  color: Color(0xFF00588e),
+                                ),
+                                menuMaxHeight: 300, // Make dropdown scrollable
+                                items: incidentTypes.map((type) {
+                                  return DropdownMenuItem<String>(
+                                    value: type,
+                                    child: Text(type),
+                                  );
+                                }).toList(),
+                                onChanged: isOnDuty
+                                    ? (value) {
+                                        setState(() {
+                                          selectedIncidentType = value;
+                                        });
+                                      }
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+
+                          // Other information
+                          Row(
+                            children: const [
+                              Icon(
+                                Icons.info_outline,
+                                color: Color(0xFF00588e),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Other information',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: Color(0xFF00588e),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
                           Container(
                             decoration: BoxDecoration(
                               color: Color(0xFFE6F3FA),
@@ -630,10 +1166,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             ),
                             child: TextField(
                               controller: reportController,
-                              maxLines: 20,
+                              maxLines: 15,
                               enabled: isOnDuty,
                               decoration: const InputDecoration(
-                                hintText: 'Write the incident report here.',
+                                hintText: 'Write here what happened... (optional)',
                                 hintStyle: TextStyle(
                                   fontStyle: FontStyle.italic,
                                 ),
@@ -648,6 +1184,24 @@ class _IncidentScreenState extends State<IncidentScreen> {
                             child: ElevatedButton(
                               onPressed: isOnDuty
                                   ? () {
+                                      // Validation checks
+                                      if (selectedElderlyId == null) {
+                                        _showErrorModal(context, "Please select an elderly person.");
+                                        return;
+                                      }
+                                      
+                                      if (selectedIncidentType == null) {
+                                        _showErrorModal(context, "Please select an incident type.");
+                                        return;
+                                      }
+                                      
+                                      // Check if "Others" is selected but text field is empty
+                                      if (selectedIncidentType == "Others (please specify below)" &&
+                                          reportController.text.trim().isEmpty) {
+                                        _showErrorModal(context, "Please fill in the additional information field!");
+                                        return;
+                                      }
+
                                       final formattedDate = DateFormat(
                                         'MM/dd/yy | h:mm a',
                                       ).format(DateTime.now());
@@ -658,7 +1212,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                         builder: (BuildContext ctx) {
                                           bool acknowledged = false;
                                           return StatefulBuilder(
-                                            builder: (context, setState) {
+                                            builder: (context, dialogSetState) {
                                               return Dialog(
                                                 shape: RoundedRectangleBorder(
                                                   borderRadius:
@@ -698,23 +1252,26 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                               MainAxisAlignment
                                                                   .end,
                                                           children: [
-                                                            IconButton(
-                                                              padding:
-                                                                  EdgeInsets
-                                                                      .zero,
-                                                              constraints:
-                                                                  const BoxConstraints(),
-                                                              icon: const Icon(
-                                                                Icons.close,
-                                                                size: 28,
-                                                                color: Color(
-                                                                  0xFF00588e,
+                                                            Transform.translate(
+                                                              offset: const Offset(16, -3),
+                                                              child: IconButton(
+                                                                padding:
+                                                                    EdgeInsets
+                                                                        .zero,
+                                                                constraints:
+                                                                    const BoxConstraints(),
+                                                                icon: const Icon(
+                                                                  Icons.close,
+                                                                  size: 28,
+                                                                  color: Color(
+                                                                    0xFF00588e,
+                                                                  ),
                                                                 ),
+                                                                onPressed: () =>
+                                                                    Navigator.of(
+                                                                      ctx,
+                                                                    ).pop(),
                                                               ),
-                                                              onPressed: () =>
-                                                                  Navigator.of(
-                                                                    context,
-                                                                  ).pop(),
                                                             ),
                                                           ],
                                                         ),
@@ -840,7 +1397,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                           ],
                                                         ),
                                                         const SizedBox(
-                                                          height: 20,
+                                                          height: 10,
                                                         ),
                                                         Row(
                                                           children: [
@@ -854,7 +1411,50 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                               width: 8,
                                                             ),
                                                             const Text(
-                                                              'Incident Description:',
+                                                              'Incident Type:',
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588e,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 4,
+                                                            ),
+                                                            Expanded(
+                                                              child: Text(
+                                                                selectedIncidentType ?? '',
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          15,
+                                                                    ),
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .visible,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 20,
+                                                        ),
+                                                        Row(
+                                                          children: [
+                                                            const Icon(
+                                                              Icons.info_outline,
+                                                              color: Color(
+                                                                0xFF00588e,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 8,
+                                                            ),
+                                                            const Text(
+                                                              'Additional Information:',
                                                               style: TextStyle(
                                                                 fontWeight:
                                                                     FontWeight
@@ -893,13 +1493,17 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                   Alignment
                                                                       .topLeft,
                                                               child: Text(
-                                                                reportController
-                                                                    .text,
-                                                                style: const TextStyle(
-                                                                  fontStyle:
-                                                                      FontStyle
-                                                                          .italic,
+                                                                reportController.text.trim().isEmpty 
+                                                                    ? 'No additional information provided.'
+                                                                    : reportController.text,
+                                                                style: TextStyle(
+                                                                  fontStyle: reportController.text.trim().isEmpty 
+                                                                      ? FontStyle.italic
+                                                                      : FontStyle.normal,
                                                                   fontSize: 15,
+                                                                  color: reportController.text.trim().isEmpty
+                                                                      ? Colors.grey[600]
+                                                                      : Colors.black,
                                                                 ),
                                                               ),
                                                             ),
@@ -965,11 +1569,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                     0xFF00588e,
                                                                   ),
                                                               onChanged: (val) {
-                                                                setState(() {
-                                                                  acknowledged =
-                                                                      val ??
-                                                                      false;
-                                                                });
+                                                                // Use a try-catch to handle potential disposal issues
+                                                                try {
+                                                                  dialogSetState(() {
+                                                                    acknowledged = val ?? false;
+                                                                  });
+                                                                } catch (e) {
+                                                                  // Dialog was disposed, ignore the state change
+                                                                }
                                                               },
                                                             ),
                                                             const Expanded(
@@ -1000,13 +1607,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                         Row(
                                                           mainAxisAlignment:
                                                               MainAxisAlignment
-                                                                  .end,
+                                                                  .spaceEvenly,
                                                           children: [
                                                             // ✅ Submit Button (left side)
-                                                            SizedBox(
-                                                              width: 120,
-                                                              height: 44,
-                                                              child: ElevatedButton(
+                                                            Flexible(
+                                                              child: SizedBox(
+                                                                height: 44,
+                                                                child: ElevatedButton(
                                                                 // Inside your Submit button onPressed
                                                                 onPressed:
                                                                     (acknowledged &&
@@ -1019,9 +1626,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             .trim()
                                                                             .isNotEmpty)
                                                                     ? () async {
-                                                                        Navigator.of(
-                                                                          ctx,
-                                                                        ).pop(); // Close modal first
+                                                                        // Safety check: ensure the main widget is still mounted before proceeding
+                                                                        if (!mounted) return;
 
                                                                         final user = FirebaseAuth
                                                                             .instance
@@ -1037,19 +1643,12 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             DateTime.now();
 
                                                                         try {
+                                                                          // Safety check before Firestore operations
+                                                                          if (!mounted) return;
+                                                                          
                                                                           // 1️⃣ Get caregiver info
                                                                           final caregiverId =
                                                                               user.uid;
-                                                                          final caregiverDoc = await _firestore
-                                                                              .collection(
-                                                                                'users',
-                                                                              )
-                                                                              .doc(
-                                                                                caregiverId,
-                                                                              )
-                                                                              .get();
-                                                                          final caregiverNameFull =
-                                                                              "${caregiverDoc['user_fname']} ${caregiverDoc['user_lname']}";
 
                                                                           // 2️⃣ Get house_id of the elderly
                                                                           final elderlyDoc = await _firestore
@@ -1080,11 +1679,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
                                                                           final nurseQuery = await _firestore
                                                                               .collection(
-                                                                                'house_shift_assignments',
-                                                                              )
-                                                                              .where(
-                                                                                'user_type',
-                                                                                isEqualTo: 'nurse',
+                                                                                'nurse_shift_assign',
                                                                               )
                                                                               .where(
                                                                                 'is_current',
@@ -1167,94 +1762,207 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           }
 
                                                                           // 4️⃣ Save incident report for each nurse
-                                                                          // 4️⃣ Save incident report for each nurse separately
-                                                                          for (final nurseId
-                                                                              in nurseIdsToSend) {
+                                                                          // 4️⃣ Save incident report once, with all nurses in an array
+                                                                          if (nurseIdsToSend
+                                                                              .isNotEmpty) {
                                                                             final incidentDocRef = _firestore
                                                                                 .collection(
                                                                                   'incident_report',
                                                                                 )
                                                                                 .doc(); // Auto ID
                                                                             await incidentDocRef.set({
-                                                                              'incident_id': incidentDocRef.id,
                                                                               'elderly_id': selectedElderlyId,
-                                                                              'user_id_cg': caregiverId,
-                                                                              'house_id': [
-                                                                                houseId,
-                                                                              ], // Now an array
-                                                                              'user_id_nu': nurseId, // Now a string for each nurse
+                                                                              'house_id': houseId,
                                                                               'incident_date_time': formattedDate,
-                                                                              'incident_type': 'Incident Report',
-                                                                              'additional_info': reportController.text.trim(),
+                                                                              'incident_type': selectedIncidentType, // Main field for incident type
+                                                                              'additional_info': reportController.text.trim(), // Optional additional information
+                                                                              'incident_id': incidentDocRef.id,
+                                                                              'user_id_cg': caregiverId,
+                                                                              'user_id_nu': nurseIdsToSend, // ✅ array of all nurses
                                                                             });
+
+                                                                            // ✅ Also save to unified shift logs collection
+                                                                            try {
+                                                                              await CaregiverShiftLogService.createIncidentReportLog(
+                                                                                caregiverId: caregiverId,
+                                                                                incidentType: selectedIncidentType ?? 'Unknown',
+                                                                                description: reportController.text.trim(),
+                                                                                caregiverFname: caregiverName?.split(' ').first,
+                                                                              );
+                                                                              print('✅ Incident report logged to shift logs successfully');
+                                                                            } catch (e) {
+                                                                              print('❌ Error logging incident report to shift logs: $e');
+                                                                              // Don't fail the entire operation if logging fails
+                                                                            }
+
+                                                                            // 📋 Fetch nurse names to display in dialog
+                                                                            List<String> nurseNames = [];
+                                                                            for (String nurseId in nurseIdsToSend) {
+                                                                              try {
+                                                                                final nurseDoc = await _firestore
+                                                                                    .collection('users')
+                                                                                    .doc(nurseId)
+                                                                                    .get();
+                                                                                if (nurseDoc.exists) {
+                                                                                  final nurseFname = nurseDoc['user_fname'] ?? '';
+                                                                                  final nurseLname = nurseDoc['user_lname'] ?? '';
+                                                                                  final fullName = '$nurseFname $nurseLname'.trim();
+                                                                                  if (fullName.isNotEmpty) {
+                                                                                    nurseNames.add(fullName);
+                                                                                  }
+                                                                                }
+                                                                              } catch (e) {
+                                                                                print('❌ Error fetching nurse name: $e');
+                                                                              }
+                                                                            }
+                                                                            
+                                                                            // Final safety check before showing dialog
+                                                                            if (!mounted) return;
+
+                                                                            // Show success dialog with nurse names
+                                                                            showDialog(
+                                                                              context: ctx,
+                                                                              barrierDismissible: false,
+                                                                              builder: (BuildContext dialogContext) {
+                                                                                return AlertDialog(
+                                                                                  shape: RoundedRectangleBorder(
+                                                                                    borderRadius: BorderRadius.circular(20),
+                                                                                  ),
+                                                                                  title: Row(
+                                                                                    children: [
+                                                                                      Icon(
+                                                                                        Icons.check_circle,
+                                                                                        color: Colors.green,
+                                                                                        size: 32,
+                                                                                      ),
+                                                                                      SizedBox(width: 12),
+                                                                                      Expanded(
+                                                                                        child: Text(
+                                                                                          'Report Submitted',
+                                                                                          style: TextStyle(
+                                                                                            fontSize: 20,
+                                                                                            fontWeight: FontWeight.bold,
+                                                                                            color: Color(0xFF00588e),
+                                                                                          ),
+                                                                                        ),
+                                                                                      ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  content: Column(
+                                                                                    mainAxisSize: MainAxisSize.min,
+                                                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                                                    children: [
+                                                                                      Text(
+                                                                                        'Your incident report has been sent to:',
+                                                                                        style: TextStyle(
+                                                                                          fontSize: 14,
+                                                                                          fontWeight: FontWeight.w500,
+                                                                                        ),
+                                                                                      ),
+                                                                                      SizedBox(height: 12),
+                                                                                      if (nurseNames.isEmpty)
+                                                                                        Padding(
+                                                                                          padding: EdgeInsets.symmetric(vertical: 8),
+                                                                                          child: Text(
+                                                                                            'No nurses currently on shift',
+                                                                                            style: TextStyle(
+                                                                                              fontSize: 14,
+                                                                                              fontStyle: FontStyle.italic,
+                                                                                              color: Colors.grey[600],
+                                                                                            ),
+                                                                                          ),
+                                                                                        )
+                                                                                      else
+                                                                                        Container(
+                                                                                          constraints: BoxConstraints(
+                                                                                            maxHeight: 200,
+                                                                                          ),
+                                                                                          child: SingleChildScrollView(
+                                                                                            child: Column(
+                                                                                              children: nurseNames.map((name) {
+                                                                                                return Padding(
+                                                                                                  padding: EdgeInsets.symmetric(vertical: 6),
+                                                                                                  child: Row(
+                                                                                                    children: [
+                                                                                                      Icon(
+                                                                                                        Icons.person,
+                                                                                                        size: 20,
+                                                                                                        color: Color(0xFF00588e),
+                                                                                                      ),
+                                                                                                      SizedBox(width: 8),
+                                                                                                      Expanded(
+                                                                                                        child: Text(
+                                                                                                          name,
+                                                                                                          style: TextStyle(
+                                                                                                            fontSize: 16,
+                                                                                                            fontWeight: FontWeight.w600,
+                                                                                                          ),
+                                                                                                        ),
+                                                                                                      ),
+                                                                                                    ],
+                                                                                                  ),
+                                                                                                );
+                                                                                              }).toList(),
+                                                                                            ),
+                                                                                          ),
+                                                                                        ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  actions: [
+                                                                                    SizedBox(
+                                                                                      width: double.infinity,
+                                                                                      child: ElevatedButton(
+                                                                                        onPressed: () {
+                                                                                          // Close the dialog first
+                                                                                          Navigator.of(dialogContext).pop();
+                                                                                          // Then close the modal
+                                                                                          Navigator.of(ctx).pop();
+                                                                                        },
+                                                                                        style: ElevatedButton.styleFrom(
+                                                                                          backgroundColor: Color(0xFF00588e),
+                                                                                          padding: EdgeInsets.symmetric(vertical: 12),
+                                                                                          shape: RoundedRectangleBorder(
+                                                                                            borderRadius: BorderRadius.circular(12),
+                                                                                          ),
+                                                                                        ),
+                                                                                        child: Text(
+                                                                                          'OK',
+                                                                                          style: TextStyle(
+                                                                                            fontSize: 16,
+                                                                                            fontWeight: FontWeight.bold,
+                                                                                            color: Colors.white,
+                                                                                          ),
+                                                                                        ),
+                                                                                      ),
+                                                                                    ),
+                                                                                  ],
+                                                                                );
+                                                                              },
+                                                                            );
                                                                           }
+
+                                                                          // Final safety check before cleanup
+                                                                          if (!mounted) return;
 
                                                                           // 5️⃣ Clear fields + show success
                                                                           reportController
                                                                               .clear();
-                                                                          setState(() {
-                                                                            selectedElderlyId =
-                                                                                null;
-                                                                            selectedElderlyName =
-                                                                                null;
+                                                                          
+                                                                          // Use post-frame callback to safely clear state
+                                                                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                                            if (mounted) {
+                                                                              setState(() {
+                                                                                selectedElderlyId = null;
+                                                                                selectedElderlyName = null;
+                                                                                selectedIncidentType = null;
+                                                                              });
+                                                                            }
                                                                           });
 
-                                                                          // ✅ Failure notification at top
-                                                                          ScaffoldMessenger.of(
-                                                                            context,
-                                                                          ).showSnackBar(
-                                                                            SnackBar(
-                                                                              content: const Text(
-                                                                                "Incident report submitted successfully.",
-                                                                              ),
-                                                                              behavior: SnackBarBehavior.floating,
-                                                                              margin: const EdgeInsets.fromLTRB(
-                                                                                16,
-                                                                                50,
-                                                                                16,
-                                                                                0,
-                                                                              ),
-                                                                              backgroundColor: const Color(
-                                                                                0xFF00588e,
-                                                                              ),
-                                                                              shape: RoundedRectangleBorder(
-                                                                                borderRadius: BorderRadius.circular(
-                                                                                  10,
-                                                                                ),
-                                                                              ),
-                                                                              duration: const Duration(
-                                                                                seconds: 3,
-                                                                              ),
-                                                                            ),
-                                                                          );
                                                                         } catch (
                                                                           e
                                                                         ) {
-                                                                          ScaffoldMessenger.of(
-                                                                            context,
-                                                                          ).showSnackBar(
-                                                                            SnackBar(
-                                                                              content: Text(
-                                                                                "Failed to submit report: $e",
-                                                                              ),
-                                                                              behavior: SnackBarBehavior.floating,
-                                                                              margin: const EdgeInsets.fromLTRB(
-                                                                                16,
-                                                                                50,
-                                                                                16,
-                                                                                0,
-                                                                              ),
-                                                                              backgroundColor: Colors.redAccent,
-                                                                              shape: RoundedRectangleBorder(
-                                                                                borderRadius: BorderRadius.circular(
-                                                                                  10,
-                                                                                ),
-                                                                              ),
-                                                                              duration: const Duration(
-                                                                                seconds: 4,
-                                                                              ),
-                                                                            ),
-                                                                          );
+                                                                          _safeShowSnackBar("Failed to submit report: $e", isError: true);
                                                                         }
                                                                       }
                                                                     : null, // ❌ Disabled kapag kulang
@@ -1293,40 +2001,39 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                 ),
                                                               ),
                                                             ),
-                                                            const SizedBox(
-                                                              width: 12,
                                                             ),
 
                                                             // ❌ Cancel Button (right side)
-                                                            SizedBox(
-                                                              width: 120,
-                                                              height: 44,
-                                                              child: ElevatedButton(
-                                                                onPressed: () {
-                                                                  Navigator.of(
-                                                                    ctx,
-                                                                  ).pop();
-                                                                },
-                                                                style: ElevatedButton.styleFrom(
-                                                                  backgroundColor:
-                                                                      const Color(
-                                                                        0xFF900000,
-                                                                      ),
-                                                                  shape: RoundedRectangleBorder(
-                                                                    borderRadius:
-                                                                        BorderRadius.circular(
-                                                                          18,
+                                                            Flexible(
+                                                              child: SizedBox(
+                                                                height: 44,
+                                                                child: ElevatedButton(
+                                                                  onPressed: () {
+                                                                    Navigator.of(
+                                                                      ctx,
+                                                                    ).pop();
+                                                                  },
+                                                                  style: ElevatedButton.styleFrom(
+                                                                    backgroundColor:
+                                                                        const Color(
+                                                                          0xFF900000,
                                                                         ),
+                                                                    shape: RoundedRectangleBorder(
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            18,
+                                                                          ),
+                                                                    ),
                                                                   ),
-                                                                ),
-                                                                child: const Text(
-                                                                  'Cancel',
-                                                                  style: TextStyle(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .bold,
+                                                                  child: const Text(
+                                                                    'Cancel',
+                                                                    style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                    ),
                                                                   ),
                                                                 ),
                                                               ),

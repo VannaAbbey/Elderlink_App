@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
-import '../main.dart'; // For EmergencyService
+import '../main.dart' as main; // For EmergencyService
 
 class EmergencyScreenModal extends StatelessWidget {
   final String alertId;
@@ -263,7 +263,7 @@ class EmergencyScreenModal extends StatelessWidget {
               // ignore
             }
 
-            EmergencyService.stopAlarm();
+            main.EmergencyService.stopAlarm();
             Navigator.of(context).pop();
           },
           child: const Text(

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/auth_provider.dart';
@@ -146,58 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleSocialLogin(String provider) async {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
-    // Development workaround for platform channel issues
-    if (kDebugMode && provider != 'google') {
-      _showErrorDialog('${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is temporarily disabled in development. Please use Google Sign-In or email login.');
-      return;
-    }
 
-    bool success = false;
-    
-    try {
-      switch (provider) {
-        case 'google':
-          success = await authProvider.signInWithGoogle();
-          break;
-        case 'facebook':
-          success = await authProvider.signInWithFacebook();
-          break;
-        case 'apple':
-          success = await authProvider.signInWithApple();
-          break;
-      }
-
-      if (mounted) {
-        if (success) {
-          // Let AuthWrapper handle navigation based on user role
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const AuthWrapper()),
-            (route) => false,
-          );
-        } else {
-          String errorMessage = authProvider.error ?? 'Social login failed. Please try again.';
-          
-          // Provide more user friendly error messages
-          if (errorMessage.contains('platform error') || errorMessage.contains('channel')) {
-            errorMessage = 'Social login is currently unavailable. Please try email login or configure the platform settings.';
-          } else if (errorMessage.contains('not supported')) {
-            errorMessage = '${provider.substring(0, 1).toUpperCase()}${provider.substring(1)} Sign-In is not available on this device.';
-          } else if (errorMessage.contains('not available')) {
-            errorMessage = 'This sign-in method needs additional setup. Please use email login for now.';
-          }
-          
-          _showErrorDialog(errorMessage);
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        _showErrorDialog('An unexpected error occurred. Please try again.');
-      }
-    }
-  }
 
   void _showErrorDialog(String message) {
     showDialog(
@@ -243,15 +191,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       const Text('ELDERLINK', style: TextStyles.header),
                       const SizedBox(height: 20),
                       Container(
-                        padding: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
                         decoration: BoxDecoration(
-                          color: Colors.white, // optional transparency
+                          color: Colors.white, 
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Column(
                           children: [
                             const Text('Login', style: TextStyles.logintext),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 10),
                             const Text(
                               'Continue your Elderly Care Journey, Sign in now!',
                               textAlign: TextAlign.center,
@@ -351,26 +299,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   color: Color(0xFF142B35),
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 20),
-                            const Text('Or Continue With', style: TextStyle(fontFamily: 'Poppins')),
-                            const SizedBox(height: 20),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                GestureDetector(
-                                  onTap: () => _handleSocialLogin('google'),
-                                  child: Image.asset('assets/images/google.png', height: 47),
-                                ),
-                                GestureDetector(
-                                  onTap: () => _handleSocialLogin('facebook'),
-                                  child: Image.asset('assets/images/fb.png', height: 50),
-                                ),
-                                GestureDetector(
-                                  onTap: () => _handleSocialLogin('apple'),
-                                  child: Image.asset('assets/images/apple.png', height: 47),
-                                ),
-                              ],
                             ),
                           ],
                         ),

@@ -580,7 +580,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
       for (final doc in nurseAssignmentsQuery.docs) {
         final data = doc.data();
-        print('🔍 DEBUG: Assignment doc ${doc.id}: ${data}');
+        print('🔍 DEBUG: Assignment doc ${doc.id}: $data');
         final assignedNurseId = data['user_id'] as String;
         final elderlyIds = List<String>.from(data['elderly_ids'] ?? []);
         print('🔍 DEBUG: Nurse $assignedNurseId has elderly: $elderlyIds');

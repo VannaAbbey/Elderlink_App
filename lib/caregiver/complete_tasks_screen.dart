@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'upcoming_tasks_screen.dart';
 
 class TaskDetailsDialog extends StatelessWidget {
   final Map<String, dynamic> task;
@@ -92,9 +95,7 @@ class TaskDetailsDialog extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      (task['task_frequency'] is List && task['task_frequency'].isNotEmpty)
-                        ? (task['task_frequency'] as List).join(', ')
-                        : (task['task_frequency']?.toString() ?? ''),
+                      _formatFrequency(task['task_frequency']),
                       style: const TextStyle(fontSize: 16),
                       softWrap: true,
                       overflow: TextOverflow.visible,
@@ -130,6 +131,24 @@ class TaskDetailsDialog extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.event_repeat, color: Color(0xFF22688E)),
+                  const SizedBox(width: 8),
+                  const Text('Next Recurring:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF22688E))),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _getNextRecurringDate(),
+                      style: const TextStyle(fontSize: 16),
+                      softWrap: true,
+                      overflow: TextOverflow.visible,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -156,6 +175,71 @@ class TaskDetailsDialog extends StatelessWidget {
     final ampm = hour >= 12 ? 'PM' : 'AM';
     final hour12 = hour > 12 ? hour - 12 : hour == 0 ? 12 : hour;
     return '$hour12:$minute $ampm';
+  }
+
+  String _formatFrequency(dynamic frequency) {
+    // Use the same logic as upcoming_tasks_screen.dart
+    final freqList = task['task_frequency'] as List<dynamic>? ?? [];
+    final freq = freqList.isNotEmpty ? freqList[0] as String : 'Only once';
+    
+    if (freq == 'Only once') {
+      final onceDate = task['freq_once_date'];
+      if (onceDate != null) {
+        if (onceDate is DateTime) {
+          return 'Only once (${_formatDateToDisplay(onceDate)})';
+        } else if (onceDate is String) {
+          return 'Only once ($onceDate)';
+        }
+      }
+      return 'Only once';
+    } else if (freq == 'Every Assigned Day') {
+      return 'Every Assigned Day';
+    } else if (freq == 'Custom') {
+      final customDays = task['custom_days'] as List<dynamic>? ?? [];
+      if (customDays.isNotEmpty) {
+        return 'Custom (${customDays.join(', ')})';
+      }
+      return 'Custom';
+    }
+    
+    return freq;
+  }
+  
+  String _formatDateToDisplay(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+  
+
+
+  String _getNextRecurringDate() {
+    final frequency = task['task_frequency'];
+    final nextTaskDate = task['next_taskdate'];
+    
+    // Check if it's a one-time task
+    if (frequency is List && frequency.isNotEmpty) {
+      final frequencyType = frequency.first.toString();
+      if (frequencyType == 'Only once') {
+        return 'N/A (One-time task)';
+      }
+    } else if (frequency is String && frequency == 'Only once') {
+      return 'N/A (One-time task)';
+    }
+    
+    // Use the next_taskdate field if available
+    if (nextTaskDate != null) {
+      DateTime? nextDate;
+      if (nextTaskDate is Timestamp) {
+        nextDate = nextTaskDate.toDate();
+      } else if (nextTaskDate is DateTime) {
+        nextDate = nextTaskDate;
+      }
+      
+      if (nextDate != null) {
+        return '${nextDate.year}-${nextDate.month.toString().padLeft(2, '0')}-${nextDate.day.toString().padLeft(2, '0')}';
+      }
+    }
+    
+    return 'N/A';
   }
 
 
@@ -196,7 +280,68 @@ class _LabeledField extends StatelessWidget {
   }
 }
 
-class CompleteTasksScreen extends StatelessWidget {
+class CompleteTasksScreen extends StatefulWidget {
+  const CompleteTasksScreen({super.key});
+
+  @override
+  State<CompleteTasksScreen> createState() => _CompleteTasksScreenState();
+}
+
+class _CompleteTasksScreenState extends State<CompleteTasksScreen> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  int _refreshKey = 0; // Simple key to force rebuilds
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Trigger initial progressive task system check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProgressiveTaskSystem(context);
+    });
+    
+    // Set up periodic refresh every 30 seconds
+    _startPeriodicRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // App came back into focus, refresh the data
+      print('🔄 Complete tasks - App resumed, refreshing...');
+      _checkProgressiveTaskSystem(context);
+      _triggerRefresh();
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        print('🔄 Complete tasks - Periodic refresh triggered...');
+        _triggerRefresh();
+      }
+    });
+  }
+
+  void _triggerRefresh() {
+    if (mounted) {
+      setState(() {
+        _refreshKey++; // Force rebuild by changing key
+      });
+    }
+  }
+
+
+
   // Helper to format time as HH:mm
   String _formatTime(DateTime? dateTime) {
     if (dateTime == null) return '';
@@ -208,7 +353,7 @@ class CompleteTasksScreen extends StatelessWidget {
   }
 
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'
-  static String formatHeaderDate(String key) {
+  String formatHeaderDate(String key) {
     try {
       final date = DateTime.parse(key);
       const months = [
@@ -233,8 +378,9 @@ class CompleteTasksScreen extends StatelessWidget {
     }
   }
 
-  final DateTime? selectedFilterDate;
-  const CompleteTasksScreen({super.key, this.selectedFilterDate});
+  // DATE FILTER FUNCTIONALITY - COMMENTED OUT
+  // final DateTime? selectedFilterDate;
+
 
   /// Returns a stream of completed tasks created by the current caregiver only.
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -249,11 +395,34 @@ class CompleteTasksScreen extends StatelessWidget {
         .where('task_status', arrayContains: 'Complete')
         .where('created_by', isEqualTo: caregiverId)
         .snapshots()
-        .map((snapshot) {
+        .asyncMap((snapshot) async {
           final now = DateTime.now();
-          List<Map<String, dynamic>> tasks = snapshot.docs.map((doc) {
+          List<Map<String, dynamic>> tasks = [];
+          
+          for (var doc in snapshot.docs) {
             final data = doc.data();
-            return {
+            
+            // Fetch elderly profile picture
+            String? profilePicUrl;
+            try {
+              final elderlyQuery = await FirebaseFirestore.instance
+                  .collection('elderly')
+                  .where('elderly_fname', isEqualTo: data['elderly_fname'] ?? '')
+                  .limit(1)
+                  .get();
+              
+              if (elderlyQuery.docs.isNotEmpty) {
+                final elderlyData = elderlyQuery.docs.first.data();
+                profilePicUrl = elderlyData['elderly_profilePic'] as String?;
+              }
+            } catch (e) {
+              print('Error fetching elderly profile picture: $e');
+            }
+            
+            // Keep minimal debug logging for the frequency field
+            print('🔍 Frequency data: ${data['task_frequency']} (${data['task_frequency'].runtimeType})');
+            
+            tasks.add({
               'task_id': data['task_id'] ?? doc.id,
               'elderly_fname': data['elderly_fname'] ?? '',
               'task_description': data['task_description'] ?? '',
@@ -266,50 +435,17 @@ class CompleteTasksScreen extends StatelessWidget {
               'task_date': (data['task_date'] is Timestamp)
                   ? (data['task_date'] as Timestamp).toDate()
                   : data['task_date'],
+              'next_taskdate': data['next_taskdate'],
               'task_frequency': data['task_frequency'] ?? ['Only once'],
-            };
-          }).toList();
-          // Filter by selected date if set
-          if (selectedFilterDate != null) {
-            final filterDate = DateTime(
-              selectedFilterDate!.year,
-              selectedFilterDate!.month,
-              selectedFilterDate!.day,
-            );
-            tasks = tasks.where((task) {
-              final taskDate = task['task_date'] as DateTime?;
-              final freqList = task['task_frequency'] as List<dynamic>? ?? [];
-              final freq = freqList.isNotEmpty
-                  ? freqList[0] as String
-                  : 'Only once';
-              if (taskDate == null) return false;
-              final startDate = DateTime(
-                taskDate.year,
-                taskDate.month,
-                taskDate.day,
-              );
-              switch (freq) {
-                case 'Only once':
-                  return filterDate.year == startDate.year &&
-                      filterDate.month == startDate.month &&
-                      filterDate.day == startDate.day;
-                case 'Every Workday':
-                  return !filterDate.isBefore(startDate);
-                case 'Every other day':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && diff % 2 == 0;
-                  }
-                case 'Once a week':
-                  {
-                    final diff = filterDate.difference(startDate).inDays;
-                    return diff >= 0 && filterDate.weekday == startDate.weekday;
-                  }
-                default:
-                  return false;
-              }
-            }).toList();
+              // Include potential custom days fields
+              'custom_days': data['custom_days'],
+              'task_days': data['task_days'],
+              'recurring_days': data['recurring_days'],
+              'selected_days': data['selected_days'],
+              'elderly_profilePic': profilePicUrl,
+            });
           }
+
           // Sort by task_start ascending
           tasks.sort((a, b) {
             final aStart = a['task_start'] as DateTime? ?? now;
@@ -320,12 +456,81 @@ class CompleteTasksScreen extends StatelessWidget {
         });
   }
 
+  // Progressive task system check - called when screen loads
+  void _checkProgressiveTaskSystem(BuildContext context) async {
+    try {
+      print('🔄 CompleteTasksScreen: Progressive system triggered at ${DateTime.now()}');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        // Call the Progressive Task System from UpcomingTasksScreen
+        final progressedTasks = await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
+        if (progressedTasks > 0) {
+          print('✅ CompleteTasksScreen: $progressedTasks recurring tasks updated');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$progressedTasks recurring tasks updated to next occurrence dates'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ CompleteTasksScreen Progressive system error: $e');
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    // Trigger progressive task system when user pulls to refresh
+    _checkProgressiveTaskSystem(context);
+    // Force refresh the data
+    _triggerRefresh();
+    // Add a small delay to ensure UI updates
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+
   @override
   Widget build(BuildContext context) {
+    
     // Removed unused placeholder variables
-    return StreamBuilder<List<Map<String, dynamic>>>(
+    return RefreshIndicator(
+      onRefresh: _onRefresh,
+      child: StreamBuilder<List<Map<String, dynamic>>>(
+      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
       stream: getTasksStream(),
       builder: (context, snapshot) {
+        // Show loading spinner while data is loading
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+            ),
+          );
+        }
+        
+        // Handle errors
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 60),
+                const SizedBox(height: 16),
+                Text(
+                  'Error loading completed tasks',
+                  style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        }
+        
         final tasks = snapshot.data ?? [];
         // Group tasks by date
         Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -371,7 +576,7 @@ class CompleteTasksScreen extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(12.0),
                         child: Text(
-                          CompleteTasksScreen.formatHeaderDate(key),
+                          formatHeaderDate(key),
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
@@ -405,16 +610,40 @@ class CompleteTasksScreen extends StatelessWidget {
                                   Container(
                                     width: 56,
                                     height: 56,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF00588e),
-                                      borderRadius: BorderRadius.circular(12),
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF00588e),
                                     ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Image.asset(
-                                        'assets/images/people_icon.png',
-                                        fit: BoxFit.cover,
-                                      ),
+                                    child: ClipOval(
+                                      child: task['elderly_profilePic'] != null && task['elderly_profilePic'].toString().isNotEmpty
+                                        ? CachedNetworkImage(
+                                            imageUrl: task['elderly_profilePic'],
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover,
+                                            placeholder: (context, url) => Container(
+                                              width: 56,
+                                              height: 56,
+                                              color: Colors.grey[300],
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: Colors.grey,
+                                                size: 28,
+                                              ),
+                                            ),
+                                            errorWidget: (context, url, error) => Image.asset(
+                                              'assets/images/people_icon.png',
+                                              width: 56,
+                                              height: 56,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          )
+                                        : Image.asset(
+                                            'assets/images/people_icon.png',
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover,
+                                          ),
                                     ),
                                   ),
                                   const SizedBox(width: 12),
@@ -507,7 +736,7 @@ class CompleteTasksScreen extends StatelessWidget {
           ),
         );
       },
+    ),
     );
-    // Removed duplicate/leftover widget tree after main build method
   }
 }
