@@ -419,7 +419,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         final medsQuery = await _firestore
             .collection('medications')
             .where('elderly_id', whereIn: chunk)
-            .where('status', isEqualTo: 'upcoming')
+            .where('status', isEqualTo: 'active')
             .where('shift', isEqualTo: currentShift)
             .get();
 

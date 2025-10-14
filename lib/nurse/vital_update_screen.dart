@@ -173,15 +173,15 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
               },
             ),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(30),
               borderSide: const BorderSide(color: Color(0XFF1D66A0)),
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(30),
               borderSide: const BorderSide(color: Color(0XFF1D66A0), width: 2),
             ),
             filled: true,
-            fillColor: Colors.white,
+            fillColor: Color.fromARGB(255, 222, 241, 246),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 16,
               vertical: 12,
@@ -199,6 +199,13 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
 
     // Show confirmation dialog before saving (medication-style)
     bool isChecked = false;
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final Future<DocumentSnapshot?> nurseFuture = currentUser != null
+        ? FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUser.uid)
+              .get()
+        : Future.value(null);
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -206,44 +213,427 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              title: const Text('Confirm Vital Signs Submission'),
+              backgroundColor: Colors.white,
+              // add a small left-top exit icon and center the title
+              titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              title: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Top-left X/exit icon only (larger tappable area)
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 48,
+                      minHeight: 48,
+                    ),
+                    iconSize: 28,
+                    icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                    onPressed: () => Navigator.pop(context),
+                    tooltip: 'Close',
+                  ),
+                  // consume remaining space so header moves to next row (in content)
+                  const Expanded(child: SizedBox()),
+                  const SizedBox(width: 36),
+                ],
+              ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Please review the details below before submitting:',
-                    ),
-                    const SizedBox(height: 12),
-                    Text('Blood Pressure: ${_bloodPressureController.text}'),
-                    Text('Pulse Rate: ${_pulseRateController.text}'),
-                    Text('O2 Saturation: ${_o2SatController.text}'),
-                    Text('Temperature: ${_temperatureController.text}'),
-                    Text(
-                      'Respiratory Rate: ${_respiratoryRateController.text}',
-                    ),
-                    if (_notesController.text.trim().isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(
-                          'Description/Notes: ${_notesController.text}',
+                    // Header moved to content so it sits under the exit icon
+                    const Center(
+                      child: Text(
+                        'Confirmation Form',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF00588E),
+                          fontSize: 26,
                         ),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Divider(color: Color(0xFF00588E), thickness: 2),
                     const SizedBox(height: 12),
-                    Text('Reporting Nurse: ${widget.nurseName ?? "Unknown"}'),
+                    const Text(
+                      'You are about to submit these vital signs in the system. '
+                      'Please verify all details are correct before proceeding. '
+                      'This action will record the vital signs and cannot be easily undone.',
+                      textAlign: TextAlign.justify,
+                    ),
+                    const SizedBox(height: 14),
+                    // Reporting nurse label (fetched asynchronously) - placed above the checkbox
+                    FutureBuilder(
+                      future: nurseFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8.0),
+                            child: SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        }
+                        final nurseDoc = snapshot.data;
+                        String nurseName = 'Unknown';
+                        if (nurseDoc != null && nurseDoc.exists) {
+                          final nurseData =
+                              nurseDoc.data() as Map<String, dynamic>;
+                          nurseName =
+                              '${nurseData['user_fname']} ${nurseData['user_lname']}';
+                        }
+                        return Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 8.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    const Icon(
+                                      Icons.person,
+                                      size: 25,
+                                      color: Color(0xFF00588E),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    // Make label colored and value black, and allow wrapping
+                                    Expanded(
+                                      child: Text.rich(
+                                        TextSpan(
+                                          children: [
+                                            TextSpan(
+                                              text: 'Reporting Nurse: ',
+                                              style: const TextStyle(
+                                                fontFamily: 'Poppins',
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 15,
+                                                color: Color(0xFF00588E),
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text: nurseName,
+                                              style: const TextStyle(
+                                                fontFamily: 'Poppins',
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 15,
+                                                color: Colors.black,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.start,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    // Vital Signs Details Section
+                    Container(
+                      margin: const EdgeInsets.only(top: 16),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: const Color(0xFF00588E),
+                          width: 1,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Blood Pressure
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.favorite,
+                                size: 20,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Blood Pressure: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: _bloodPressureController.text,
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // Pulse Rate
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.monitor_heart,
+                                size: 20,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Pulse Rate: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text:
+                                            '${_pulseRateController.text} bpm',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // O2 Saturation
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.air,
+                                size: 20,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'O2 Saturation: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: '${_o2SatController.text}%',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // Temperature
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.thermostat,
+                                size: 20,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Temperature: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text:
+                                            '${_temperatureController.text}°C',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // Respiratory Rate
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.wind_power,
+                                size: 20,
+                                color: Color(0xFF00588E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: 'Respiratory Rate: ',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text:
+                                            '${_respiratoryRateController.text} breaths/min',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_notesController.text.trim().isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            // Notes
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  Icons.note,
+                                  size: 20,
+                                  color: Color(0xFF00588E),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Notes:',
+                                        style: const TextStyle(
+                                          fontFamily: 'Poppins',
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFF00588E),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _notesController.text,
+                                          style: const TextStyle(
+                                            fontFamily: 'Poppins',
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Checkbox(
                           value: isChecked,
                           onChanged: (val) =>
                               setState(() => isChecked = val ?? false),
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                          activeColor: const Color(0xFF00588E),
+                          checkColor: Colors.white,
+                          side: const BorderSide(
+                            color: Color(0xFF00588E),
+                            width: 2,
+                          ),
                         ),
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'I confirm that the above vital signs are accurate and ready to be submitted.',
-                            style: TextStyle(fontSize: 13),
+                            'I acknowledge that the vital signs information provided is accurate and complete.',
+                            textAlign: TextAlign.justify,
+                            style: const TextStyle(fontSize: 14),
                           ),
                         ),
                       ],
@@ -252,15 +642,74 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: isChecked
-                      ? () => Navigator.of(context).pop(true)
-                      : null,
-                  child: const Text('Submit & Save'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Submit button (responsive)
+                      Flexible(
+                        flex: 1,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: 160,
+                            minWidth: 100,
+                          ),
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00588E),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              minimumSize: const Size.fromHeight(44),
+                            ),
+                            onPressed: isChecked
+                                ? () => Navigator.of(context).pop(true)
+                                : null,
+                            child: const Text(
+                              'Submit',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 12),
+
+                      // Cancel button (responsive)
+                      Flexible(
+                        flex: 1,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: 160,
+                            minWidth: 100,
+                          ),
+                          child: TextButton(
+                            style: TextButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              minimumSize: const Size.fromHeight(44),
+                            ),
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             );
@@ -691,7 +1140,12 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                           ),
                                         ),
                                         filled: true,
-                                        fillColor: Colors.white,
+                                        fillColor: Color.fromARGB(
+                                          255,
+                                          222,
+                                          241,
+                                          246,
+                                        ),
                                         contentPadding: const EdgeInsets.all(
                                           16,
                                         ),

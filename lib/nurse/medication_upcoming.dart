@@ -30,7 +30,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   // Keyed by: houseId|nurseName|shift|day to avoid cross-shift staleness.
   static final Map<String, List<Map<String, dynamic>>> _medsCache = {};
   static final Map<String, DateTime> _medsCacheTime = {};
-  static const Duration _cacheDuration = Duration(minutes: 5);
+  static const Duration _cacheDuration = Duration(minutes: 2);
   List<Map<String, String>> _elderlyList = [];
   String? _selectedElderly;
   bool _isLoading = false;
@@ -306,18 +306,22 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       // Commit the batch
       await batch.commit();
 
-      // Log the add medication activity to Medication_Activity_Logs
-      await _logMedicationActivityNew(
-        action: 'create',
-        medicationId: medicationId,
-        elderlyId: elderlyId,
-        nurseId: nurseId,
-        houseId: widget.houseId,
-        shift: _getCurrentShift(),
-        medicationName: medicationName,
-        dosage: dosage,
-        repeatInterval: repeatInterval,
-      );
+      // Log the add medication activity to Medication_Activity_Logs for each take
+      for (int i = 0; i < numberOfIntakes; i++) {
+        await _logMedicationActivityNew(
+          action: 'create',
+          medicationId: medicationId,
+          elderlyId: elderlyId,
+          nurseId: nurseId,
+          houseId: widget.houseId,
+          shift: _getCurrentShift(),
+          medicationName: medicationName,
+          dosage: dosage,
+          repeatInterval: repeatInterval,
+          takeNumber: i + 1,
+          scheduledTime: intakeTimesFormatted[i],
+        );
+      }
 
       print('Medication saved successfully with new structure');
 
@@ -752,20 +756,30 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         return;
       }
 
-      // Fetch Medication_Takes for these medications
-      final takesQuery = await _firestore
-          .collection('medication_takes')
-          .where(
-            'medication_id',
-            whereIn: medicationIds.take(10).toList(),
-          ) // Limit to 10 for whereIn
-          .where('status', isEqualTo: 'pending')
-          .get();
+      // Fetch Medication_Takes for these medications in parallel batches of 10 (Firestore limit)
+      final List<Future<QuerySnapshot>> takesFutures = [];
+      for (var i = 0; i < medicationIds.length; i += 10) {
+        final end = (i + 10 < medicationIds.length)
+            ? i + 10
+            : medicationIds.length;
+        final batch = medicationIds.sublist(i, end);
+        final future = _firestore
+            .collection('medication_takes')
+            .where('medication_id', whereIn: batch)
+            .where('status', isEqualTo: 'pending')
+            .get();
+        takesFutures.add(future);
+      }
+      final takesSnapshots = await Future.wait(takesFutures);
+      final List<QueryDocumentSnapshot> allTakesDocs = [];
+      for (final snapshot in takesSnapshots) {
+        allTakesDocs.addAll(snapshot.docs);
+      }
 
       // Group takes by medication_id and filter by shift time
       final takesByMedication = <String, List<Map<String, dynamic>>>{};
-      for (final takeDoc in takesQuery.docs) {
-        final takeData = takeDoc.data();
+      for (final takeDoc in allTakesDocs) {
+        final takeData = takeDoc.data() as Map<String, dynamic>;
         final medId = takeData['medication_id'] as String;
 
         // Check if take's scheduled time falls within current shift
@@ -917,27 +931,27 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: Colors.white,
-          contentPadding: EdgeInsets.all(20),
-          title: Column(
-            mainAxisSize: MainAxisSize.min,
+          titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Add Medication',
-                style: TextStyle(
-                  color: Color(0xFF00588E),
-                  fontWeight: FontWeight.bold,
-                ),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                iconSize: 28,
+                icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                onPressed: () => Navigator.of(context).pop(),
+                tooltip: 'Close',
               ),
-              SizedBox(height: 8),
-              Text(
-                'Total assigned elderly: ${_elderlyList.length}',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontSize: 14,
-                  fontWeight: FontWeight.normal,
-                ),
-              ),
+              const Expanded(child: SizedBox()),
+              const SizedBox(width: 16),
             ],
+          ),
+          contentPadding: const EdgeInsets.only(
+            left: 16,
+            top: 0,
+            right: 16,
+            bottom: 16,
           ),
           content: StatefulBuilder(
             builder: (BuildContext context, StateSetter setDialogState) {
@@ -945,6 +959,44 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Header
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        SizedBox(width: 10),
+                        Text(
+                          "Add Medication",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF216386),
+                            fontSize: 26,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Divider(
+                      color: Color.fromARGB(255, 204, 203, 203),
+                      thickness: 2,
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Subtitle
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Total assigned elderly: ${_elderlyList.length}',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontSize: 14,
+                            fontWeight: FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
                     // Elderly Selection
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -969,51 +1021,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedElderlyTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select elderly',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 117, 178, 215),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select elderly',
-                              enableSearch: true,
-                              enableFilter: true,
-                              requestFocusOnTap: true,
-                              initialSelection: selectedElderlyTemp,
-                              dropdownMenuEntries: _elderlyList.map((elderly) {
-                                return DropdownMenuEntry<String>(
-                                  value: elderly['id']!,
-                                  label: elderly['name'] ?? '',
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedElderlyTemp = value;
-                                });
-                              },
-                            ),
+                            items: _elderlyList.map((elderly) {
+                              return DropdownMenuItem<String>(
+                                value: elderly['id']!,
+                                child: Text(elderly['name'] ?? ''),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedElderlyTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -1044,53 +1098,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedMedicationTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select medication',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select medication',
-                              enableSearch: true,
-                              enableFilter: true,
-                              requestFocusOnTap: true,
-                              initialSelection: selectedMedicationTemp,
-                              dropdownMenuEntries: commonMedications.map((
-                                medication,
-                              ) {
-                                return DropdownMenuEntry<String>(
-                                  value: medication,
-                                  label: medication,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedMedicationTemp = value;
-                                });
-                              },
-                            ),
+                            items: commonMedications.map((medication) {
+                              return DropdownMenuItem<String>(
+                                value: medication,
+                                child: Text(medication),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedMedicationTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -1121,51 +1175,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedDosageTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select dosage',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select dosage',
-                              enableSearch: true,
-                              enableFilter: true,
-                              requestFocusOnTap: true,
-                              initialSelection: selectedDosageTemp,
-                              dropdownMenuEntries: commonDosages.map((dosage) {
-                                return DropdownMenuEntry<String>(
-                                  value: dosage,
-                                  label: dosage,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedDosageTemp = value;
-                                });
-                              },
-                            ),
+                            items: commonDosages.map((dosage) {
+                              return DropdownMenuItem<String>(
+                                value: dosage,
+                                child: Text(dosage),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedDosageTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -1196,50 +1252,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedIntervalTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select repeat interval',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select repeat interval',
-                              initialSelection: selectedIntervalTemp,
-                              dropdownMenuEntries: repeatIntervals.map((
-                                interval,
-                              ) {
-                                return DropdownMenuEntry<String>(
-                                  value: interval,
-                                  label: interval,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedIntervalTemp = value;
-                                });
-                              },
-                            ),
+                            items: repeatIntervals.map((interval) {
+                              return DropdownMenuItem<String>(
+                                value: interval,
+                                child: Text(interval),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedIntervalTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -1270,57 +1329,59 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: 280,
+                          height: 50,
+                          child: DropdownButtonFormField<int>(
+                            value: numberOfIntakesTemp,
+                            decoration: InputDecoration(
+                              hintText: 'No. of med intakes',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<int>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Number of medication intakes',
-                              initialSelection: numberOfIntakesTemp,
-                              dropdownMenuEntries: intakeOptions.map((
-                                intakeCount,
-                              ) {
-                                return DropdownMenuEntry<int>(
-                                  value: intakeCount,
-                                  label:
-                                      '$intakeCount intake${intakeCount > 1 ? 's' : ''}',
-                                );
-                              }).toList(),
-                              onSelected: (int? value) {
-                                setDialogState(() {
-                                  numberOfIntakesTemp = value;
-                                  // Initialize intake times list
-                                  if (value != null) {
-                                    intakeTimes = List.filled(value, null);
-                                  } else {
-                                    intakeTimes = [];
-                                  }
-                                });
-                              },
-                            ),
+                            items: intakeOptions.map((intakeCount) {
+                              return DropdownMenuItem<int>(
+                                value: intakeCount,
+                                child: Text('$intakeCount'),
+                              );
+                            }).toList(),
+                            onChanged: (int? value) {
+                              setDialogState(() {
+                                numberOfIntakesTemp = value;
+                                // Initialize intake times list
+                                if (value != null) {
+                                  intakeTimes = List.filled(value, null);
+                                } else {
+                                  intakeTimes = [];
+                                }
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -1401,99 +1462,111 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         );
                       }),
                     SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ElevatedButton(
-                          onPressed: () async {
-                            // Validate all fields are filled
-                            if (selectedElderlyTemp != null &&
-                                selectedMedicationTemp != null &&
-                                selectedDosageTemp != null &&
-                                selectedIntervalTemp != null &&
-                                numberOfIntakesTemp != null &&
-                                intakeTimes.every((time) => time != null)) {
-                              // Validate that intake times are in chronological order
-                              bool timesAreValid = true;
-                              String? validationMessage;
 
-                              final validTimes = intakeTimes.cast<TimeOfDay>();
-                              for (int i = 1; i < validTimes.length; i++) {
-                                final previousTime = validTimes[i - 1];
-                                final currentTime = validTimes[i];
+                    // Buttons
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Add
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00588E),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () async {
+                              // Validate all fields are filled
+                              if (selectedElderlyTemp != null &&
+                                  selectedMedicationTemp != null &&
+                                  selectedDosageTemp != null &&
+                                  selectedIntervalTemp != null &&
+                                  numberOfIntakesTemp != null &&
+                                  intakeTimes.every((time) => time != null)) {
+                                // Validate that intake times are in chronological order
+                                bool timesAreValid = true;
+                                String? validationMessage;
 
-                                // Convert to minutes since midnight for comparison
-                                final previousMinutes =
-                                    previousTime.hour * 60 +
-                                    previousTime.minute;
-                                final currentMinutes =
-                                    currentTime.hour * 60 + currentTime.minute;
+                                final validTimes = intakeTimes
+                                    .cast<TimeOfDay>();
+                                for (int i = 1; i < validTimes.length; i++) {
+                                  final previousTime = validTimes[i - 1];
+                                  final currentTime = validTimes[i];
 
-                                if (currentMinutes <= previousMinutes) {
-                                  timesAreValid = false;
-                                  validationMessage =
-                                      '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
-                                  break;
+                                  // Convert to minutes since midnight for comparison
+                                  final previousMinutes =
+                                      previousTime.hour * 60 +
+                                      previousTime.minute;
+                                  final currentMinutes =
+                                      currentTime.hour * 60 +
+                                      currentTime.minute;
+
+                                  if (currentMinutes <= previousMinutes) {
+                                    timesAreValid = false;
+                                    validationMessage =
+                                        '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
+                                    break;
+                                  }
                                 }
-                              }
 
-                              if (!timesAreValid) {
+                                if (!timesAreValid) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(validationMessage!),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                // Show confirmation dialog instead of directly saving
+                                showMedicationConfirmation(
+                                  context,
+                                  selectedElderlyTemp!,
+                                  selectedMedicationTemp!,
+                                  selectedDosageTemp!,
+                                  selectedIntervalTemp!,
+                                  numberOfIntakesTemp!,
+                                  intakeTimes.cast<TimeOfDay>(),
+                                );
+                              } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text(validationMessage!),
+                                    content: Text('Please fill in all fields'),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
-                                return;
                               }
-
-                              // Show confirmation dialog instead of directly saving
-                              showMedicationConfirmation(
-                                context,
-                                selectedElderlyTemp!,
-                                selectedMedicationTemp!,
-                                selectedDosageTemp!,
-                                selectedIntervalTemp!,
-                                numberOfIntakesTemp!,
-                                intakeTimes.cast<TimeOfDay>(),
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Please fill in all fields'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Color(0xFF00588E),
-                            shape: StadiumBorder(),
-                          ),
-                          child: Text(
-                            'Add',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
+                            },
+                            child: Text(
+                              'Add',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
-                        ),
-                        SizedBox(width: 16),
-                        ElevatedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            shape: StadiumBorder(),
-                          ),
-                          child: Text(
-                            'Cancel',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
+                          const SizedBox(width: 16),
+                          // Cancel
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1926,7 +1999,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final medicationsQuery = await _firestore
           .collection('medications')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('status', isEqualTo: 'upcoming')
+          .where('status', isEqualTo: 'active')
           .get();
 
       for (final doc in medicationsQuery.docs) {
@@ -2119,6 +2192,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     String? scheduledTime,
   }) async {
     try {
+      // Set default take number if not provided (for create actions)
+      if (takeNumber == null) {
+        takeNumber = 1;
+      }
+
       // Get elderly name
       final elderlyDoc = await _firestore
           .collection('elderly')
@@ -2157,7 +2235,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         'dosage': dosage,
         'repeat_interval': repeatInterval,
         'take_number': takeNumber,
-        'take_ordinal': takeNumber != null ? _getOrdinal(takeNumber) : null,
+        'take_ordinal': _getOrdinal(takeNumber),
         'scheduled_time': scheduledTime,
       };
 
@@ -2260,15 +2338,58 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: Text('Edit Medication'),
-              content: SingleChildScrollView(
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                iconSize: 28,
+                icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                onPressed: () => Navigator.of(context).pop(),
+                tooltip: 'Close',
+              ),
+              const Expanded(child: SizedBox()),
+              const SizedBox(width: 16),
+            ],
+          ),
+          contentPadding: const EdgeInsets.only(
+            left: 16,
+            top: 0,
+            right: 16,
+            bottom: 16,
+          ),
+          content: StatefulBuilder(
+            builder: (BuildContext context, StateSetter setDialogState) {
+              return SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Header
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        SizedBox(width: 10),
+                        Text(
+                          "Edit Medication",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF216386),
+                            fontSize: 26,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Divider(
+                      color: Color.fromARGB(255, 204, 203, 203),
+                      thickness: 2,
+                    ),
+                    const SizedBox(height: 12),
                     // Medication Name
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2293,53 +2414,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedMedicationTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select medication',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select medication',
-                              enableSearch: true,
-                              enableFilter: true,
-                              requestFocusOnTap: true,
-                              initialSelection: selectedMedicationTemp,
-                              dropdownMenuEntries: commonMedications.map((
-                                medication,
-                              ) {
-                                return DropdownMenuEntry<String>(
-                                  value: medication,
-                                  label: medication,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedMedicationTemp = value;
-                                });
-                              },
-                            ),
+                            items: commonMedications.map((medication) {
+                              return DropdownMenuItem<String>(
+                                value: medication,
+                                child: Text(medication),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedMedicationTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -2370,51 +2491,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedDosageTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select dosage',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select dosage',
-                              enableSearch: true,
-                              enableFilter: true,
-                              requestFocusOnTap: true,
-                              initialSelection: selectedDosageTemp,
-                              dropdownMenuEntries: commonDosages.map((dosage) {
-                                return DropdownMenuEntry<String>(
-                                  value: dosage,
-                                  label: dosage,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedDosageTemp = value;
-                                });
-                              },
-                            ),
+                            items: commonDosages.map((dosage) {
+                              return DropdownMenuItem<String>(
+                                value: dosage,
+                                child: Text(dosage),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedDosageTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -2445,50 +2568,53 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: 50,
+                          child: DropdownButtonFormField<String>(
+                            value: selectedIntervalTemp,
+                            decoration: InputDecoration(
+                              hintText: 'Select repeat interval',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 12,
                               ),
                             ),
-                            child: DropdownMenu<String>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Select repeat interval',
-                              initialSelection: selectedIntervalTemp,
-                              dropdownMenuEntries: repeatIntervals.map((
-                                interval,
-                              ) {
-                                return DropdownMenuEntry<String>(
-                                  value: interval,
-                                  label: interval,
-                                );
-                              }).toList(),
-                              onSelected: (String? value) {
-                                setDialogState(() {
-                                  selectedIntervalTemp = value;
-                                });
-                              },
-                            ),
+                            items: repeatIntervals.map((interval) {
+                              return DropdownMenuItem<String>(
+                                value: interval,
+                                child: Text(interval),
+                              );
+                            }).toList(),
+                            onChanged: (String? value) {
+                              setDialogState(() {
+                                selectedIntervalTemp = value;
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -2519,59 +2645,60 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 8),
                         SizedBox(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          child: Theme(
-                            data: Theme.of(context).copyWith(
-                              inputDecorationTheme: InputDecorationTheme(
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
+                          width: MediaQuery.of(context).size.width * 0.75,
+                          height: 50,
+                          child: DropdownButtonFormField<int>(
+                            value: numberOfIntakesTemp,
+                            decoration: InputDecoration(
+                              hintText: 'No. of med intakes',
+                              filled: true,
+                              fillColor: Color.fromARGB(255, 222, 241, 246),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                filled: true,
-                                fillColor: Color.fromARGB(255, 162, 219, 255),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 1.5,
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                                borderSide: BorderSide(
+                                  color: Colors.white,
+                                  width: 2,
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                  borderSide: BorderSide(color: Colors.white),
-                                ),
-                                suffixIconColor: Color(0xFF00588E),
+                              ),
+                              contentPadding: EdgeInsets.only(
+                                left: 12,
+                                top: 12,
+                                bottom: 12,
+                                right: 24,
                               ),
                             ),
-                            child: DropdownMenu<int>(
-                              width: MediaQuery.of(context).size.width * 0.8,
-                              menuHeight: 200.0,
-                              hintText: 'Number of medication intakes',
-                              initialSelection: numberOfIntakesTemp,
-                              dropdownMenuEntries: intakeOptions.map((
-                                intakeCount,
-                              ) {
-                                return DropdownMenuEntry<int>(
-                                  value: intakeCount,
-                                  label:
-                                      '$intakeCount intake${intakeCount > 1 ? 's' : ''}',
+                            items: intakeOptions.map((intakeCount) {
+                              return DropdownMenuItem<int>(
+                                value: intakeCount,
+                                child: Text('$intakeCount'),
+                              );
+                            }).toList(),
+                            onChanged: (int? value) {
+                              setDialogState(() {
+                                numberOfIntakesTemp = value;
+                                // Reset intake times when count changes
+                                intakeTimes = List.generate(
+                                  6,
+                                  (index) => index < (value ?? 0)
+                                      ? (intakeTimes[index] ?? TimeOfDay.now())
+                                      : null,
                                 );
-                              }).toList(),
-                              onSelected: (int? value) {
-                                setDialogState(() {
-                                  numberOfIntakesTemp = value;
-                                  // Reset intake times when count changes
-                                  intakeTimes = List.generate(
-                                    6,
-                                    (index) => index < (value ?? 0)
-                                        ? (intakeTimes[index] ??
-                                              TimeOfDay.now())
-                                        : null,
-                                  );
-                                });
-                              },
-                            ),
+                              });
+                            },
                           ),
                         ),
                       ],
@@ -2582,28 +2709,68 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                     if (numberOfIntakesTemp != null)
                       ...List.generate(numberOfIntakesTemp!, (index) {
                         return Padding(
-                          padding: EdgeInsets.only(bottom: 8),
+                          padding: EdgeInsets.only(bottom: 12),
                           child: Row(
                             children: [
-                              Text('${_getOrdinal(index + 1)} Intake:'),
-                              SizedBox(width: 16),
                               Expanded(
-                                child: TextButton(
-                                  onPressed: () async {
-                                    final time = await showTimePicker(
-                                      context: context,
-                                      initialTime:
-                                          intakeTimes[index] ?? TimeOfDay.now(),
-                                    );
-                                    if (time != null) {
-                                      setDialogState(
-                                        () => intakeTimes[index] = time,
-                                      );
+                                flex: 2,
+                                child: Text(
+                                  '${_getOrdinal(index + 1)} Take:',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 3,
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    final TimeOfDay? picked =
+                                        await showTimePicker(
+                                          context: context,
+                                          initialTime:
+                                              intakeTimes[index] ??
+                                              TimeOfDay.now(),
+                                        );
+                                    if (picked != null) {
+                                      setDialogState(() {
+                                        intakeTimes[index] = picked;
+                                      });
                                     }
                                   },
-                                  child: Text(
-                                    intakeTimes[index]?.format(context) ??
-                                        'Select Time',
+                                  child: Container(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 12,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Color.fromARGB(255, 162, 219, 255),
+                                      border: Border.all(color: Colors.white),
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          intakeTimes[index] != null
+                                              ? intakeTimes[index]!.format(
+                                                  context,
+                                                )
+                                              : 'Select time',
+                                          style: TextStyle(
+                                            color: intakeTimes[index] != null
+                                                ? Colors.black
+                                                : Colors.grey,
+                                          ),
+                                        ),
+                                        Icon(
+                                          Icons.access_time,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2611,109 +2778,148 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                           ),
                         );
                       }),
+                    SizedBox(height: 20),
+
+                    // Buttons
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Update
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00588E),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () async {
+                              // Check if any changes were made
+                              if (!hasChanges()) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'No changes detected. Please modify at least one field before updating.',
+                                    ),
+                                    backgroundColor: Colors.orange,
+                                  ),
+                                );
+                                return;
+                              }
+
+                              if (selectedMedicationTemp != null &&
+                                  selectedDosageTemp != null &&
+                                  selectedIntervalTemp != null &&
+                                  numberOfIntakesTemp != null) {
+                                // Validate intake times
+                                bool allTimesSelected = true;
+                                for (int i = 0; i < numberOfIntakesTemp!; i++) {
+                                  if (intakeTimes[i] == null) {
+                                    allTimesSelected = false;
+                                    break;
+                                  }
+                                }
+
+                                if (!allTimesSelected) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Please select all intake times',
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                // Validate that intake times are in chronological order
+                                bool timesAreValid = true;
+                                String? validationMessage;
+
+                                final validTimes = intakeTimes
+                                    .take(numberOfIntakesTemp!)
+                                    .where((t) => t != null)
+                                    .cast<TimeOfDay>()
+                                    .toList();
+                                for (int i = 1; i < validTimes.length; i++) {
+                                  final previousTime = validTimes[i - 1];
+                                  final currentTime = validTimes[i];
+
+                                  // Convert to minutes since midnight for comparison
+                                  final previousMinutes =
+                                      previousTime.hour * 60 +
+                                      previousTime.minute;
+                                  final currentMinutes =
+                                      currentTime.hour * 60 +
+                                      currentTime.minute;
+
+                                  if (currentMinutes <= previousMinutes) {
+                                    timesAreValid = false;
+                                    validationMessage =
+                                        '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
+                                    break;
+                                  }
+                                }
+
+                                if (!timesAreValid) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(validationMessage!),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                showEditMedicationConfirmation(
+                                  dialogContext,
+                                  medicationId,
+                                  medicationData,
+                                  selectedMedicationTemp!,
+                                  selectedDosageTemp!,
+                                  selectedIntervalTemp!,
+                                  numberOfIntakesTemp!,
+                                  intakeTimes
+                                      .take(numberOfIntakesTemp!)
+                                      .where((t) => t != null)
+                                      .cast<TimeOfDay>()
+                                      .toList(),
+                                );
+                              }
+                            },
+                            child: Text(
+                              'Update',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          // Cancel
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    // Check if any changes were made
-                    if (!hasChanges()) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'No changes detected. Please modify at least one field before updating.',
-                          ),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                      return;
-                    }
-
-                    if (selectedMedicationTemp != null &&
-                        selectedDosageTemp != null &&
-                        selectedIntervalTemp != null &&
-                        numberOfIntakesTemp != null) {
-                      // Validate intake times
-                      bool allTimesSelected = true;
-                      for (int i = 0; i < numberOfIntakesTemp!; i++) {
-                        if (intakeTimes[i] == null) {
-                          allTimesSelected = false;
-                          break;
-                        }
-                      }
-
-                      if (!allTimesSelected) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Please select all intake times'),
-                          ),
-                        );
-                        return;
-                      }
-
-                      // Validate that intake times are in chronological order
-                      bool timesAreValid = true;
-                      String? validationMessage;
-
-                      final validTimes = intakeTimes
-                          .take(numberOfIntakesTemp!)
-                          .where((t) => t != null)
-                          .cast<TimeOfDay>()
-                          .toList();
-                      for (int i = 1; i < validTimes.length; i++) {
-                        final previousTime = validTimes[i - 1];
-                        final currentTime = validTimes[i];
-
-                        // Convert to minutes since midnight for comparison
-                        final previousMinutes =
-                            previousTime.hour * 60 + previousTime.minute;
-                        final currentMinutes =
-                            currentTime.hour * 60 + currentTime.minute;
-
-                        if (currentMinutes <= previousMinutes) {
-                          timesAreValid = false;
-                          validationMessage =
-                              '${_getOrdinal(i + 1)} take time (${currentTime.format(context)}) must be later than ${_getOrdinal(i)} take time (${previousTime.format(context)})';
-                          break;
-                        }
-                      }
-
-                      if (!timesAreValid) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(validationMessage!),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                        return;
-                      }
-
-                      showEditMedicationConfirmation(
-                        dialogContext,
-                        medicationId,
-                        medicationData,
-                        selectedMedicationTemp!,
-                        selectedDosageTemp!,
-                        selectedIntervalTemp!,
-                        numberOfIntakesTemp!,
-                        intakeTimes
-                            .take(numberOfIntakesTemp!)
-                            .where((t) => t != null)
-                            .cast<TimeOfDay>()
-                            .toList(),
-                      );
-                    }
-                  },
-                  child: Text('Update'),
-                ),
-              ],
-            );
-          },
+              );
+            },
+          ),
         );
       },
     );
@@ -2861,6 +3067,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       context: parentContext,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
+          backgroundColor: Colors.white,
           // add a small left-top exit icon and center the title
           titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
           title: Row(
@@ -2986,7 +3193,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                   margin: const EdgeInsets.only(top: 16),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF0F8FF),
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: const Color(0xFF00588E),
@@ -3182,8 +3389,14 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   spacing: 8,
                                   runSpacing: 4,
                                   children: intakeTimes.map((time) {
+                                    final hour = time.hour;
+                                    final minute = time.minute;
+                                    final period = hour >= 12 ? 'PM' : 'AM';
+                                    final displayHour = hour == 0
+                                        ? 12
+                                        : (hour > 12 ? hour - 12 : hour);
                                     final formattedTime =
-                                        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+                                        '${displayHour}:${minute.toString().padLeft(2, '0')}$period';
                                     return Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 8,
@@ -3782,6 +3995,23 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     return null;
   }
 
+  String _formatTimeTo12Hour(String timeString) {
+    try {
+      final timeParts = timeString.split(':');
+      if (timeParts.length < 2) return timeString;
+
+      final hour = int.tryParse(timeParts[0]) ?? 0;
+      final minute = int.tryParse(timeParts[1]) ?? 0;
+
+      final period = hour >= 12 ? 'PM' : 'AM';
+      final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+
+      return '${displayHour}:${minute.toString().padLeft(2, '0')}$period';
+    } catch (e) {
+      return timeString; // Return original if parsing fails
+    }
+  }
+
   Widget _buildIndividualTakeContainer(Map<String, dynamic> takeInfo) {
     final medication = takeInfo['medication'] as Map<String, dynamic>;
     final take = takeInfo['take'] as Map<String, dynamic>;
@@ -3888,7 +4118,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                         ),
                         SizedBox(height: 4),
                         Text(
-                          'Scheduled Time: $scheduledTime',
+                          'Scheduled Time: ${_formatTimeTo12Hour(scheduledTime)}',
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.grey[700],
@@ -3986,8 +4216,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             // Action buttons section
             SizedBox(height: 12),
 
-            // Individual Take Delete Button (only if this take is pending and it is the last take)
+            // Individual Take Delete Button (only show for the last take if there are 2 or more takes total)
             if (status == 'pending' &&
+                (medication['number_of_intakes'] ?? 1) > 1 &&
                 takeNumber == (medication['number_of_intakes'] ?? 1))
               Padding(
                 padding: EdgeInsets.only(bottom: 8),

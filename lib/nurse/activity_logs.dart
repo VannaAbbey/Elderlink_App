@@ -39,6 +39,18 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
   // Common
   List<Map<String, String>> _elderlyList = [];
 
+  // ⚡ OPTIMIZATION: Cache for elderly data to avoid repeated fetches
+  static final Map<String, List<Map<String, String>>> _elderlyCache = {};
+  static final Map<String, DateTime> _elderlyCacheTime = {};
+  static const Duration _elderlyCacheDuration = Duration(
+    hours: 1,
+  ); // Cache for 1 hour
+
+  // ⚡ OPTIMIZATION: Cache for user data (nurse/elderly names)
+  static final Map<String, Map<String, dynamic>> _userDataCache = {};
+  static final Map<String, DateTime> _userDataCacheTime = {};
+  static const Duration _userDataCacheDuration = Duration(minutes: 30);
+
   @override
   void initState() {
     super.initState();
@@ -201,15 +213,11 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         // When filtering by elderly, use where clauses without orderBy to avoid index issues
         query = _firestore
             .collection('medication_activity_logs')
-            .where('house_id', isEqualTo: widget.houseId)
             .where('elderly_id', isEqualTo: _selectedElderlyMed)
             .limit(100);
       } else {
-        // When showing all activities, just filter by house_id without date restriction
-        query = _firestore
-            .collection('medication_activity_logs')
-            .where('house_id', isEqualTo: widget.houseId)
-            .limit(100);
+        // When showing all activities, query all houses
+        query = _firestore.collection('medication_activity_logs').limit(100);
       }
 
       final querySnapshot = await query.get();
@@ -263,8 +271,28 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         activities.add({'id': doc.id, 'elderly_title': elderlyTitle, ...data});
       }
 
+      // Remove duplicate 'create' actions for the same medication
+      final seenCreateMedications = <String>{};
+      final deduplicatedActivities = <Map<String, dynamic>>[];
+
+      for (final activity in activities) {
+        final action = activity['action'] as String?;
+        final medicationId = activity['medication_id'] as String?;
+
+        if (action == 'create' && medicationId != null) {
+          if (!seenCreateMedications.contains(medicationId)) {
+            seenCreateMedications.add(medicationId);
+            deduplicatedActivities.add(activity);
+          }
+          // Skip duplicate create actions for the same medication
+        } else {
+          // Keep all other actions (complete_take, miss_take, etc.)
+          deduplicatedActivities.add(activity);
+        }
+      }
+
       // Sort activities by timestamp in code instead of in query
-      activities.sort((a, b) {
+      deduplicatedActivities.sort((a, b) {
         final aTimestamp = a['timestamp'] as Timestamp?;
         final bTimestamp = b['timestamp'] as Timestamp?;
 
@@ -278,7 +306,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       });
 
       setState(() {
-        _medicationLogs = activities;
+        _medicationLogs = deduplicatedActivities;
         _isMedicationLoading = false;
       });
     } catch (e) {
@@ -321,10 +349,8 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         59,
       );
 
-      // Query with house_id filter - apply elderly filter if selected
-      Query query = _firestore
-          .collection('vital_activity_logs')
-          .where('house_id', isEqualTo: widget.houseId);
+      // Query all houses - apply elderly filter if selected
+      Query query = _firestore.collection('vital_activity_logs');
 
       // Apply elderly filter if selected
       if (_selectedElderlyVitals != null &&
@@ -447,8 +473,8 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     final takeNumber = activity['take_number'] as int?;
 
     switch (action) {
-      case 'create_medication':
-        return 'Nurse $nurseName added new medication "$medicationName" for $elderlyTitle $elderlyName';
+      case 'create':
+        return 'Nurse $nurseName created medication "$medicationName" for $elderlyTitle $elderlyName';
 
       case 'complete_take':
         final takeText = takeNumber != null

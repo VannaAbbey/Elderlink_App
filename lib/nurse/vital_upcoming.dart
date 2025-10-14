@@ -106,20 +106,35 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         });
       }
 
-      // Check if cache is stale and refresh in background if needed
+      // ⚡ OPTIMIZATION: Smart background refresh - only refresh if cache is really stale
       if (_houseVitalsCacheTime.containsKey(cacheKey)) {
         final cacheTime = _houseVitalsCacheTime[cacheKey]!;
-        if (now.difference(cacheTime) >= cacheDuration) {
-          // Refresh in background to update cache
+        final timeSinceCache = now.difference(cacheTime);
+
+        // Only refresh if cache is older than duration AND we have network connectivity indication
+        if (timeSinceCache >= cacheDuration) {
+          // Use a lighter refresh that doesn't do full cleanup operations
           Future(() async {
             try {
-              final vitals = await _getUpcomingVitals();
-              _houseVitalsCache[cacheKey] = vitals;
-              _houseVitalsCacheTime[cacheKey] = DateTime.now();
-              if (mounted) {
-                setState(() {
-                  _upcomingVitals = vitals;
-                });
+              // Quick check if there are any changes before doing full refresh
+              final quickVitalsCheck = await _firestore
+                  .collection('vitals')
+                  .where('house_id', isEqualTo: widget.houseId)
+                  .where('assigned_date', isEqualTo: _getTodayDateString())
+                  .where('shift', isEqualTo: _getCurrentShift())
+                  .where('status', isEqualTo: 'pending')
+                  .limit(1)
+                  .get();
+
+              if (quickVitalsCheck.docs.isNotEmpty) {
+                final vitals = await _getUpcomingVitals();
+                _houseVitalsCache[cacheKey] = vitals;
+                _houseVitalsCacheTime[cacheKey] = DateTime.now();
+                if (mounted) {
+                  setState(() {
+                    _upcomingVitals = vitals;
+                  });
+                }
               }
             } catch (e) {
               print('❌ Background refresh failed: $e');
@@ -145,8 +160,28 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         return;
       }
 
-      // First check if nurse is assigned to current shift
-      final isAssignedToShift = await _isNurseAssignedToCurrentShift(nurseId);
+      // ⚡ OPTIMIZATION: Parallelize nurse assignment check and quick vitals check
+      final today = _getTodayDateString();
+      final currentShift = _getCurrentShift();
+      final currentDay = _getCurrentDay();
+
+      // Run both checks in parallel to speed up the process
+      final parallelChecks = await Future.wait([
+        _isNurseAssignedToCurrentShift(nurseId),
+        // Quick check for any pending vitals in this house/shift
+        _firestore
+            .collection('vitals')
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: today)
+            .where('shift', isEqualTo: currentShift)
+            .where('status', isEqualTo: 'pending')
+            .limit(1)
+            .get(),
+      ]);
+
+      final isAssignedToShift = parallelChecks[0] as bool;
+      final quickCheck = parallelChecks[1] as QuerySnapshot;
+
       if (!isAssignedToShift) {
         if (mounted) {
           setState(() {
@@ -158,25 +193,13 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         return;
       }
 
-      // Fast-path: check if there is at least one pending vital in this house/shift
-      final today = _getTodayDateString();
-      final currentShift = _getCurrentShift();
-      final quickCheck = await _firestore
-          .collection('vitals')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('status', isEqualTo: 'pending')
-          .limit(1)
-          .get();
-
       if (quickCheck.docs.isEmpty) {
         // No assignments yet - create them and get the vitals
         print('🔄 No assignments found - creating and fetching...');
         final vitals = await _ensureAssignmentsExistInBackground(
           nurseId,
           currentShift,
-          _getCurrentDay(),
+          currentDay,
           today,
         );
 
@@ -500,9 +523,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       final today = _getTodayDateString();
 
       print(
-        '⚡ OPTIMIZED: Fetching for nurse: ${widget.nurseName}, shift: $currentShift, day: $currentDay',
+        '⚡ OPTIMIZED: Fetching for nurse: ${widget.nurseName}, shift: $currentShift, day: $currentDay - House: "${widget.houseId}"',
       );
-      print('🏠 House: "${widget.houseId}"');
 
       // ⚡ OPTIMIZATION 1: Use cached nurse ID
       final nurseId = await _getCachedNurseId();
@@ -589,24 +611,29 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         return [];
       }
 
-      // 🔍 DEBUG: Check which elderly are in the current house
+      // ⚡ OPTIMIZATION: Batch fetch all elderly documents at once instead of individual fetches
+      final elderlyDocs = await Future.wait(
+        currentNurseElderlyIds.map(
+          (id) => _firestore.collection('elderly').doc(id).get(),
+        ),
+      );
+
+      // Build elderly data map and filter by current house
       final elderlyInCurrentHouse = <String>[];
-      for (final elderlyId in currentNurseElderlyIds) {
-        final elderlyDoc = await _firestore
-            .collection('elderly')
-            .doc(elderlyId)
-            .get();
-        if (elderlyDoc.exists) {
-          final elderlyData = elderlyDoc.data()!;
+      final elderlyDataMap = <String, Map<String, dynamic>>{};
+
+      for (final doc in elderlyDocs) {
+        if (doc.exists) {
+          final elderlyData = doc.data()!;
+          final elderlyId = doc.id;
           final elderlyHouseId = elderlyData['house_id'];
-          print(
-            '🔍 DEBUG: Elderly $elderlyId is in house $elderlyHouseId (current house: ${widget.houseId})',
-          );
+
+          elderlyDataMap[elderlyId] = elderlyData;
+
+          // Only log if elderly is in different house (reduce noise)
           if (elderlyHouseId == widget.houseId) {
             elderlyInCurrentHouse.add(elderlyId);
           }
-        } else {
-          print('🔍 DEBUG: Elderly $elderlyId document not found');
         }
       }
 
@@ -614,10 +641,17 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         '🏠 Elderly in current house: ${elderlyInCurrentHouse.length} out of ${currentNurseElderlyIds.length}',
       );
 
+      // If no elderly in current house, return empty
+      if (elderlyInCurrentHouse.isEmpty) {
+        print('ℹ️ No elderly assigned to current nurse in this house');
+        return [];
+      }
+
       // Use only elderly in current house
       final filteredElderlyIds = elderlyInCurrentHouse;
 
-      // 🔧 MODIFIED: Query for pending vitals for CURRENT nurse's elderly only (in current house)
+      // 🔧 OPTIMIZED: Query for pending vitals for CURRENT nurse's elderly only (in current house)
+      // Use Firestore's full whereIn limit of 30 items instead of 10
       final vitalsQuery = await _firestore
           .collection('vitals')
           .where('house_id', isEqualTo: widget.houseId)
@@ -626,18 +660,18 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           .where('status', isEqualTo: 'pending')
           .where(
             'elderly_id',
-            whereIn: filteredElderlyIds.take(10).toList(),
-          ) // Firestore whereIn limit
+            whereIn: filteredElderlyIds.take(30).toList(),
+          ) // Firestore whereIn limit is 30
           .get();
 
       // Handle Firestore whereIn limit (30 items max) by chunking if needed
       final allVitals = <QueryDocumentSnapshot>[];
       allVitals.addAll(vitalsQuery.docs);
 
-      // If we have more than 10 elderly, query in chunks
-      if (filteredElderlyIds.length > 10) {
-        for (var i = 10; i < filteredElderlyIds.length; i += 10) {
-          final chunk = filteredElderlyIds.skip(i).take(10).toList();
+      // If we have more than 30 elderly, query in chunks
+      if (filteredElderlyIds.length > 30) {
+        for (var i = 30; i < filteredElderlyIds.length; i += 30) {
+          final chunk = filteredElderlyIds.skip(i).take(30).toList();
           if (chunk.isNotEmpty) {
             final chunkQuery = await _firestore
                 .collection('vitals')
@@ -659,32 +693,6 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       // Process vitals assignments for current nurse only
       final upcomingVitals = <Map<String, dynamic>>[];
       final seenElderlyIds = <String>{};
-
-      // ⚡ OPTIMIZATION: Batch fetch elderly data to reduce database calls
-      final elderlyIdsToFetch = <String>[];
-      for (final vitalDoc in allVitals) {
-        final vitalData = vitalDoc.data() as Map<String, dynamic>;
-        final elderlyId = vitalData['elderly_id'];
-        if (!seenElderlyIds.contains(elderlyId)) {
-          seenElderlyIds.add(elderlyId);
-          elderlyIdsToFetch.add(elderlyId);
-        }
-      }
-
-      // Batch fetch all elderly documents at once
-      final elderlyDocs = await Future.wait(
-        elderlyIdsToFetch.map(
-          (id) => _firestore.collection('elderly').doc(id).get(),
-        ),
-      );
-
-      // Create a map for quick lookup
-      final elderlyDataMap = <String, Map<String, dynamic>>{};
-      for (final doc in elderlyDocs) {
-        if (doc.exists) {
-          elderlyDataMap[doc.id] = doc.data()!;
-        }
-      }
 
       // ⚡ OPTIMIZATION: Collect all unique nurse IDs that need name lookup
       final nurseIdsToFetch = <String>{};
