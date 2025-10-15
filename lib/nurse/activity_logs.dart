@@ -73,103 +73,18 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     return "3rd";
   }
 
-  String _getCurrentDay() {
-    return DateFormat('EEEE').format(DateTime.now());
-  }
-
-  Future<String?> _getNurseId() async {
-    try {
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) return null;
-
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      return userQuery.docs.isNotEmpty ? userQuery.docs.first.id : null;
-    } catch (e) {
-      print('Error getting nurse ID: $e');
-      return null;
-    }
-  }
-
   Future<void> _loadAssignedElderly() async {
     try {
-      final currentDay = _getCurrentDay();
-
-      // Get nurse ID
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) return;
-
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
+      // Load all elderly for the specified house
+      final elderlyQuery = await _firestore
+          .collection('elderly')
+          .where('house_id', isEqualTo: widget.houseId)
           .get();
 
-      if (userQuery.docs.isEmpty) return;
+      if (elderlyQuery.docs.isEmpty) return;
 
-      final nurseId = userQuery.docs.first.id;
-
-      // Get nurse's assigned elderly for current day (ALL shifts)
-      final nurseElderlyQuery = await _firestore
-          .collection('elderly_assignments')
-          .where('user_id', isEqualTo: nurseId)
-          .where('user_type', isEqualTo: 'nurse')
-          .where('is_current', isEqualTo: true)
-          .where('house_id', arrayContains: widget.houseId)
-          .where('day', isEqualTo: currentDay)
-          .get();
-
-      if (nurseElderlyQuery.docs.isEmpty) return;
-
-      // Get assigned elderly IDs from ALL shifts for this nurse today
-      final assignedElderlyIds = <String>[];
-      for (final doc in nurseElderlyQuery.docs) {
-        final elderlyIds = List<String>.from(doc.data()['elderly_ids'] ?? []);
-        assignedElderlyIds.addAll(elderlyIds);
-      }
-
-      // Remove duplicates
-      final uniqueElderlyIds = assignedElderlyIds.toSet().toList();
-
-      if (uniqueElderlyIds.isEmpty) return;
-
-      // Process elderly IDs in chunks of 30
-      final allElderly = <DocumentSnapshot>[];
-
-      for (var i = 0; i < uniqueElderlyIds.length; i += 30) {
-        final end = (i + 30 < uniqueElderlyIds.length)
-            ? i + 30
-            : uniqueElderlyIds.length;
-        final chunk = uniqueElderlyIds.sublist(i, end);
-
-        final elderlyDetailsQuery = await _firestore
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-
-        allElderly.addAll(elderlyDetailsQuery.docs);
-      }
-
-      // Filter and process elderly for current house
-      final filteredElderly = allElderly.where((doc) {
-        final data = doc.data() as Map<String, dynamic>;
-        return data['house_id'] == widget.houseId;
-      }).toList();
-
-      final newElderlyList = filteredElderly.map((doc) {
-        final data = doc.data() as Map<String, dynamic>;
+      final newElderlyList = elderlyQuery.docs.map((doc) {
+        final data = doc.data();
         final firstName = data['elderly_fname'];
         final lastName = data['elderly_lname'];
         final fullName = '${firstName ?? ''} ${lastName ?? ''}'.trim();
@@ -187,7 +102,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         _elderlyList = newElderlyList;
       });
     } catch (e) {
-      print('Error loading assigned elderly: $e');
+      print('Error loading elderly for house: $e');
     }
   }
 
@@ -197,15 +112,6 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     });
 
     try {
-      final nurseId = await _getNurseId();
-      if (nurseId == null) {
-        setState(() {
-          _isMedicationLoading = false;
-          _medicationLogs = [];
-        });
-        return;
-      }
-
       Query query;
 
       // Build query differently based on whether we're filtering by elderly or not
@@ -325,15 +231,6 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     });
 
     try {
-      final nurseId = await _getNurseId();
-      if (nurseId == null) {
-        setState(() {
-          _isVitalsLoading = false;
-          _vitalsLogs = [];
-        });
-        return;
-      }
-
       // Create date range for filtering
       final startOfDay = DateTime(
         _selectedDateVitals.year,

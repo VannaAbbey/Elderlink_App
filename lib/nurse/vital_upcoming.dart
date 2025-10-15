@@ -4,15 +4,18 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'vital_update_screen.dart';
 import 'follow_up_vitals_selection.dart';
+import 'notification_service.dart';
 
 class UpcomingVitalsTab extends StatefulWidget {
   final String houseId;
   final String? nurseName;
+  final DateTime? selectedDate;
 
   const UpcomingVitalsTab({
     super.key,
     required this.houseId,
     required this.nurseName,
+    this.selectedDate,
   });
 
   @override
@@ -39,6 +42,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   static const Duration cacheDuration = Duration(minutes: 30); // Cache for 30m
   // Track completed cleanup operations to avoid repeated work
   static final Set<String> _completedCleanups = {};
+  late DateTime _selectedDate;
 
   String _getCurrentShift() {
     final currentHour = DateTime.now().hour;
@@ -71,8 +75,11 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   @override
   void initState() {
     super.initState();
+    _selectedDate = widget.selectedDate ?? DateTime.now();
     // Prewarm nurse id lookup and start loading vitals
     _prewarm();
+    // Schedule notifications for existing vital tasks
+    _scheduleNotificationsForExistingVitals();
   }
 
   /// Pre-fetch lightweight data to speed up first render
@@ -83,8 +90,134 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     _loadUpcomingVitals();
   }
 
+  // Schedule notifications for existing vital tasks
+  Future<void> _scheduleNotificationsForExistingVitals() async {
+    try {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final tomorrow = today.add(const Duration(days: 1));
+
+      debugPrint('Scheduling notifications for existing vital tasks');
+      debugPrint('Today: $today, Tomorrow: $tomorrow, Now: $now');
+
+      // Get all vital tasks for the next 7 days
+      final nextWeek = today.add(const Duration(days: 7));
+      final query = await _firestore
+          .collection('vitals')
+          .where(
+            'assigned_date',
+            isGreaterThanOrEqualTo: DateFormat('yyyy-MM-dd').format(today),
+          )
+          .where(
+            'assigned_date',
+            isLessThan: DateFormat('yyyy-MM-dd').format(nextWeek),
+          )
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      debugPrint('Found ${query.docs.length} vital tasks for the next 7 days');
+
+      for (final doc in query.docs) {
+        final vital = doc.data();
+        final assignedDate = vital['assigned_date'] as String?;
+        final shift = vital['shift'] as String?;
+        final elderlyId = vital['elderly_id'] as String?;
+        final houseId = vital['house_id'] as String?;
+
+        if (assignedDate == null ||
+            shift == null ||
+            elderlyId == null ||
+            houseId == null) {
+          continue;
+        }
+
+        debugPrint(
+          'Processing vital task: $elderlyId, date: $assignedDate, shift: $shift',
+        );
+
+        // Calculate notification time based on shift start
+        DateTime? notificationTime = _getShiftStartTime(assignedDate, shift);
+        if (notificationTime == null || !notificationTime.isAfter(now)) {
+          debugPrint(
+            'Skipping vital task - notification time in past or invalid',
+          );
+          continue;
+        }
+
+        // Get elderly name
+        final elderlyDoc = await _firestore
+            .collection('elderly')
+            .doc(elderlyId)
+            .get();
+        final elderlyName = elderlyDoc.exists
+            ? '${elderlyDoc.data()?['elderly_fname'] ?? ''} ${elderlyDoc.data()?['elderly_lname'] ?? ''}'
+                  .trim()
+            : 'Unknown';
+
+        // Schedule notification at shift start time
+        debugPrint(
+          'Scheduling vital notification for $elderlyName at $notificationTime',
+        );
+        final notificationId = 'vital_${doc.id}'.hashCode;
+        NotificationService.cancelNotification(notificationId);
+        NotificationService.scheduleTaskNotification(
+          id: notificationId,
+          title: 'Vital Check Reminder',
+          body: 'Time to check vitals for $elderlyName',
+          dateTime: notificationTime,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error scheduling notifications for existing vital tasks: $e');
+    }
+  }
+
+  // Get shift start time
+  DateTime? _getShiftStartTime(String dateString, String shift) {
+    try {
+      final date = DateFormat('yyyy-MM-dd').parse(dateString);
+      switch (shift) {
+        case '1st':
+          return DateTime(date.year, date.month, date.day, 6, 0); // 6:00 AM
+        case '2nd':
+          return DateTime(date.year, date.month, date.day, 14, 0); // 2:00 PM
+        case '3rd':
+          return DateTime(date.year, date.month, date.day, 22, 0); // 10:00 PM
+        default:
+          return null;
+      }
+    } catch (e) {
+      debugPrint('Error parsing shift time: $e');
+      return null;
+    }
+  }
+
   @override
   bool get wantKeepAlive => true;
+
+  void _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      builder: (BuildContext context, Widget? child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(primary: Color(0xFF00588E)),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      // Reload vitals for the new date
+      _loadUpcomingVitals(forceRefresh: true);
+    }
+  }
 
   Future<void> _loadUpcomingVitals({bool forceRefresh = false}) async {
     final cacheKey = widget.houseId + (widget.nurseName ?? "");
@@ -379,6 +512,24 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           'inherited_from_nurse_id': data['assigned_nurse_id'],
           'transfer_reason': 'Shift ended - inherited from previous shift',
         });
+
+        // Schedule notification for the inherited vital task
+        final notificationTime = _getShiftStartTime(today, currentShift);
+        if (notificationTime != null &&
+            notificationTime.isAfter(DateTime.now())) {
+          final notificationId = 'vital_${doc.id}'.hashCode;
+          NotificationService.cancelNotification(notificationId);
+          NotificationService.scheduleTaskNotification(
+            id: notificationId,
+            title: 'Vital Check Reminder',
+            body:
+                'Time to check vitals for $elderlyId (inherited from previous shift)',
+            dateTime: notificationTime,
+          );
+          print(
+            '✅ Scheduled notification for inherited vital task: $elderlyId at $notificationTime',
+          );
+        }
 
         // Log the transfer action
         final logDocRef = _firestore.collection('vitals_activity_logs').doc();
@@ -911,22 +1062,37 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     // Check if nurse is not assigned to current shift
     if (_isNotAssignedToShift) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.schedule, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
-            Text(
-              'You are not assigned to this shift',
-              style: TextStyle(fontSize: 18, color: Colors.grey),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Please check your schedule or contact your supervisor',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-              textAlign: TextAlign.center,
-            ),
-          ],
+        child: Container(
+          padding: EdgeInsets.all(20),
+          margin: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.schedule, size: 48, color: Colors.grey),
+              SizedBox(height: 16),
+              Text(
+                'You are not scheduled for the current shift',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: Color.fromARGB(255, 170, 171, 171),
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Please check your schedule or contact your supervisor.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color.fromARGB(255, 124, 124, 124),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -960,285 +1126,317 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       );
     }
 
-    return Stack(
+    return Column(
       children: [
-        RefreshIndicator(
-          onRefresh: _refreshVitals,
-          child: ListView.builder(
-            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
-            itemCount: upcomingVitals.length,
-            itemBuilder: (context, index) {
-              final elderlyInfo = upcomingVitals[index];
-              final lastVital =
-                  elderlyInfo['last_vital'] as Map<String, dynamic>?;
+        // Date Picker Row
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Colors.white,
+          child: Row(
+            children: [
+              const Text(
+                'Date: ',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF00588E),
+                ),
+              ),
+              Text(
+                DateFormat('MMM dd, yyyy').format(_selectedDate),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(
+                  Icons.calendar_today,
+                  color: Color(0xFF00588E),
+                ),
+                onPressed: () => _selectDate(context),
+              ),
+            ],
+          ),
+        ),
+        // Main Content
+        Expanded(
+          child: Stack(
+            children: [
+              RefreshIndicator(
+                onRefresh: _refreshVitals,
+                child: ListView.builder(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+                  itemCount: upcomingVitals.length,
+                  itemBuilder: (context, index) {
+                    final elderlyInfo = upcomingVitals[index];
+                    final lastVital =
+                        elderlyInfo['last_vital'] as Map<String, dynamic>?;
 
-              return Card(
-                margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Elderly Name
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: const Color(0xFF00588E),
-                            child:
-                                elderlyInfo['elderly_profilePic']?.isNotEmpty ==
-                                    true
-                                ? ClipOval(
-                                    child: Image.network(
-                                      elderlyInfo['elderly_profilePic'],
-                                      fit: BoxFit.cover,
+                    return Card(
+                      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Elderly Name
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  backgroundColor: const Color(0xFF00588E),
+                                  child:
+                                      elderlyInfo['elderly_profilePic']
+                                              ?.isNotEmpty ==
+                                          true
+                                      ? ClipOval(
+                                          child: Image.network(
+                                            elderlyInfo['elderly_profilePic'],
+                                            fit: BoxFit.cover,
+                                          ),
+                                        )
+                                      : Icon(Icons.person, color: Colors.white),
+                                ),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    elderlyInfo['elderly_name'] ?? 'Unknown',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF00588E),
                                     ),
-                                  )
-                                : Icon(Icons.person, color: Colors.white),
-                          ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              elderlyInfo['elderly_name'] ?? 'Unknown',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF00588E),
-                              ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 8),
-                      // Assigned Nurse
-                      Text(
-                        'Assigned to: ${elderlyInfo['assigned_nurse_name'] ?? 'Unknown'}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.normal,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      SizedBox(height: 12),
+                            SizedBox(height: 12),
 
-                      // Status and Tap to Update
-                      GestureDetector(
-                        onTap: () => _updateVitals(elderlyInfo),
-                        child: Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: elderlyInfo['status'] == 'missed'
-                                  ? Colors.red.withOpacity(0.3)
-                                  : Colors.orange.withOpacity(0.3),
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                            color: elderlyInfo['status'] == 'missed'
-                                ? Colors.red.withOpacity(0.1)
-                                : Colors.orange.withOpacity(0.1),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                elderlyInfo['status'] == 'missed'
-                                    ? Icons.warning
-                                    : Icons.pending_actions,
-                                color: elderlyInfo['status'] == 'missed'
-                                    ? Colors.red
-                                    : Colors.orange,
-                                size: 24,
+                            // Status and Tap to Update
+                            GestureDetector(
+                              onTap: () => _updateVitals(elderlyInfo),
+                              child: Container(
+                                padding: EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: elderlyInfo['status'] == 'missed'
+                                        ? Colors.red.withOpacity(0.3)
+                                        : Colors.orange.withOpacity(0.3),
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: elderlyInfo['status'] == 'missed'
+                                      ? Colors.red.withOpacity(0.1)
+                                      : Colors.orange.withOpacity(0.1),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      elderlyInfo['status'] == 'missed'
+                                          ? Icons.warning
+                                          : Icons.pending_actions,
+                                      color: elderlyInfo['status'] == 'missed'
+                                          ? Colors.red
+                                          : Colors.orange,
+                                      size: 24,
+                                    ),
+                                    SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding: EdgeInsets.symmetric(
+                                                  horizontal: 8,
+                                                  vertical: 2,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color:
+                                                      elderlyInfo['is_inherited'] ==
+                                                          true
+                                                      ? Colors.blue
+                                                      : Colors.orange,
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                                child: Text(
+                                                  elderlyInfo['is_inherited'] ==
+                                                          true
+                                                      ? 'INHERITED'
+                                                      : 'PENDING',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                              ),
+                                              SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  elderlyInfo['is_inherited'] ==
+                                                          true
+                                                      ? 'From Previous Shift'
+                                                      : 'Not Updated Today',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 14,
+                                                    color:
+                                                        elderlyInfo['is_inherited'] ==
+                                                            true
+                                                        ? Colors.blue
+                                                        : Colors.orange,
+                                                  ),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          SizedBox(height: 4),
+                                          // Split the inherited info into separate lines to prevent overflow
+                                          if (elderlyInfo['is_inherited'] ==
+                                              true) ...[
+                                            Text(
+                                              'Originally: ${elderlyInfo['original_nurse']}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[700],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            Text(
+                                              '${elderlyInfo['inherited_from_shift']} shift - Tap to complete',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[700],
+                                              ),
+                                            ),
+                                          ] else
+                                            Text(
+                                              'Tap to update vital signs for ${_getTodayDateString()}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[700],
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    Icon(
+                                      Icons.arrow_forward_ios,
+                                      color: elderlyInfo['is_inherited'] == true
+                                          ? Colors.blue
+                                          : Colors.orange,
+                                      size: 16,
+                                    ),
+                                  ],
+                                ),
                               ),
-                              SizedBox(width: 12),
-                              Expanded(
+                            ),
+
+                            // Last vital info if available
+                            if (lastVital != null) ...[
+                              SizedBox(height: 12),
+                              Text(
+                                'Last recorded vitals:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Container(
+                                padding: EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: Colors.grey.withOpacity(0.3),
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: Colors.grey.withOpacity(0.1),
+                                ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
                                       children: [
-                                        Container(
-                                          padding: EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                elderlyInfo['is_inherited'] ==
-                                                    true
-                                                ? Colors.blue
-                                                : Colors.orange,
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            elderlyInfo['is_inherited'] == true
-                                                ? 'INHERITED'
-                                                : 'PENDING',
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        ),
-                                        SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            elderlyInfo['is_inherited'] == true
-                                                ? 'From Previous Shift'
-                                                : 'Not Updated Today',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
-                                              color:
-                                                  elderlyInfo['is_inherited'] ==
-                                                      true
-                                                  ? Colors.blue
-                                                  : Colors.orange,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
+                                            'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
                                           ),
                                         ),
                                       ],
                                     ),
                                     SizedBox(height: 4),
-                                    // Split the inherited info into separate lines to prevent overflow
-                                    if (elderlyInfo['is_inherited'] ==
-                                        true) ...[
-                                      Text(
-                                        'Originally: ${elderlyInfo['original_nurse']}',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[700],
-                                          fontWeight: FontWeight.w500,
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
+                                          ),
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      Text(
-                                        '${elderlyInfo['inherited_from_shift']} shift - Tap to complete',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[700],
+                                        Expanded(
+                                          child: Text(
+                                            'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
+                                          ),
                                         ),
-                                      ),
-                                    ] else
+                                      ],
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
+                                    ),
+                                    if (lastVital['vital_record_at'] != null)
                                       Text(
-                                        'Tap to update vital signs for ${_getTodayDateString()}',
+                                        'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: Colors.grey[700],
+                                          color: Colors.grey[600],
                                         ),
                                       ),
                                   ],
                                 ),
                               ),
-                              Icon(
-                                Icons.arrow_forward_ios,
-                                color: elderlyInfo['is_inherited'] == true
-                                    ? Colors.blue
-                                    : Colors.orange,
-                                size: 16,
-                              ),
                             ],
-                          ),
+                          ],
                         ),
                       ),
-
-                      // Last vital info if available
-                      if (lastVital != null) ...[
-                        SizedBox(height: 12),
-                        Text(
-                          'Last recorded vitals:',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: Colors.grey.withOpacity(0.3),
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                            color: Colors.grey.withOpacity(0.1),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
-                              ),
-                              if (lastVital['vital_record_at'] != null)
-                                Text(
-                                  'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-        ),
-        Positioned(
-          bottom: 20,
-          right: 20,
-          child: FloatingActionButton.extended(
-            onPressed: _showFollowUpVitalsSelection,
-            backgroundColor: Colors.green[600],
-            foregroundColor: Colors.white,
-            icon: Icon(Icons.add_circle_outline),
-            label: Text(
-              'Follow-up',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            heroTag: "followup_vitals_fab",
+              ),
+              Positioned(
+                bottom: 20,
+                right: 20,
+                child: FloatingActionButton.extended(
+                  onPressed: _showFollowUpVitalsSelection,
+                  backgroundColor: Colors.green[600],
+                  foregroundColor: Colors.white,
+                  icon: Icon(Icons.add_circle_outline),
+                  label: Text(
+                    'Follow-up',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  heroTag: "followup_vitals_fab",
+                ),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
 
-  // 🔧 FIXED: Ensure all assigned elderly have vital assignments
   Future<void> _ensureAllAssignmentsExist(
     String shift,
     String currentDay,
@@ -1376,6 +1574,24 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
             'updated_by_nurse_id': null,
           });
           print('✅ Created vital assignment for: $elderlyName');
+
+          // Schedule notification for the new vital task
+          final notificationTime = _getShiftStartTime(today, shift);
+          if (notificationTime != null &&
+              notificationTime.isAfter(DateTime.now())) {
+            final notificationId =
+                'vital_${elderlyId}_${today}_${shift}'.hashCode;
+            NotificationService.cancelNotification(notificationId);
+            NotificationService.scheduleTaskNotification(
+              id: notificationId,
+              title: 'Vital Check Reminder',
+              body: 'Time to check vitals for $elderlyName',
+              dateTime: notificationTime,
+            );
+            print(
+              '✅ Scheduled notification for vital task: $elderlyName at $notificationTime',
+            );
+          }
         } else {
           print('ℹ️ Vital assignment already exists for: $elderlyName');
         }

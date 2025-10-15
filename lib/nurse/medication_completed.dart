@@ -318,7 +318,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                               ),
                                               SizedBox(height: 4),
                                               Text(
-                                                'Scheduled Time: ${log['scheduled_time'] ?? 'Not specified'}',
+                                                'Scheduled Time: ${_formatTimeTo12Hour(log['scheduled_time'] ?? 'Not specified')}',
                                                 style: TextStyle(
                                                   fontSize: 14,
                                                   color: Colors.grey[700],
@@ -326,7 +326,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                               ),
                                               SizedBox(height: 4),
                                               Text(
-                                                'Completed: ${DateFormat('MMM dd, yyyy HH:mm').format(completedAt)}',
+                                                'Completed: ${DateFormat('MMM dd, yyyy hh:mm a').format(completedAt)}',
                                                 style: TextStyle(
                                                   fontSize: 14,
                                                   color: Colors.green[700],
@@ -353,7 +353,7 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                     Padding(
                                       padding: EdgeInsets.only(top: 12),
                                       child: Text(
-                                        'Logged: ${DateFormat('MMM dd, yyyy HH:mm').format((log['timestamp'] as Timestamp).toDate())}',
+                                        'Logged: ${DateFormat('MMM dd, yyyy hh:mm a').format((log['timestamp'] as Timestamp).toDate())}',
                                         style: TextStyle(
                                           fontSize: 11,
                                           color: Colors.grey[500],
@@ -433,6 +433,23 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
         return '${number}rd';
       default:
         return '${number}th';
+    }
+  }
+
+  String _formatTimeTo12Hour(String timeString) {
+    try {
+      final timeParts = timeString.split(':');
+      if (timeParts.length < 2) return timeString;
+
+      final hour = int.tryParse(timeParts[0]) ?? 0;
+      final minute = int.tryParse(timeParts[1]) ?? 0;
+
+      final period = hour >= 12 ? 'PM' : 'AM';
+      final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+
+      return '$displayHour:${minute.toString().padLeft(2, '0')} $period';
+    } catch (e) {
+      return timeString; // Return original if parsing fails
     }
   }
 }

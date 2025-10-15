@@ -1,9 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class NotificationService {
   static final _notifications = FlutterLocalNotificationsPlugin();
@@ -11,7 +13,13 @@ class NotificationService {
       FirebaseMessaging.instance;
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  static Future<void> init({Function(String?)? onNotificationTap}) async {
+  static String? _pendingPayload;
+
+  static Future<void> init({
+    required GlobalKey<NavigatorState> navigatorKey,
+    Function(String?)? onNotificationTap,
+    Function(String?)? onNotificationReceived,
+  }) async {
     tz.initializeTimeZones();
 
     // Request notification permissions
@@ -26,11 +34,25 @@ class NotificationService {
     await _notifications.initialize(
       InitializationSettings(android: androidSettings, iOS: iosSettings),
       onDidReceiveNotificationResponse: (NotificationResponse response) {
+        print('Notification tapped with payload: ${response.payload}');
         if (onNotificationTap != null) {
-          onNotificationTap(response.payload);
+          if (navigatorKey.currentContext != null) {
+            print('Calling onNotificationTap with context available');
+            onNotificationTap(response.payload);
+          } else {
+            print('Context not available, storing pending payload');
+            _pendingPayload = response.payload;
+          }
         }
       },
     );
+
+    // Ensure notifications are shown even when app is in foreground
+    await _notifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestNotificationsPermission();
 
     // Initialize FCM
     await _firebaseMessaging.requestPermission(
@@ -53,6 +75,12 @@ class NotificationService {
 
     // Handle foreground messages
     FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+  }
+
+  static String? getAndClearPendingPayload() {
+    final payload = _pendingPayload;
+    _pendingPayload = null;
+    return payload;
   }
 
   static Future<void> _requestPermissions() async {
@@ -113,13 +141,16 @@ class NotificationService {
 
   static Future<void> _saveFCMToken(String token) async {
     try {
-      // You'll need to get the current user ID here
-      // For now, we'll store it in a general collection
-      await _firestore.collection('fcm_tokens').doc('current_user').set({
-        'token': token,
-        'updated_at': FieldValue.serverTimestamp(),
-      });
-      print('FCM Token saved: $token');
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      if (currentUserId != null) {
+        await _firestore.collection('fcm_tokens').doc(currentUserId).set({
+          'token': token,
+          'updated_at': FieldValue.serverTimestamp(),
+        });
+        print('FCM Token saved for user: $currentUserId');
+      } else {
+        print('No current user, cannot save FCM token');
+      }
     } catch (e) {
       print('Error saving FCM token: $e');
     }
@@ -168,6 +199,7 @@ class NotificationService {
     required String title,
     required String body,
     required DateTime dateTime,
+    String? payload,
   }) async {
     // Don't schedule notifications for past times
     if (dateTime.isBefore(DateTime.now())) {
@@ -184,14 +216,21 @@ class NotificationService {
           'task_channel',
           'Medical Tasks',
           importance: Importance.max,
-          priority: Priority.high,
+          priority: Priority.max,
           playSound: true,
+          fullScreenIntent:
+              true, // Set to true to ensure notifications show at exact time even on lock screen
         ),
-        iOS: DarwinNotificationDetails(),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
       ),
       androidAllowWhileIdle: true,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
+      payload: payload,
     );
   }
 

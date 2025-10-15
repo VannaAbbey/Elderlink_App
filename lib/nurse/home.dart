@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:audioplayers/audioplayers.dart';
-import '../providers/auth_provider.dart';
+import '../providers/auth_provider.dart' as my_auth;
 import 'elderly_list.dart';
 import 'medication_management.dart';
 import 'vital_monitoring.dart';
@@ -37,9 +38,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   List<Map<String, dynamic>> _currentTasks =
       []; // Store current tasks for See All
-
-  bool _isNurseScheduled = false; // Track if nurse is currently scheduled
-  String _nurseShiftInfo = ''; // Store shift information for dialog
 
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
@@ -94,6 +92,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
       for (final doc in query.docs) {
         final task = doc.data();
+        final taskId = doc.id; // Get the document ID
         final taskStart = (task['task_start'] as Timestamp).toDate();
         final elderlyId = task['elderly_id'] as String?;
         final medicationId = task['medication_id'] as String?;
@@ -138,6 +137,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               title: 'Medication Reminder',
               body: '$medName for $elderlyName in 5 minutes',
               dateTime: notifyTime,
+              payload: taskId, // Pass the task ID as payload
             );
           }
 
@@ -155,6 +155,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             title: 'Medication Time - $medName',
             body: 'Time to administer $medName to $elderlyName',
             dateTime: taskStart,
+            payload: taskId, // Pass the task ID as payload
           );
         }
       }
@@ -167,7 +168,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   void initState() {
     super.initState();
     _loadHouses();
+    _initializeEmergencyListener(); // Initialize emergency listener
+    _initializeIncidentListener(); // Initialize incident listener
     NotificationService.init(
+      navigatorKey: main.navigatorKey,
       onNotificationTap: _handleNotificationTap,
     ); // initialize notification service with tap handler
     _scheduleNotificationsForExistingTasks(); // schedule notifications for existing tasks
@@ -175,7 +179,180 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
       _checkNurseScheduleAndShift(); // Check if nurse is scheduled
+      // Check for pending notification payload
+      final pending = NotificationService.getAndClearPendingPayload();
+      if (pending != null) {
+        _handleNotificationTap(pending);
+      }
     });
+  }
+
+  void _initializeEmergencyListener() {
+    print('🚀 Initializing emergency listener');
+    try {
+      FirebaseFirestore.instance
+          .collection('emergency_alert')
+          .orderBy('alert_timestamp', descending: true)
+          .snapshots()
+          .listen((snapshot) async {
+            print(
+              '🔥 Emergency snapshot received: ${snapshot.docs.length} documents',
+            );
+
+            final currentUser = FirebaseAuth.instance.currentUser;
+            if (currentUser == null) {
+              print('❌ No user logged in, skipping emergency check');
+              return;
+            }
+
+            final currentNurseId = currentUser.uid;
+            print('👤 Current nurse ID: $currentNurseId');
+
+            for (var doc in snapshot.docs) {
+              final data = doc.data();
+              final alertId = doc.id;
+              final isViewed = data['alert_viewed'] as bool? ?? false;
+
+              if (isViewed) continue; // Skip already viewed alerts
+
+              final assignedNurseIdsRaw = data['user_id_nu'];
+              List<dynamic> assignedNurseIds = [];
+
+              if (assignedNurseIdsRaw is List) {
+                assignedNurseIds = assignedNurseIdsRaw;
+              } else if (assignedNurseIdsRaw is String) {
+                assignedNurseIds = [assignedNurseIdsRaw];
+              }
+
+              print('📋 Alert $alertId assigned to nurses: $assignedNurseIds');
+
+              if (assignedNurseIds.isNotEmpty &&
+                  assignedNurseIds.contains(currentNurseId)) {
+                print(
+                  '🚨 Emergency alert for current nurse! Showing alert with alarm',
+                );
+
+                // Show emergency dialog directly using local context
+                if (mounted) {
+                  await _showEmergencyDialog(alertId, data);
+                }
+              } else {
+                print('❌ Alert not for current nurse or nurse not assigned');
+              }
+            }
+          });
+      print('✅ Emergency listener initialized successfully');
+    } catch (e) {
+      print('❌ Error initializing emergency listener: $e');
+    }
+  }
+
+  Future<void> _showEmergencyDialog(
+    String alertId,
+    Map<String, dynamic> data,
+  ) async {
+    print('🔔 Showing emergency dialog for alert: $alertId');
+
+    // Get description from the alert data - only additional info now
+    final additionalInfo = data['additional_info'] ?? '';
+
+    // Call EmergencyService to show alert with alarm
+    await main.EmergencyService.showEmergencyAlert(
+      alertId: alertId,
+      description: additionalInfo.isNotEmpty
+          ? additionalInfo
+          : 'Emergency alert received',
+      emergencyType: data['emergency_type'] ?? '',
+    );
+    print('✅ Emergency dialog completed');
+  }
+
+  void _initializeIncidentListener() {
+    print('🚨 Initializing incident listener');
+    try {
+      FirebaseFirestore.instance
+          .collection('incident_report')
+          .orderBy('incident_date_time', descending: true)
+          .snapshots()
+          .listen((snapshot) async {
+            print(
+              '📝 Incident snapshot received: ${snapshot.docs.length} documents',
+            );
+
+            final currentUser = FirebaseAuth.instance.currentUser;
+            if (currentUser == null) {
+              print('❌ No user logged in, skipping incident check');
+              return;
+            }
+
+            final currentNurseId = currentUser.uid;
+            print('👤 Current nurse ID: $currentNurseId');
+
+            for (var doc in snapshot.docs) {
+              final data = doc.data();
+              final incidentId = doc.id;
+              final incidentType = data['incident_type'] ?? 'No incident type';
+              final additionalInfo = data['additional_info'] ?? '';
+              final description = additionalInfo.isNotEmpty
+                  ? '$incidentType - $additionalInfo'
+                  : incidentType;
+              final timestampRaw = data['incident_date_time']?.toDate();
+
+              if (timestampRaw == null) continue;
+
+              // Check if this incident is new (not already notified)
+              final now = DateTime.now();
+              final timeDiff = now.difference(timestampRaw).inMinutes;
+              if (timeDiff > 5) continue; // Skip incidents older than 5 minutes
+
+              print(
+                '⏰ Incident timestamp: $timestampRaw, time diff: $timeDiff minutes',
+              );
+
+              final houseId = data['house_id'];
+              String houseName = 'Unknown house';
+              if (houseId != null) {
+                final houseDoc = await FirebaseFirestore.instance
+                    .collection('house')
+                    .where('house_id', isEqualTo: houseId.toString())
+                    .limit(1)
+                    .get();
+                if (houseDoc.docs.isNotEmpty) {
+                  houseName =
+                      houseDoc.docs.first.data()['house_name'] ??
+                      'Unknown house';
+                }
+              }
+
+              final nurseData = data['user_id_nu'];
+              List<String> nurseArray = [];
+              if (nurseData is List) {
+                nurseArray = List<String>.from(nurseData);
+              } else if (nurseData is String) {
+                nurseArray = [nurseData];
+              }
+
+              print('👥 Incident assigned to nurses: $nurseArray');
+
+              if (nurseArray.contains(currentNurseId)) {
+                print('📢 Showing incident notification for current nurse');
+                final formattedTime = DateFormat('h:mm a').format(timestampRaw);
+                await main.IncidentService.showIncidentNotification(
+                  incidentId: incidentId,
+                  title: '📝 Incident Report',
+                  description: description,
+                  houseName: houseName,
+                  timestamp: formattedTime,
+                );
+              } else {
+                print('❌ Incident not for current nurse');
+              }
+            }
+          });
+      print('✅ Incident listener initialized successfully');
+    } catch (e) {
+      print('❌ Error initializing incident listener: $e');
+    }
   }
 
   String _getCurrentShift() {
@@ -246,7 +423,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   Future<String?> _getNurseIdFromAuth() async {
     try {
-      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final auth = Provider.of<my_auth.AuthProvider>(context, listen: false);
       final first = auth.userFirstName;
       final last = auth.userLastName;
       if (first.isEmpty || last.isEmpty) return null;
@@ -294,68 +471,15 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     try {
       final nurseId = await _getNurseIdFromAuth();
       if (nurseId == null) {
-        setState(() {
-          _isNurseScheduled = false;
-          _nurseShiftInfo = '';
-        });
+        setState(() {});
         return;
       }
 
-      final currentShift = _getCurrentShift();
-      final currentDay = _getCurrentDay();
-
-      // Get nurse's shift assignment
-      final shiftQuery = await _firestore
-          .collection('house_shift_assignments')
-          .where('user_id', isEqualTo: nurseId)
-          .where('user_type', isEqualTo: 'nurse')
-          .where('is_current', isEqualTo: true)
-          .get();
-
-      String assignedShift = '';
-      List<String> assignedDays = [];
-      if (shiftQuery.docs.isNotEmpty) {
-        final data = shiftQuery.docs.first.data();
-        assignedShift = data['shift'] ?? '';
-        assignedDays = List<String>.from(data['days_assigned'] ?? []);
-      }
-
-      final isScheduled =
-          assignedShift == currentShift && assignedDays.contains(currentDay);
-
-      // Get shift time information based on assigned shift
-      String shiftInfo = '';
-      if (assignedShift == "1st") {
-        shiftInfo = "1st shift (6:00 AM to 2:00 PM)";
-      } else if (assignedShift == "2nd") {
-        shiftInfo = "2nd shift (2:00 PM to 10:00 PM)";
-      } else if (assignedShift == "3rd") {
-        shiftInfo = "3rd shift (10:00 PM to 6:00 AM)";
-      } else {
-        // Fallback to current shift if no assignment
-        if (currentShift == "1st") {
-          shiftInfo = "1st shift (6:00 AM to 2:00 PM)";
-        } else if (currentShift == "2nd") {
-          shiftInfo = "2nd shift (2:00 PM to 10:00 PM)";
-        } else {
-          shiftInfo = "3rd shift (10:00 PM to 6:00 AM)";
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _isNurseScheduled = isScheduled;
-          _nurseShiftInfo = shiftInfo;
-        });
-      }
+      // Nurse exists, no further processing needed for now
+      setState(() {});
     } catch (e) {
       debugPrint('Error checking nurse schedule: $e');
-      if (mounted) {
-        setState(() {
-          _isNurseScheduled = false;
-          _nurseShiftInfo = '';
-        });
-      }
+      setState(() {});
     }
   }
 
@@ -503,23 +627,27 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               final taskDesc =
                   'Medication scheduled for $elderlyName at $scheduled';
 
-              await _firestore.collection('medical_tasks').add({
-                'task_title': taskTitle,
-                'task_description': taskDesc,
-                'task_category': 'Medication',
-                'task_start': taskStart,
-                'task_frequency': repeatInterval == 'Daily'
-                    ? 'Every Assigned Days'
-                    : 'Once',
-                'task_status': 'Pending',
-                'days': taskDays,
-                // metadata to avoid duplicates and allow tracing
-                'task_source': 'medication',
-                'medication_id': medicationId,
-                'take_index': t,
-                'elderly_id': elderlyId,
-                'created_at': FieldValue.serverTimestamp(),
-              });
+              final taskDocRef = await _firestore
+                  .collection('medical_tasks')
+                  .add({
+                    'task_title': taskTitle,
+                    'task_description': taskDesc,
+                    'task_category': 'Medication',
+                    'task_start': taskStart,
+                    'task_frequency': repeatInterval == 'Daily'
+                        ? 'Every Assigned Days'
+                        : 'Once',
+                    'task_status': 'Pending',
+                    'days': taskDays,
+                    // metadata to avoid duplicates and allow tracing
+                    'task_source': 'medication',
+                    'medication_id': medicationId,
+                    'take_index': t,
+                    'elderly_id': elderlyId,
+                    'created_at': FieldValue.serverTimestamp(),
+                  });
+
+              final taskId = taskDocRef.id; // Get the task ID
 
               // schedule notification 5 minutes before (only if in future)
               final notifyTime = taskStart.subtract(Duration(minutes: 5));
@@ -532,6 +660,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   title: 'Medication Reminder',
                   body: '$medName for $elderlyName in 5 minutes',
                   dateTime: notifyTime,
+                  payload: taskId, // Pass the task ID as payload
                 );
               }
 
@@ -547,6 +676,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   title: 'Medication Time - $medName',
                   body: 'Time to administer $medName to $elderlyName',
                   dateTime: taskStart,
+                  payload: taskId, // Pass the task ID as payload
                 );
               }
             }
@@ -968,7 +1098,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           children: [
             GestureDetector(
               onTap: main.EmergencyService.isModalOpen ? null : toggleSidebar,
-              child: Consumer<AuthProvider>(
+              child: Consumer<my_auth.AuthProvider>(
                 builder: (context, authProvider, child) {
                   final profilePic = authProvider.userData?['user_profilePic'];
                   return CircleAvatar(
@@ -986,7 +1116,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Consumer<AuthProvider>(
+                Consumer<my_auth.AuthProvider>(
                   builder: (context, authProvider, child) {
                     final firstName = authProvider.userFirstName;
                     final displayName =
@@ -1019,7 +1149,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       builder: (context) => ActivityLogsScreen(
                         houseId: 'H001', // Default house
                         nurseName:
-                            '${Provider.of<AuthProvider>(context, listen: false).userFirstName} ${Provider.of<AuthProvider>(context, listen: false).userLastName}',
+                            '${Provider.of<my_auth.AuthProvider>(context, listen: false).userFirstName} ${Provider.of<my_auth.AuthProvider>(context, listen: false).userLastName}',
                       ),
                     ),
                   );
@@ -1304,9 +1434,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           ElevatedButton.icon(
-                            onPressed: _isNurseScheduled
-                                ? _showAddTaskDialog
-                                : _showNotScheduledDialog,
+                            onPressed: _showAddTaskDialog,
                             icon: const Icon(Icons.add),
                             label: const Text(
                               "Add Task",
@@ -1316,13 +1444,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               ),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: _isNurseScheduled
-                                  ? const Color(0xFF22688E)
-                                  : Colors.grey.shade400,
-                              foregroundColor: _isNurseScheduled
-                                  ? Colors.white
-                                  : const Color.fromARGB(255, 250, 249, 249),
-                              elevation: _isNurseScheduled ? null : 0,
+                              backgroundColor: const Color(0xFF22688E),
+                              foregroundColor: Colors.white,
+                              elevation: null,
                             ),
                           ),
                         ],
@@ -1335,86 +1459,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  // ---------------------- SHOW NOT SCHEDULED WARNING DIALOG ----------------------
-  void _showNotScheduledDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          title: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
-              SizedBox(height: 8),
-              Text(
-                'Not Scheduled Today',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF00588E),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'You are not scheduled to work today. You cannot add tasks when you are not on duty.',
-                style: TextStyle(fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 12),
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Color(0xFF00588E).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Color(0xFF00588E).withOpacity(0.3)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.access_time, color: Color(0xFF00588E), size: 20),
-                    SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'Your shift: $_nurseShiftInfo',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF00588E),
-                        ),
-                        softWrap: true,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            Center(
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFF00588E),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                ),
-                child: Text(
-                  'OK',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
     );
   }
 
@@ -2158,23 +2202,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                   start,
                                 ).format(context);
 
-                                // Color based on category
-                                final category =
-                                    task['task_category'] ?? 'Other';
-                                Color bgColor;
-                                switch (category) {
-                                  case 'Vitals':
-                                    bgColor = Colors.orange[200]!;
-                                    break;
-                                  case 'Medication':
-                                    bgColor = Colors.yellow[200]!;
-                                    break;
-                                  case 'Assessment':
-                                    bgColor = Colors.blue[200]!;
-                                    break;
-                                  default:
-                                    bgColor = Colors.grey[200]!;
-                                }
+                                // All tasks use the same blue color like in Medical Tasks
+                                Color bgColor = const Color.fromARGB(
+                                  255,
+                                  153,
+                                  209,
+                                  255,
+                                );
 
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
@@ -2225,6 +2259,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     String description,
     String time,
   ) async {
+    print('Showing task dialog for task: $taskId');
     try {
       await _taskAudioPlayer.setReleaseMode(ReleaseMode.loop);
       await _taskAudioPlayer.play(AssetSource('sounds/alarm.mp3'));
@@ -2239,10 +2274,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       if (!taskDoc.exists) return;
       final taskData = taskDoc.data() as Map<String, dynamic>;
       final frequency = taskData['task_frequency'] ?? 'Once';
-      final taskDays = List<String>.from(taskData['days'] ?? []);
+      final taskDaysRaw = taskData['days'];
+      final taskDays = taskDaysRaw is List
+          ? List<String>.from(taskDaysRaw)
+          : <String>[];
 
       await showDialog(
-        context: context,
+        context: main.navigatorKey.currentContext!,
         barrierDismissible: false,
         builder: (_) => AlertDialog(
           shape: RoundedRectangleBorder(
@@ -2260,7 +2298,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                 icon: const Icon(Icons.close, color: Color(0xFF00588E)),
                 onPressed: () async {
                   await _taskAudioPlayer.stop();
-                  Navigator.of(context).pop();
+                  Navigator.of(main.navigatorKey.currentContext!).pop();
                   if (frequency == 'Once') {
                     await _firestore
                         .collection('medical_tasks')
@@ -2297,6 +2335,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   SizedBox(width: 8),
                   Text(
                     "Task Reminder",
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF00588E),
@@ -2409,7 +2448,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     ),
                     onPressed: () async {
                       await _taskAudioPlayer.stop();
-                      Navigator.of(context).pop();
+                      Navigator.of(main.navigatorKey.currentContext!).pop();
 
                       // Handle task based on frequency
                       if (frequency == 'Once') {
@@ -2451,7 +2490,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     ),
                     onPressed: () async {
                       await _taskAudioPlayer.stop();
-                      Navigator.of(context).pop();
+                      Navigator.of(main.navigatorKey.currentContext!).pop();
                       if (frequency == 'Once') {
                         await _firestore
                             .collection('medical_tasks')
@@ -2488,29 +2527,41 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   // Handle notification tap to show task dialog with alarm
   Future<void> _handleNotificationTap(String? payload) async {
+    print('Handling notification tap with payload: $payload');
     if (payload != null && payload.isNotEmpty) {
       try {
+        // Wait a bit to ensure the app is ready
+        await Future.delayed(const Duration(seconds: 3));
+        print('Delayed, now fetching task data');
+
         // Fetch task data
         final taskDoc = await _firestore
             .collection('medical_tasks')
             .doc(payload)
             .get();
 
-        if (taskDoc.exists) {
+        if (taskDoc.exists && main.navigatorKey.currentContext != null) {
+          print('Task exists and context available, showing dialog');
           final taskData = taskDoc.data() as Map<String, dynamic>;
           final title = taskData['task_title'] ?? 'Task';
           final description = taskData['task_description'] ?? '';
           final start =
               (taskData['task_start'] as Timestamp?)?.toDate() ??
               DateTime.now();
-          final formattedTime = TimeOfDay.fromDateTime(start).format(context);
+          final formattedTime = TimeOfDay.fromDateTime(
+            start,
+          ).format(main.navigatorKey.currentContext!);
 
           // Show task dialog with alarm
           await _showTaskDialog(payload, title, description, formattedTime);
+        } else {
+          print('Task does not exist or context not available');
         }
       } catch (e) {
         debugPrint('Error handling notification tap: $e');
       }
+    } else {
+      print('Payload is null or empty');
     }
   }
 

@@ -110,6 +110,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
   }
 
   void _showNotScheduledDialog() {
+    final currentShift = _getCurrentShift();
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -131,7 +132,7 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
             ],
           ),
           content: Text(
-            'It is not your shift or schedule today. You cannot submit updates when you are not scheduled.',
+            'It is not your $currentShift shift or schedule today. You cannot submit updates when you are not scheduled.',
             style: TextStyle(fontSize: 16),
             textAlign: TextAlign.justify,
           ),

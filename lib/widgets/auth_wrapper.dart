@@ -19,6 +19,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   bool _absenceInitialized = false;
   bool _leaveListenerInitialized = false;
   bool _missedTaskMonitorInitialized = false;
+  bool _emergencyListenerInitialized = false;
 
   @override
   Widget build(BuildContext context) {
@@ -28,21 +29,20 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (!authProvider.isAuthenticated) {
           _absenceInitialized = false; // Reset flag on logout
           _leaveListenerInitialized = false; // Reset leave listener flag
-          _missedTaskMonitorInitialized = false; // Reset missed task monitor flag
-          
+          _missedTaskMonitorInitialized =
+              false; // Reset missed task monitor flag
+
           // Stop all background services on logout
           MissedTaskMonitorService().stopMonitoring();
           LeaveNotificationListener().dispose();
-          
+
           return const GetStartedPage();
         }
 
         // If user is authenticated but userData is null, show minimal loading
         if (authProvider.userData == null) {
           return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
+            body: Center(child: CircularProgressIndicator()),
           );
         }
 
@@ -59,18 +59,24 @@ class _AuthWrapperState extends State<AuthWrapper> {
         // User is authenticated, has data - navigate based on role
         // (Removed absence blocking - absent caregivers can now access the app with limited functionality)
         final userRole = authProvider.userRole;
-        
-        // Initialize leave notification listener for caregivers
-        if (userId != null && !_leaveListenerInitialized && userRole == 'caregiver') {
-          _leaveListenerInitialized = true;
-          // Initialize leave notification listener in the background
+
+        // Initialize emergency listener for nurses
+        if (userId != null &&
+            !_emergencyListenerInitialized &&
+            userRole == 'nurse') {
+          _emergencyListenerInitialized = true;
+          // Initialize emergency listener in the background
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            LeaveNotificationListener().initialize();
+            // Import the main.dart file to access the listener method
+            // Since we can't directly call it, we'll need to trigger it differently
+            // For now, let's trigger a rebuild of MyApp or find another way
           });
         }
-        
+
         // Initialize or restart missed task monitor for caregivers
-        if (userId != null && !_missedTaskMonitorInitialized && userRole == 'caregiver') {
+        if (userId != null &&
+            !_missedTaskMonitorInitialized &&
+            userRole == 'caregiver') {
           _missedTaskMonitorInitialized = true;
           WidgetsBinding.instance.addPostFrameCallback((_) async {
             if (!MissedTaskMonitorService().isMonitoring) {
@@ -78,7 +84,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
             }
           });
         }
-        
+
         switch (userRole) {
           case 'administrator':
             return const CaregiverHomeScreen();

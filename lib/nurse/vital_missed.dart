@@ -44,85 +44,40 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
 
   Future<List<Map<String, dynamic>>> _getMissedVitals() async {
     try {
-      final nurseId = await _getNurseId();
-      if (nurseId == null) return [];
+      // Get missed vitals from activity logs where nurse_name matches current nurse
+      final missedLogsQuery = await _firestore
+          .collection('vital_activity_logs')
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('action_type', isEqualTo: 'vital_missed')
+          .where('nurse_name', isEqualTo: widget.nurseName)
+          .get();
 
-      final now = DateTime.now();
-      final todayString = DateFormat('yyyy-MM-dd').format(now);
-      final yesterday = now.subtract(Duration(days: 1));
-      final yesterdayString = DateFormat('yyyy-MM-dd').format(yesterday);
-
-      // Get missed vital assignments for this house and nurse for today and yesterday
-      final querySnapshots = await Future.wait([
-        _firestore
-            .collection('vitals')
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('assigned_date', isEqualTo: todayString)
-            .where('status', isEqualTo: 'missed')
-            .where('assigned_nurse_id', isEqualTo: nurseId)
-            .get(),
-        _firestore
-            .collection('vitals')
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('assigned_date', isEqualTo: yesterdayString)
-            .where('status', isEqualTo: 'missed')
-            .where('assigned_nurse_id', isEqualTo: nurseId)
-            .get(),
-      ]);
-
-      // Determine current shift for nurse (simple example: 1st, 2nd, 3rd)
-      final hour = now.hour;
-      String currentShift = '';
-      if (hour >= 6 && hour < 14) {
-        currentShift = '1st';
-      } else if (hour >= 14 && hour < 22) {
-        currentShift = '2nd';
-      } else {
-        currentShift = '3rd';
-      }
-
-      // Logic: Show missed tasks until just before the nurse's next same shift
-      // Missed tasks from previous shift are always visible, regardless of current shift
-      // Only reset before the nurse's next same shift (not immediately when new shift starts)
       final missedVitals = <Map<String, dynamic>>[];
 
-      for (final query in querySnapshots) {
-        for (final assignmentDoc in query.docs) {
-          final assignmentData = assignmentDoc.data();
+      for (final logDoc in missedLogsQuery.docs) {
+        final logData = logDoc.data();
 
-          // Get the most recent vital record for reference
-          final lastVitalQuery = await _firestore
-              .collection('vitals')
-              .where('elderly_id', isEqualTo: assignmentData['elderly_id'])
-              .orderBy('vital_record_at', descending: true)
-              .limit(1)
-              .get();
-
-          Map<String, dynamic>? lastVital;
-          if (lastVitalQuery.docs.isNotEmpty) {
-            lastVital = lastVitalQuery.docs.first.data();
-            lastVital['vital_id'] = lastVitalQuery.docs.first.id;
-          }
-
-          missedVitals.add({
-            'assignment_id': assignmentDoc.id,
-            'elderly_id': assignmentData['elderly_id'],
-            'elderly_name': assignmentData['elderly_name'],
-            'elderly_profilePic': assignmentData['elderly_profilePic'] ?? '',
-            'house_id': assignmentData['house_id'],
-            'last_vital': lastVital,
-            'status': 'missed',
-            'missed_date': assignmentData['assigned_date'],
-            'assigned_nurse_id': assignmentData['assigned_nurse_id'],
-            'updated_at': assignmentData['updated_at'],
-          });
-        }
+        missedVitals.add({
+          'assignment_id': logData['vital_id'],
+          'elderly_id': logData['elderly_id'],
+          'elderly_name': logData['elderly_name'],
+          'elderly_profilePic': '',
+          'house_id': logData['house_id'],
+          'last_vital': null, // Could be fetched if needed
+          'status': 'missed',
+          'missed_date': DateFormat(
+            'yyyy-MM-dd',
+          ).format((logData['timestamp'] as Timestamp).toDate()),
+          'missed_at': logData['timestamp'],
+          'shift': logData['shift'],
+          'nurse_name': logData['nurse_name'],
+        });
       }
 
-      // Sort by updated_at timestamp (most recent first)
+      // Sort by timestamp (most recent first)
       missedVitals.sort((a, b) {
-        final aTimestamp = a['updated_at'] as Timestamp?;
-        final bTimestamp = b['updated_at'] as Timestamp?;
+        final aTimestamp = a['missed_at'] as Timestamp?;
+        final bTimestamp = b['missed_at'] as Timestamp?;
 
         if (aTimestamp == null && bTimestamp == null) return 0;
         if (aTimestamp == null) return 1;

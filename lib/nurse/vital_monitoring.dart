@@ -183,41 +183,50 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
 
   // Build the Upcoming tab with red circle count
   Widget _buildUpcomingTabWithCount(Map<String, dynamic> house) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('Upcoming'),
-        const SizedBox(width: 4),
-        StreamBuilder<QuerySnapshot>(
-          stream: _getUpcomingVitalsCountStream(house['house_id']),
-          builder: (context, snapshot) {
-            int count = 0;
-            if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-              count = snapshot.data!.docs.length;
-            }
+    return FutureBuilder<bool>(
+      future: _isNurseAssignedToCurrentShift(),
+      builder: (context, shiftSnapshot) {
+        final isAssignedToShift =
+            shiftSnapshot.data ?? true; // Default to true if loading
 
-            if (count == 0) {
-              return const SizedBox.shrink();
-            }
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Upcoming'),
+            const SizedBox(width: 4),
+            StreamBuilder<QuerySnapshot>(
+              stream: _getUpcomingVitalsCountStream(house['house_id']),
+              builder: (context, snapshot) {
+                int count = 0;
+                if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                  count = snapshot.data!.docs.length;
+                }
 
-            return Container(
-              padding: const EdgeInsets.all(4),
-              decoration: const BoxDecoration(
-                color: Colors.red,
-                shape: BoxShape.circle,
-              ),
-              child: Text(
-                count.toString(),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            );
-          },
-        ),
-      ],
+                // Don't show red circle if nurse is not assigned to current shift
+                if (count == 0 || !isAssignedToShift) {
+                  return const SizedBox.shrink();
+                }
+
+                return Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    count.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -293,6 +302,31 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
 
     if (userQuery.docs.isEmpty) return null;
     return userQuery.docs.first.id;
+  }
+
+  // Check if nurse is assigned to current shift
+  Future<bool> _isNurseAssignedToCurrentShift() async {
+    final nurseId = await _getNurseId();
+    if (nurseId == null) return false;
+
+    final currentShift = _getCurrentShift();
+    final currentDay = _getCurrentDay();
+
+    try {
+      final shiftQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('days_assigned', arrayContains: currentDay)
+          .get();
+
+      return shiftQuery.docs.isNotEmpty;
+    } catch (e) {
+      print('❌ Error checking shift assignment: $e');
+      return false;
+    }
   }
 
   @override

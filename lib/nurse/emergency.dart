@@ -416,55 +416,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(height: 12),
-                                      // Mark as Viewed Button
-                                      Center(
-                                        child: ElevatedButton.icon(
-                                          onPressed: () async {
-                                            try {
-                                              await FirebaseFirestore.instance
-                                                  .collection('emergency_alert')
-                                                  .doc(alerts[index].id)
-                                                  .update({
-                                                    'alert_viewed': true,
-                                                  });
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text(
-                                                    'Emergency alert marked as viewed',
-                                                  ),
-                                                  backgroundColor: Colors.green,
-                                                ),
-                                              );
-                                            } catch (e) {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    'Error marking as viewed: $e',
-                                                  ),
-                                                  backgroundColor: Colors.red,
-                                                ),
-                                              );
-                                            }
-                                          },
-                                          icon: const Icon(Icons.check_circle),
-                                          label: const Text('Mark as Viewed'),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(
-                                              0xFF00588E,
-                                            ),
-                                            foregroundColor: Colors.white,
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
                                     ],
                                   ),
                                 );

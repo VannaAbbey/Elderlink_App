@@ -17,7 +17,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
 import 'services/cg_services/task_reminder_service.dart';
@@ -228,25 +227,36 @@ class EmergencyService {
           }
         }
 
-        try {
-          // Show a local notification mirroring the FCM message
-          const androidDetails = AndroidNotificationDetails(
-            'emergency_channel',
-            'Emergency Alerts',
-            importance: Importance.max,
-            priority: Priority.high,
-            playSound: true,
+        // Check if this is an emergency alert
+        final alertId = data['alertId'] ?? data['alert_id'] ?? '';
+        if (alertId.isNotEmpty) {
+          // For emergency alerts, show modal immediately
+          print('🚨 Received FCM emergency alert, showing modal');
+          EmergencyService.showEmergencyAlert(
+            alertId: alertId,
+            description: body,
           );
-          final details = NotificationDetails(android: androidDetails);
-          await _notifications.show(
-            message.hashCode,
-            title,
-            body,
-            details,
-            payload: data['alertId'] ?? data['alert_id'] ?? '',
-          );
-        } catch (e) {
-          print('❌ Error showing local notif from FCM: $e');
+        } else {
+          // For other messages, show local notification
+          try {
+            const androidDetails = AndroidNotificationDetails(
+              'fcm_channel',
+              'Push Notifications',
+              importance: Importance.max,
+              priority: Priority.high,
+              playSound: true,
+            );
+            final details = NotificationDetails(android: androidDetails);
+            await _notifications.show(
+              message.hashCode,
+              title,
+              body,
+              details,
+              payload: data['alertId'] ?? data['alert_id'] ?? '',
+            );
+          } catch (e) {
+            print('❌ Error showing local notif from FCM: $e');
+          }
         }
       });
 
@@ -303,103 +313,17 @@ class EmergencyService {
   static Future<void> showEmergencyAlert({
     required String alertId,
     required String description,
+    String? emergencyType,
   }) async {
-    if (_modalOpen) return;
+    print(
+      '🚨 showEmergencyAlert called with alertId: $alertId, description: $description',
+    );
+    if (_modalOpen) {
+      print('⚠️ Modal already open, skipping');
+      return;
+    }
     _modalOpen = true;
-
-    final doc = await FirebaseFirestore.instance
-        .collection('emergency_alert')
-        .doc(alertId)
-        .get();
-
-    if (!doc.exists) {
-      _modalOpen = false;
-      return;
-    }
-
-    final data = doc.data()!;
-    // Get house name from Firestore using house_id
-    String houseName = 'Unknown house';
-    final houseId = data['house_id'];
-    if (houseId != null && houseId.toString().isNotEmpty) {
-      final houseDoc = await FirebaseFirestore.instance
-          .collection('house')
-          .where('house_id', isEqualTo: houseId.toString())
-          .limit(1)
-          .get();
-
-      if (houseDoc.docs.isNotEmpty) {
-        houseName = houseDoc.docs.first.data()['house_name'] ?? 'Unknown house';
-      }
-    }
-
-    final timestampRaw = data['alert_timestamp']?.toDate();
-    final formattedTime = timestampRaw != null
-        ? DateFormat('M/dd/yyyy | h:mm a').format(timestampRaw)
-        : 'Unknown time';
-
-    // Compose description: prefer provided description, but fall back to
-    // emergency_type and additional_info values (value-only, no labels)
-    String finalDescription = description.toString().trim();
-    if (finalDescription.isEmpty ||
-        finalDescription.toLowerCase() == 'no description') {
-      final et = (data['emergency_type'] ?? '').toString().trim();
-      final ai = (data['additional_info'] ?? '').toString().trim();
-      String composed = '';
-      if (et.isNotEmpty) composed = et;
-      if (ai.isNotEmpty) {
-        composed = composed.isNotEmpty ? '$composed - $ai' : ai;
-      }
-      finalDescription = composed.isNotEmpty ? composed : 'No description';
-    }
-
-    try {
-      _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
-    } catch (e) {
-      print('❌ AudioPlayer error: $e');
-    }
-
-    const android = AndroidNotificationDetails(
-      'emergency_channel',
-      'Emergency Alerts',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: false,
-      ongoing: true,
-    );
-
-    final notifDetails = NotificationDetails(android: android);
-
-    try {
-      await _notifications.show(
-        0,
-        '🚨 Emergency Alert - $houseName at $formattedTime',
-        finalDescription,
-        notifDetails,
-        payload: alertId,
-      );
-    } catch (e) {
-      print('❌ Notification error: $e');
-    }
-
-    await _showModal(
-      alertId,
-      description: finalDescription,
-      timestamp: formattedTime,
-    );
-  }
-
-  static Future<void> _showModal(
-    String alertId, {
-    String description = '',
-    String timestamp = '',
-  }) async {
-    final ctx = navigatorKey.currentState?.context;
-    if (ctx == null) {
-      _modalOpen = false;
-      return;
-    }
+    print('✅ Modal flag set to open');
 
     try {
       final doc = await FirebaseFirestore.instance
@@ -407,12 +331,130 @@ class EmergencyService {
           .doc(alertId)
           .get();
 
-      if (!doc.exists) return;
+      if (!doc.exists) {
+        print('❌ Alert document does not exist');
+        return;
+      }
+      print('✅ Alert document exists');
 
       final data = doc.data()!;
-      final descriptionData = data['alert_description'] ?? 'No description';
+      // Get house name from Firestore using house_id
+      String houseName = 'Unknown house';
+      final houseId = data['house_id'];
+      if (houseId != null && houseId.toString().isNotEmpty) {
+        final houseDoc = await FirebaseFirestore.instance
+            .collection('house')
+            .where('house_id', isEqualTo: houseId.toString())
+            .limit(1)
+            .get();
+
+        if (houseDoc.docs.isNotEmpty) {
+          houseName =
+              houseDoc.docs.first.data()['house_name'] ?? 'Unknown house';
+        }
+      }
+      print('🏠 House name resolved: $houseName');
+
+      final timestampRaw = data['alert_timestamp']?.toDate();
+      final formattedTime = timestampRaw != null
+          ? DateFormat('M/dd/yyyy | h:mm a').format(timestampRaw)
+          : 'Unknown time';
+
+      // Compose description for notification: include emergency type and additional info
+      String finalDescription = emergencyType ?? '';
+      if (description.isNotEmpty && description != 'Emergency alert received') {
+        finalDescription = finalDescription.isNotEmpty
+            ? '$finalDescription - $description'
+            : description;
+      }
+      if (finalDescription.isEmpty) {
+        finalDescription = 'Emergency alert received';
+      }
+      print('📝 Final description: $finalDescription');
+
+      try {
+        print('🔊 Attempting to play alarm sound');
+        _audioPlayer.setReleaseMode(ReleaseMode.loop);
+        await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
+        print('✅ Alarm sound started');
+      } catch (e) {
+        print('❌ AudioPlayer error: $e');
+      }
+
+      const android = AndroidNotificationDetails(
+        'emergency_channel',
+        'Emergency Alerts',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: false,
+        ongoing: true,
+      );
+
+      final notifDetails = NotificationDetails(android: android);
+
+      try {
+        await _notifications.show(
+          0,
+          '🚨 Emergency Alert - $houseName at $formattedTime',
+          finalDescription,
+          notifDetails,
+          payload: alertId,
+        );
+        print('✅ Notification shown');
+      } catch (e) {
+        print('❌ Notification error: $e');
+      }
+
+      print('📞 Calling _showModal');
+      await _showModal(
+        alertId,
+        description: description, // This is now only additional info
+        timestamp: formattedTime,
+        emergencyType: emergencyType ?? data['emergency_type'] ?? '',
+      );
+      print('📞 _showModal completed');
+    } catch (e) {
+      print('❌ Error in showEmergencyAlert: $e');
+      _modalOpen = false; // Reset flag on error
+    }
+  }
+
+  static Future<void> _showModal(
+    String alertId, {
+    String description = '',
+    String timestamp = '',
+    String emergencyType = '',
+  }) async {
+    print('🔔 Attempting to show emergency modal for alert: $alertId');
+
+    // Remove delay - show immediately
+    // await Future.delayed(const Duration(seconds: 2));
+    print('⏳ Proceeding with modal immediately');
+
+    // Check context right before showing dialog
+    final ctx = navigatorKey.currentState?.context;
+    if (ctx == null) {
+      print('❌ Navigator context is null, cannot show modal');
+      _modalOpen = false;
+      return;
+    }
+    print('✅ Navigator context available, showing modal');
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('emergency_alert')
+          .doc(alertId)
+          .get();
+
+      if (!doc.exists) {
+        print('❌ Alert document not found in _showModal');
+        _modalOpen = false;
+        return;
+      }
+      print('✅ Alert document found in _showModal');
+
+      final data = doc.data()!;
       final emergencyType = data['emergency_type'] ?? '';
-      final additionalInfo = data['additional_info'] ?? '';
       final timestampRaw = data['alert_timestamp']?.toDate();
       final formattedTime = timestampRaw != null
           ? DateFormat('M/dd/yyyy | h:mm a').format(timestampRaw)
@@ -433,24 +475,36 @@ class EmergencyService {
           caregiverName = (firstName + ' ' + lastName).trim();
         }
       }
+      print('👤 Caregiver name resolved: $caregiverName');
 
-      await showDialog(
-        context: ctx,
-        barrierDismissible: false,
-        builder: (_) => EmergencyScreenModal(
-          alertId: alertId,
-          alertDescription: descriptionData,
-          alertTimestamp: formattedTime,
-          houseName: houseName,
-          caregiverName: caregiverName,
-          emergencyType: emergencyType,
-          additionalInfo: additionalInfo,
-        ),
-      );
+      // Use the passed description (additional info only) and emergency type
+      String fullDescription = description;
+
+      print('🎯 About to show dialog');
+      try {
+        await showDialog(
+          context: ctx,
+          barrierDismissible: false,
+          builder: (_) => EmergencyScreenModal(
+            alertId: alertId,
+            alertDescription: fullDescription.isNotEmpty
+                ? fullDescription
+                : 'No description',
+            alertTimestamp: formattedTime,
+            houseName: houseName,
+            caregiverName: caregiverName,
+            emergencyType: emergencyType,
+          ),
+        );
+        print('✅ Dialog shown and dismissed successfully');
+      } catch (dialogError) {
+        print('❌ Error in showDialog: $dialogError');
+      }
     } catch (e) {
       print('❌ Error showing emergency modal: $e');
     } finally {
       _modalOpen = false;
+      print('🔄 Modal flag reset to false');
     }
   }
 
@@ -558,7 +612,7 @@ void main() async {
   await IncidentService.initNotifications();
 
   // <-- Add this for task notifications
-  await NotificationService.init();
+  await NotificationService.init(navigatorKey: navigatorKey);
 
   runApp(
     MultiProvider(
@@ -574,119 +628,8 @@ void main() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  static DateTime? _lastIncidentTime; // store latest notified incident
-
-  void _listenForEmergencies() {
-    try {
-      FirebaseFirestore.instance
-          .collection('emergency_alert')
-          .where(
-            'alert_viewed',
-            isEqualTo: false,
-          ) // Only listen for unviewed alerts
-          .orderBy('alert_timestamp', descending: true)
-          .snapshots()
-          .listen((snapshot) {
-            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-            for (var doc in snapshot.docs) {
-              final data = doc.data();
-              final alertId = doc.id;
-              final emergencyType = data['emergency_type'] ?? 'Emergency Alert';
-              final additionalInfo = data['additional_info'] ?? '';
-              final description = additionalInfo.isNotEmpty
-                  ? '$emergencyType - $additionalInfo'
-                  : emergencyType;
-              final assignedNurseId = data['user_id_nu'] as String?;
-
-              if (currentUserId != null && assignedNurseId == currentUserId) {
-                EmergencyService.showEmergencyAlert(
-                  alertId: alertId,
-                  description: description,
-                );
-              }
-            }
-          });
-    } catch (e) {
-      print('❌ Firestore emergency listener error: $e');
-    }
-  }
-
-  void _listenForIncidents() {
-    try {
-      FirebaseFirestore.instance
-          .collection('incident_report')
-          .orderBy('incident_date_time', descending: true)
-          .snapshots()
-          .listen((snapshot) async {
-            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-
-            for (var doc in snapshot.docs) {
-              final data = doc.data();
-              final incidentId = doc.id;
-              final incidentType = data['incident_type'] ?? 'No incident type';
-              final additionalInfo = data['additional_info'] ?? '';
-              final description = additionalInfo.isNotEmpty
-                  ? '$incidentType - $additionalInfo'
-                  : incidentType;
-              final timestampRaw = data['incident_date_time']?.toDate();
-              if (timestampRaw == null) continue;
-
-              // skip if already notified
-              if (MyApp._lastIncidentTime != null &&
-                  !timestampRaw.isAfter(MyApp._lastIncidentTime!)) {
-                continue;
-              }
-
-              final houseId = data['house_id'];
-              String houseName = 'Unknown house';
-              if (houseId != null) {
-                final houseDoc = await FirebaseFirestore.instance
-                    .collection('house')
-                    .where('house_id', isEqualTo: houseId.toString())
-                    .limit(1)
-                    .get();
-                if (houseDoc.docs.isNotEmpty) {
-                  houseName =
-                      houseDoc.docs.first.data()['house_name'] ??
-                      'Unknown house';
-                }
-              }
-
-              final nurseData = data['user_id_nu'];
-              List<String> nurseArray = [];
-              if (nurseData is List) {
-                nurseArray = List<String>.from(nurseData);
-              } else if (nurseData is String) {
-                nurseArray = [nurseData];
-              }
-              if (currentUserId != null && nurseArray.contains(currentUserId)) {
-                final formattedTime = DateFormat('h:mm a').format(timestampRaw);
-                await IncidentService.showIncidentNotification(
-                  incidentId: incidentId,
-                  title: '📝 Incident Report',
-                  description: description,
-                  houseName: houseName,
-                  timestamp: formattedTime,
-                );
-
-                // update last notified timestamp
-                if (MyApp._lastIncidentTime == null ||
-                    timestampRaw.isAfter(MyApp._lastIncidentTime!)) {
-                  MyApp._lastIncidentTime = timestampRaw;
-                }
-              }
-            }
-          });
-    } catch (e) {
-      print('❌ Firestore incident listener error: $e');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    _listenForEmergencies();
-    _listenForIncidents();
-
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => my_auth.AuthProvider()),

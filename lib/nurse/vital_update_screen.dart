@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 
 class VitalUpdateScreen extends StatefulWidget {
   final String assignmentId;
@@ -139,6 +140,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
     String? suffix,
     TextInputType keyboardType = TextInputType.text,
     String? Function(String?)? validator,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -156,6 +158,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           controller: controller,
           keyboardType: keyboardType,
           validator: validator,
+          inputFormatters: inputFormatters,
           decoration: InputDecoration(
             hintText: 'Type here or select from dropdown',
             suffixIcon: PopupMenuButton<String>(
@@ -332,7 +335,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 16),
+                                const SizedBox(height: 4),
                               ],
                             ),
                           ),
@@ -1034,6 +1037,11 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                   controller: _bloodPressureController,
                                   options: _bloodPressureOptions,
                                   suffix: ' mmHg',
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9/]'),
+                                    ),
+                                  ],
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
                                       return 'Please enter blood pressure';
@@ -1049,6 +1057,11 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                   options: _pulseRateOptions,
                                   suffix: ' bpm',
                                   keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9]'),
+                                    ),
+                                  ],
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
                                       return 'Please enter pulse rate';
@@ -1064,6 +1077,11 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                   options: _o2SatOptions,
                                   suffix: '%',
                                   keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9]'),
+                                    ),
+                                  ],
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
                                       return 'Please enter O2 saturation';
@@ -1079,6 +1097,11 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                   options: _temperatureOptions,
                                   suffix: ' °C',
                                   keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9.]'),
+                                    ),
+                                  ],
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
                                       return 'Please enter temperature';
@@ -1094,6 +1117,11 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                   options: _respiratoryRateOptions,
                                   suffix: ' breaths/min',
                                   keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9]'),
+                                    ),
+                                  ],
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
                                       return 'Please enter respiratory rate';

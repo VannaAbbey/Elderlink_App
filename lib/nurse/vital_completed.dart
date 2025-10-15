@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class CompletedVitalsTab extends StatefulWidget {
@@ -23,53 +24,62 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
     return DateFormat('yyyy-MM-dd').format(DateTime.now());
   }
 
+  Future<String?> _getCurrentNurseId() async {
+    // Use the authenticated user's UID directly for reliable nurse identification
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      print('No authenticated user found');
+      return null;
+    }
+    return user.uid;
+  }
+
   Future<List<Map<String, dynamic>>> _getCompletedVitals() async {
     try {
       final today = _getTodayDateString();
 
-      // Get nurse ID using same logic as upcoming vitals
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) {
-        print('Invalid nurse name format: ${widget.nurseName}');
+      // Get nurse ID using Firebase Auth UID (same as upcoming vitals)
+      final nurseId = await _getCurrentNurseId();
+      if (nurseId == null) {
+        print('Could not get current nurse ID');
         return [];
       }
 
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
+      print('🔍 Getting completed vitals recorded by: $nurseId');
+      print('🏠 House: ${widget.houseId}, Date: $today');
 
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        print('No nurse found with name: $firstName $lastName');
-        return [];
-      }
-
-      final nurseId = userQuery.docs.first.id;
-
-      print(
-        '🔍 Getting ALL completed vitals for: ${widget.nurseName} ($nurseId)',
-      );
-      print('🏠 House: ${widget.houseId}, Date: $today (ALL shifts)');
-
-      // Query ALL completed vitals for today (any nurse, any shift)
+      // Query completed vitals by the current nurse for the house
+      // Note: We can't filter by completion date in Firestore query due to timestamp limitations
+      // So we'll get all completed vitals and filter by date in code
       final completedVitalsQuery = await _firestore
           .collection('vitals')
           .where('house_id', isEqualTo: widget.houseId)
-          .where('assigned_date', isEqualTo: today)
           .where('status', isEqualTo: 'completed')
+          .where('recorded_by', isEqualTo: nurseId)
           .get();
 
-      print('✅ Found ${completedVitalsQuery.docs.length} completed vitals');
+      print(
+        '✅ Found ${completedVitalsQuery.docs.length} completed vitals total',
+      );
+
+      // Filter by completion date in code
+      final filteredDocs = completedVitalsQuery.docs.where((doc) {
+        final data = doc.data();
+        final completedAt = data['completed_at'] as Timestamp?;
+        if (completedAt == null) return false;
+
+        final completedDate = DateFormat(
+          'yyyy-MM-dd',
+        ).format(completedAt.toDate());
+        return completedDate == today;
+      }).toList();
+
+      print('✅ Found ${filteredDocs.length} completed vitals for today');
 
       // Build a list of completed vitals and collect elderly IDs
       final completedVitals = <Map<String, dynamic>>[];
       final elderlyIdSet = <String>{};
-      for (final vitalDoc in completedVitalsQuery.docs) {
+      for (final vitalDoc in filteredDocs) {
         final vitalData = vitalDoc.data();
         final elderlyId = vitalData['elderly_id'] ?? '';
         elderlyIdSet.add(elderlyId);
@@ -86,7 +96,7 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
           'completed_at': vitalData['completed_at'],
           'created_at': vitalData['created_at'],
           'recorded_by': vitalData['recorded_by'] ?? nurseId,
-          'recorded_by_name': vitalData['recorded_by_name'] ?? widget.nurseName,
+          'recorded_by_name': vitalData['recorded_by_name'] ?? 'Unknown Nurse',
           'status': 'completed',
           'shift': vitalData['shift'] ?? 'Unknown',
           'assigned_date': vitalData['assigned_date'] ?? '',
