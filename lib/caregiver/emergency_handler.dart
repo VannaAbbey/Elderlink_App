@@ -172,10 +172,17 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
 
   if (result != null) {
   // ✅ Hanapin nurses na naka-duty today at this shift
+  print('🔍 === EMERGENCY ALERT: Finding on-duty nurses ===');
+  print('Current time: ${now.hour}:${now.minute}');
+  print('Current day: $todayName');
+  
   final nurseQuery = await FirebaseFirestore.instance
-      .collection("nurse_shift_assign")
+      .collection("house_shift_assignments")
+      .where("user_type", isEqualTo: "nurse")
       .where("is_current", isEqualTo: true)
       .get();
+
+  print('📋 Total nurse assignments found: ${nurseQuery.docs.length}');
 
   List<String> activeNurseIds = [];
 
@@ -185,33 +192,80 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     final assignedDays = (data["days_assigned"] as List<dynamic>?) ?? [];
     final startStr = data["start_time"] as String?;
     final endStr = data["end_time"] as String?;
-    final nurseId = data["nurse_id"] as String?;
+    final nurseId = data["user_id"] as String?; // Changed from nurse_id to user_id
     final nurseShift = data["shift"] as String?;
+    
+    print('\n--- Checking Nurse: $nurseId ---');
+    print('   Shift: $nurseShift');
+    print('   Time: $startStr - $endStr');
+    print('   Assigned Days: $assignedDays');
     
     // Skip if missing critical data
     if (startStr == null || endStr == null || nurseId == null || nurseShift == null) {
+      print('   ❌ SKIPPED: Missing critical data');
       continue;
     }
 
-    // check if today is assigned
-    if (!assignedDays.contains(todayName)) continue;
-
-    // check if time fits
+    // Parse nurse shift times
     final start = _parseTimeOfDay(startStr);
     final end = _parseTimeOfDay(endStr);
-    bool inShift;
-
-    if (nurseShift == "3rd") {
-      // 22:00 – 06:00 case
-      inShift = now.hour >= start.hour || now.hour < end.hour;
+    
+    // Determine if this is an overnight shift
+    final isNurseOvernightShift = end.hour < start.hour || (end.hour == start.hour && end.minute <= start.minute);
+    print('   Overnight shift: $isNurseOvernightShift');
+    
+    // For overnight shifts, determine which day to check based on current time
+    String nurseDayToCheck;
+    if (isNurseOvernightShift && today.hour >= 0 && today.hour < end.hour) {
+      // Current time is in the "end period" of an overnight shift
+      // Check if the previous day is assigned
+      final previousDay = today.subtract(const Duration(days: 1));
+      nurseDayToCheck = _getDayName(previousDay.weekday);
+      print('   Day to check: $nurseDayToCheck (previous day - in end period of overnight)');
     } else {
-      inShift = (now.hour >= start.hour && now.hour < end.hour);
+      // Regular shift or "start period" of overnight shift
+      nurseDayToCheck = _getDayName(today.weekday);
+      print('   Day to check: $nurseDayToCheck (current day)');
+    }
+
+    // check if today (or previous day for overnight) is assigned
+    final isDayAssigned = assignedDays.contains(nurseDayToCheck);
+    print('   Day assigned: $isDayAssigned');
+    if (!isDayAssigned) {
+      print('   ❌ SKIPPED: Not assigned for $nurseDayToCheck');
+      continue;
+    }
+
+    // check if time fits - more accurate check including minutes
+    bool inShift;
+    final currentMinutes = now.hour * 60 + now.minute;
+    final startMinutes = start.hour * 60 + start.minute;
+    final endMinutes = end.hour * 60 + end.minute;
+    
+    print('   Current: $currentMinutes min, Start: $startMinutes min, End: $endMinutes min');
+
+    if (isNurseOvernightShift) {
+      // For overnight shifts (e.g., 22:00 – 06:00)
+      // Nurse is in shift if current time is after start OR before end
+      inShift = currentMinutes >= startMinutes || currentMinutes < endMinutes;
+      print('   Overnight check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) OR currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift');
+    } else {
+      // For regular shifts, current time must be between start and end
+      inShift = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+      print('   Regular check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) AND currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift');
     }
 
     if (inShift) {
       activeNurseIds.add(nurseId);
+      print('   ✅ ADDED: Nurse is on duty');
+    } else {
+      print('   ❌ SKIPPED: Not currently in shift time');
     }
   }
+  
+  print('\n🎯 Total on-duty nurses found: ${activeNurseIds.length}');
+  print('Nurse IDs: $activeNurseIds');
+  print('=== END EMERGENCY ALERT NURSE SEARCH ===\n');
 
   if (activeNurseIds.isEmpty) {
     if (context.mounted) _showError(context, "No nurse is currently on duty for this shift.");
