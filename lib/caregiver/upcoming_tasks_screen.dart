@@ -465,7 +465,7 @@ class TaskService {
 
     if (frequency == 'Every Assigned Day') {
       // For "Every Assigned Day", find the next occurrence of ANY assigned day
-      // If assignedDays are provided, use them; otherwise fall back to original logic for compatibility
+      // assignedDays MUST be provided for this frequency to work correctly
       if (assignedDays != null && assignedDays.isNotEmpty) {
         print('✅ Using assignedDays logic for Every Assigned Day');
         DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
@@ -482,19 +482,11 @@ class TaskService {
           nextDate = nextDate.add(const Duration(days: 1));
         }
         print('❌ No matching assigned day found in next 14 days');
+        return null; // Return null instead of falling back to incorrect logic
       } else {
-        print('⚠️ WARNING: Falling back to same-weekday logic because assignedDays is ${assignedDays == null ? "null" : "empty"}');
-        // Fallback to original logic (find next occurrence of same weekday)
-        final startDayOfWeek = recurringStartDate.weekday; // 1=Monday, 7=Sunday
-        DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
-        
-        // Find the next occurrence of the same weekday
-        while (nextDate.weekday != startDayOfWeek) {
-          nextDate = nextDate.add(const Duration(days: 1));
-        }
-        
-        print('⚠️ Fallback result: finding next ${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][startDayOfWeek - 1]} = $nextDate');
-        return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+        print('❌ ERROR: assignedDays is ${assignedDays == null ? "null" : "empty"} for Every Assigned Day frequency!');
+        print('❌ This should never happen - assignedDays must be fetched before calling _calculateNextOccurrence');
+        return null; // Return null to prevent incorrect date calculation
       }
     } else if (frequency == 'Custom' && customDays.isNotEmpty) {
       // For "Custom", find the next occurrence of any of the selected custom days
@@ -845,17 +837,9 @@ class TaskService {
       print('❌ Error cancelling task reminders: $e');
     }
     
-    // For recurring tasks, store the next_taskdate but don't create new task yet
-    // The Progressive Task System will handle creating the next occurrence when shift ends
-    if (newNextTaskDate != null) {
-      await _tasksRef.doc(docId).update({
-        'next_taskdate': newNextTaskDate,
-      });
-      print('✅ Task marked complete. Next occurrence ($newNextTaskDate) will be created when shift ends.');
-      print('🔍 DEBUG: Task Complete - updated next_taskdate to: $newNextTaskDate');
-    } else {
-      print('🔍 DEBUG: Task Complete - no next occurrence (likely "Only once" task)');
-    }
+    // Don't update next_taskdate here - let Progressive Task System handle it when shift ends
+    // This keeps the task showing current date in Complete screen until shift end
+    print('✅ Task marked complete. Progressive Task System will handle recurrence when shift ends.');
   }
 
   /// Marks a task as incomplete and records the reason for incompletion.
@@ -965,17 +949,9 @@ class TaskService {
       print('❌ Error cancelling task reminders: $e');
     }
     
-    // For recurring tasks, store the next_taskdate but don't create new task yet
-    // The Progressive Task System will handle creating the next occurrence when shift ends
-    if (newNextTaskDate != null) {
-      await _tasksRef.doc(docId).update({
-        'next_taskdate': newNextTaskDate,
-      });
-      print('✅ Task marked incomplete. Next occurrence ($newNextTaskDate) will be created when shift ends.');
-      print('🔍 DEBUG: Task Incomplete - updated next_taskdate to: $newNextTaskDate');
-    } else {
-      print('🔍 DEBUG: Task Incomplete - no next occurrence (likely "Only once" task)');
-    }
+    // Don't update next_taskdate here - let Progressive Task System handle it when shift ends
+    // This keeps the task showing current date in Incomplete screen until shift end
+    print('✅ Task marked incomplete. Progressive Task System will handle recurrence when shift ends.');
   }
 }
 
@@ -1430,7 +1406,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     if (state == AppLifecycleState.resumed) {
       // App came back into focus, refresh the data
       print('🔄 App resumed, refreshing tasks...');
-      _checkProgressiveTaskSystem(context);
+      // DON'T call _checkProgressiveTaskSystem here - it causes immediate task date updates
+      // Only let the periodic timer handle progression checks (which respects shift end time)
       _triggerRefresh();
     }
   }
@@ -2239,51 +2216,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                                   onPressed: confirmChecked
                                                                                       ? () async {
                                                                                           final docId = task['task_id'];
-                                                                                          // Get current next_taskdate and frequency info
-                                                                                          final docSnap = await TaskService._tasksRef.doc(docId).get();
-                                                                                          final data = docSnap.data();
-                                                                                          DateTime? prevNextTaskDate;
-                                                                                          if (data != null && data['next_taskdate'] != null) {
-                                                                                            prevNextTaskDate = (data['next_taskdate'] is Timestamp)
-                                                                                              ? (data['next_taskdate'] as Timestamp).toDate()
-                                                                                              : data['next_taskdate'] as DateTime;
-                                                                                          }
-                                                                                          // Calculate new next_taskdate for recurring tasks
-                                                                                          List<String> customDays = List<String>.from(data?['custom_days'] ?? []);
-                                                                                          List<String> taskFrequency = List<String>.from(data?['task_frequency'] ?? []);
-                                                                                          DateTime now = DateTime.now();
-                                                                                          DateTime? newNextTaskDate;
-                                                                                          DateTime taskStart = (data?['task_start'] is Timestamp)
-                                                                                            ? (data?['task_start'] as Timestamp).toDate()
-                                                                                            : data?['task_start'] as DateTime;
-                                                                                          
-                                                                                          String elderlyId = data?['elderly_id'] ?? '';
-                                                                                          String caregiverId = data?['caregiver_id'] ?? '';
-                                                                                          String frequency = taskFrequency.isNotEmpty ? taskFrequency[0] : 'Only once';
-                                                                                          
-                                                                                          // Calculate next occurrence using new date picker logic
-                                                                                          final recurringStartDate = (data?['recurring_start_date'] as Timestamp?)?.toDate();
-                                                                                          final currentTaskDate = (data?['task_date'] as Timestamp?)?.toDate();
-                                                                                          
-                                                                                          if (recurringStartDate != null && currentTaskDate != null) {
-                                                                                            // Use new calculation method
-                                                                                            if (frequency == 'Every Assigned Day') {
-                                                                                              // Get assigned days for Every Assigned Day frequency
-                                                                                              final assignedDays = await TaskService._getAssignedDaysForElderlyAndCaregiverStatic(caregiverId, elderlyId);
-                                                                                              newNextTaskDate = TaskService._calculateNextOccurrence(currentTaskDate, recurringStartDate, frequency, customDays, taskStart, assignedDays: assignedDays);
-                                                                                            } else {
-                                                                                              newNextTaskDate = TaskService._calculateNextOccurrence(currentTaskDate, recurringStartDate, frequency, customDays, taskStart);
-                                                                                            }
-                                                                                          } else {
-                                                                                            // Fallback to old method for tasks without recurring_start_date
-                                                                                            if (frequency == 'Every Assigned Day') {
-                                                                                              newNextTaskDate = await _getNextAssignedDate(elderlyId, caregiverId, taskStart, prevNextTaskDate ?? now);
-                                                                                            } else if (frequency == 'Custom' && customDays.isNotEmpty) {
-                                                                                              newNextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, prevNextTaskDate ?? now, customDays);
-                                                                                            }
-                                                                                          }
-                                                                                          // For 'Only once', newNextTaskDate remains null
-                                                                                          await TaskService.markTaskComplete(docId, newNextTaskDate);
+                                                                                          // Don't calculate next_taskdate here - let Progressive Task System handle it when shift ends
+                                                                                          // This prevents the next date from showing in Complete screen before shift end
+                                                                                          await TaskService.markTaskComplete(docId, null);
                                                                                           Navigator.of(confirmCtx).pop();
                                                                                           Navigator.of(ctx).pop();
                                                                                         }
@@ -2377,53 +2312,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                     if (reasonText.isNotEmpty) {
                                                                       final docId = task['task_id'];
                                                                       
-                                                                      // Get current task data for recurring task calculation
-                                                                      final docSnap = await TaskService._tasksRef.doc(docId).get();
-                                                                      final data = docSnap.data();
-                                                                      DateTime? prevNextTaskDate;
-                                                                      if (data != null && data['next_taskdate'] != null) {
-                                                                        prevNextTaskDate = (data['next_taskdate'] is Timestamp)
-                                                                          ? (data['next_taskdate'] as Timestamp).toDate()
-                                                                          : data['next_taskdate'] as DateTime;
-                                                                      }
-                                                                      
-                                                                      // Calculate new next_taskdate for recurring tasks
-                                                                      List<String> customDays = List<String>.from(data?['custom_days'] ?? []);
-                                                                      List<String> taskFrequency = List<String>.from(data?['task_frequency'] ?? []);
-                                                                      DateTime now = DateTime.now();
-                                                                      DateTime? newNextTaskDate;
-                                                                      DateTime taskStart = (data?['task_start'] is Timestamp)
-                                                                        ? (data?['task_start'] as Timestamp).toDate()
-                                                                        : data?['task_start'] as DateTime;
-                                                                      
-                                                                      String elderlyId = data?['elderly_id'] ?? '';
-                                                                      String caregiverId = data?['caregiver_id'] ?? '';
-                                                                      String frequency = taskFrequency.isNotEmpty ? taskFrequency[0] : 'Only once';
-                                                                      
-                                                                      // Calculate next occurrence using new date picker logic
-                                                                      final recurringStartDate = (data?['recurring_start_date'] as Timestamp?)?.toDate();
-                                                                      final currentTaskDate = (data?['task_date'] as Timestamp?)?.toDate();
-                                                                      
-                                                                      if (recurringStartDate != null && currentTaskDate != null) {
-                                                                        // Use new calculation method
-                                                                        if (frequency == 'Every Assigned Day') {
-                                                                          // Get assigned days for Every Assigned Day frequency
-                                                                          final assignedDays = await TaskService._getAssignedDaysForElderlyAndCaregiverStatic(caregiverId, elderlyId);
-                                                                          newNextTaskDate = TaskService._calculateNextOccurrence(currentTaskDate, recurringStartDate, frequency, customDays, taskStart, assignedDays: assignedDays);
-                                                                        } else {
-                                                                          newNextTaskDate = TaskService._calculateNextOccurrence(currentTaskDate, recurringStartDate, frequency, customDays, taskStart);
-                                                                        }
-                                                                      } else {
-                                                                        // Fallback to old method for tasks without recurring_start_date
-                                                                        if (frequency == 'Every Assigned Day') {
-                                                                          newNextTaskDate = await _getNextAssignedDate(elderlyId, caregiverId, taskStart, prevNextTaskDate ?? now);
-                                                                        } else if (frequency == 'Custom' && customDays.isNotEmpty) {
-                                                                          newNextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, prevNextTaskDate ?? now, customDays);
-                                                                        }
-                                                                      }
-                                                                      
-                                                                      // Mark as incomplete and potentially create next occurrence
-                                                                      await TaskService.markTaskIncompleteWithNextOccurrence(docId, reasonText, newNextTaskDate);
+                                                                      // Don't calculate next_taskdate here - let Progressive Task System handle it when shift ends
+                                                                      // This prevents the next date from showing in Incomplete screen before shift end
+                                                                      await TaskService.markTaskIncompleteWithNextOccurrence(docId, reasonText, null);
                                                                       
                                                                       // Check if widget is still mounted before popping
                                                                       if (mounted) {
@@ -4281,12 +4172,23 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         print('✅ Using user-selected start date from date picker: $userSelectedStartDate');
         actualTaskDate = DateTime(userSelectedStartDate.year, userSelectedStartDate.month, userSelectedStartDate.day);
         
-        // Calculate next occurrence for next_taskdate
-        DateTime nextOccurrence = userSelectedStartDate.add(const Duration(days: 7)); // Next week same day
-        nextTaskDate = DateTime(nextOccurrence.year, nextOccurrence.month, nextOccurrence.day, taskStart.hour, taskStart.minute);
+        // Calculate next occurrence for next_taskdate using correct assigned days logic
+        // Get assigned days for this elderly-caregiver pair
+        final assignedDays = await TaskService._getAssignedDaysForElderlyAndCaregiverStatic(caregiverId, elderlyId);
+        print('🔧 Assigned days for calculating next occurrence: $assignedDays');
+        
+        // Use _calculateNextOccurrence to find the next assigned day
+        nextTaskDate = TaskService._calculateNextOccurrence(
+          userSelectedStartDate, 
+          userSelectedStartDate, 
+          'Every Assigned Day', 
+          [], 
+          taskStart, 
+          assignedDays: assignedDays
+        );
         
         print('✅ actualTaskDate set to: $actualTaskDate');
-        print('✅ nextTaskDate calculated as: $nextTaskDate');
+        print('✅ nextTaskDate calculated as: $nextTaskDate (next assigned day after start date)');
         print('🔍 FINAL CHECK - actualTaskDate before saving: $actualTaskDate');
       } else {
         // Fallback to old logic for backward compatibility
@@ -4394,20 +4296,12 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
         print('✅ Using user-selected start date from date picker: $userSelectedStartDate');
         actualTaskDate = DateTime(userSelectedStartDate.year, userSelectedStartDate.month, userSelectedStartDate.day);
         
-        // Calculate next occurrence based on custom days
-        DateTime nextOccurrence = userSelectedStartDate.add(const Duration(days: 1));
-        // Find the next occurrence of any custom day
-        for (int i = 0; i < 14; i++) {
-          final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextOccurrence.weekday - 1];
-          if (customDays.contains(dayOfWeek)) {
-            nextTaskDate = DateTime(nextOccurrence.year, nextOccurrence.month, nextOccurrence.day, taskStart.hour, taskStart.minute);
-            break;
-          }
-          nextOccurrence = nextOccurrence.add(const Duration(days: 1));
-        }
+        // Calculate next occurrence based on custom days AND assignment status
+        // Use assignment-aware calculation
+        nextTaskDate = await _getNextCustomDate(elderlyId, caregiverId, taskStart, userSelectedStartDate.add(Duration(days: 1)), customDays);
         
         print('✅ actualTaskDate set to: $actualTaskDate');
-        print('✅ nextTaskDate calculated as: $nextTaskDate');
+        print('✅ nextTaskDate calculated as: $nextTaskDate (next custom day when caregiver is assigned)');
       } else {
         // Fallback to old logic for backward compatibility
         print('⚠️ No recurring_start_date found, using fallback logic');

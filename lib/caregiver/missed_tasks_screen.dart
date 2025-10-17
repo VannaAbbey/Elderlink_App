@@ -214,8 +214,8 @@ class _MissedTasksScreenState extends State<MissedTasksScreen> with WidgetsBindi
           if (freq == 'Only once') {
             displayDate = task['freq_once_date'] as DateTime? ?? task['task_date'] as DateTime?;
           } else {
-            // For recurring tasks, use next_taskdate or task_date
-            displayDate = task['next_taskdate'] as DateTime? ?? task['task_date'] as DateTime?;
+            // For recurring tasks, use task_date (the current occurrence date, not next_taskdate)
+            displayDate = task['task_date'] as DateTime?;
           }
           
           if (displayDate == null) continue;

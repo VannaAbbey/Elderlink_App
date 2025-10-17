@@ -110,22 +110,20 @@ class _IncompleteTasksScreenState extends State<IncompleteTasksScreen> with Widg
   }
 
   String _getNextRecurringDate(Map<String, dynamic> task) {
-    final nextTaskDate = task['next_taskdate'];
-    
-    if (nextTaskDate != null) {
-      DateTime dateTime;
-      if (nextTaskDate is Timestamp) {
-        dateTime = nextTaskDate.toDate();
-      } else if (nextTaskDate is DateTime) {
-        dateTime = nextTaskDate;
-      } else {
-        return '';
+    // Check if it's a recurring task
+    final frequency = task['task_frequency'];
+    if (frequency is List && frequency.isNotEmpty) {
+      final frequencyType = frequency.first.toString();
+      if (frequencyType == 'Only once') {
+        return 'N/A (One-time task)';
       }
-      
-      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+    } else if (frequency is String && frequency == 'Only once') {
+      return 'N/A (One-time task)';
     }
     
-    return '';
+    // For recurring tasks, don't show the next date until shift ends
+    // The Progressive Task System will move this back to Upcoming screen when shift ends
+    return 'Will recur when shift ends';
   }
 
   // Format header date from 'YYYY-MM-DD' to 'Month Day, Year'

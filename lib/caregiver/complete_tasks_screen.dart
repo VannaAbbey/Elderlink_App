@@ -213,7 +213,6 @@ class TaskDetailsDialog extends StatelessWidget {
 
   String _getNextRecurringDate() {
     final frequency = task['task_frequency'];
-    final nextTaskDate = task['next_taskdate'];
     
     // Check if it's a one-time task
     if (frequency is List && frequency.isNotEmpty) {
@@ -225,21 +224,9 @@ class TaskDetailsDialog extends StatelessWidget {
       return 'N/A (One-time task)';
     }
     
-    // Use the next_taskdate field if available
-    if (nextTaskDate != null) {
-      DateTime? nextDate;
-      if (nextTaskDate is Timestamp) {
-        nextDate = nextTaskDate.toDate();
-      } else if (nextTaskDate is DateTime) {
-        nextDate = nextTaskDate;
-      }
-      
-      if (nextDate != null) {
-        return '${nextDate.year}-${nextDate.month.toString().padLeft(2, '0')}-${nextDate.day.toString().padLeft(2, '0')}';
-      }
-    }
-    
-    return 'N/A';
+    // For recurring tasks, don't show the next date until shift ends
+    // The Progressive Task System will move this back to Upcoming screen when shift ends
+    return 'Will recur when shift ends';
   }
 
 
