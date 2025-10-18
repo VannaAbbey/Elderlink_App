@@ -2928,6 +2928,61 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                 withinRange = pickedMinutes >= minMinutes || pickedMinutes <= maxMinutes;
                                                               }
                                                               if (withinRange) {
+                                                                // Check if end time is before start time
+                                                                if (startTime != null) {
+                                                                  final startMinutes = startTime!.hour * 60 + startTime!.minute;
+                                                                  final endMinutes = picked.hour * 60 + picked.minute;
+                                                                  
+                                                                  // For normal shifts, end time must be after start time
+                                                                  if (maxMinutes >= minMinutes) {
+                                                                    if (endMinutes <= startMinutes) {
+                                                                      showDialog(
+                                                                        context: ctx,
+                                                                        builder: (context) => AlertDialog(
+                                                                          shape: RoundedRectangleBorder(
+                                                                            borderRadius: BorderRadius.circular(16),
+                                                                          ),
+                                                                          title: const Row(
+                                                                            children: [
+                                                                              Icon(
+                                                                                Icons.warning_amber_rounded,
+                                                                                color: Color(0xFFD32F2F),
+                                                                                size: 28,
+                                                                              ),
+                                                                              SizedBox(width: 8),
+                                                                              Text(
+                                                                                'Invalid Time Range',
+                                                                                style: TextStyle(
+                                                                                  color: Color(0xFFD32F2F),
+                                                                                  fontWeight: FontWeight.bold,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                          content: const Text(
+                                                                            'The Task End time you picked is beyond the time you picked for the Task Start time, please pick another.',
+                                                                            style: TextStyle(fontSize: 16),
+                                                                          ),
+                                                                          actions: [
+                                                                            TextButton(
+                                                                              onPressed: () => Navigator.of(context).pop(),
+                                                                              style: TextButton.styleFrom(
+                                                                                backgroundColor: const Color(0xFFD32F2F),
+                                                                                foregroundColor: Colors.white,
+                                                                                shape: RoundedRectangleBorder(
+                                                                                  borderRadius: BorderRadius.circular(8),
+                                                                                ),
+                                                                              ),
+                                                                              child: const Text('OK'),
+                                                                            ),
+                                                                          ],
+                                                                        ),
+                                                                      );
+                                                                      return;
+                                                                    }
+                                                                  }
+                                                                }
+                                                                
                                                                 setState(() {
                                                                   endTime = picked;
                                                                 });

@@ -458,50 +458,69 @@ class AbsenceService {
             print('  🔄 Progressing recurring task ${taskDoc.id} to next occurrence');
             
             try {
-              final nextTaskDate = (taskData['next_taskdate'] as Timestamp?)?.toDate();
+              // Calculate next occurrence dynamically (don't rely on pre-calculated next_taskdate)
+              final taskStart = (taskData['task_start'] as Timestamp?)?.toDate() ?? DateTime.now();
+              final recurringStartDate = (taskData['recurring_start_date'] as Timestamp?)?.toDate();
+              final customDays = List<String>.from(taskData['custom_days'] ?? []);
+              final elderlyId = taskData['elderly_id'] ?? '';
               
-              if (nextTaskDate != null) {
-                // Calculate the occurrence after next_taskdate
-                final taskStart = (taskData['task_start'] as Timestamp?)?.toDate() ?? DateTime.now();
-                final recurringStartDate = (taskData['recurring_start_date'] as Timestamp?)?.toDate();
-                final customDays = List<String>.from(taskData['custom_days'] ?? []);
-                final elderlyId = taskData['elderly_id'] ?? '';
-                
-                DateTime? newNextTaskDate;
-                
-                if (recurringStartDate != null) {
-                  if (frequency == 'Custom' && customDays.isNotEmpty) {
-                    newNextTaskDate = await _getNextCustomDateForAbsence(
-                      elderlyId, 
-                      caregiverId, 
-                      taskStart, 
-                      nextTaskDate.add(Duration(days: 1)), 
-                      customDays
-                    );
-                  } else if (frequency == 'Every Assigned Day') {
-                    final assignedDays = await _getAssignedDaysForElderlyAndCaregiverForAbsence(caregiverId, elderlyId);
+              DateTime? calculatedNextDate;
+              DateTime? newNextTaskDate;
+              
+              // Calculate the next occurrence after the current task date
+              if (recurringStartDate != null) {
+                if (frequency == 'Every Assigned Day') {
+                  final assignedDays = await _getAssignedDaysForElderlyAndCaregiverForAbsence(caregiverId, elderlyId);
+                  print('  📋 Assigned days for absence progression: $assignedDays');
+                  
+                  // Calculate next assigned day after current task date
+                  calculatedNextDate = _calculateNextOccurrenceForAbsence(
+                    taskDate, 
+                    recurringStartDate, 
+                    frequency, 
+                    customDays, 
+                    taskStart, 
+                    assignedDays: assignedDays
+                  );
+                  
+                  // Calculate the occurrence after that for next_taskdate
+                  if (calculatedNextDate != null) {
                     newNextTaskDate = _calculateNextOccurrenceForAbsence(
-                      nextTaskDate, 
+                      calculatedNextDate, 
                       recurringStartDate, 
                       frequency, 
                       customDays, 
                       taskStart, 
                       assignedDays: assignedDays
                     );
-                  } else {
-                    newNextTaskDate = _calculateNextOccurrenceForAbsence(
-                      nextTaskDate, 
-                      recurringStartDate, 
-                      frequency, 
-                      customDays, 
-                      taskStart
+                  }
+                } else if (frequency == 'Custom' && customDays.isNotEmpty) {
+                  // Calculate next custom day after current task date
+                  calculatedNextDate = await _getNextCustomDateForAbsence(
+                    elderlyId, 
+                    caregiverId, 
+                    taskStart, 
+                    taskDate.add(Duration(days: 1)), 
+                    customDays
+                  );
+                  
+                  // Calculate the occurrence after that for next_taskdate
+                  if (calculatedNextDate != null) {
+                    newNextTaskDate = await _getNextCustomDateForAbsence(
+                      elderlyId, 
+                      caregiverId, 
+                      taskStart, 
+                      calculatedNextDate.add(Duration(days: 1)), 
+                      customDays
                     );
                   }
                 }
-                
+              }
+              
+              if (calculatedNextDate != null) {
                 // Progress the task to next occurrence
                 await taskDoc.reference.update({
-                  'task_date': nextTaskDate,
+                  'task_date': calculatedNextDate,
                   'next_taskdate': newNextTaskDate,
                   'task_status': ['Upcoming'], // Reset to Upcoming
                   'inc_reason': '', // Clear any incomplete reason
@@ -511,10 +530,10 @@ class AbsenceService {
                 });
                 
                 progressedCount++;
-                print('  ✅ Progressed recurring task ${taskDoc.id} from $taskDate to $nextTaskDate');
+                print('  ✅ Progressed recurring task ${taskDoc.id} from $taskDate to $calculatedNextDate (next after that: $newNextTaskDate)');
               } else {
-                // Fallback: mark as incomplete if we can't calculate next date
-                print('  ⚠️ Could not progress task ${taskDoc.id} - missing next_taskdate, marking incomplete');
+                // Could not calculate next date - mark as incomplete
+                print('  ⚠️ Could not calculate next occurrence for task ${taskDoc.id}, marking incomplete');
                 await _markTaskIncomplete(taskDoc.reference, absenceType);
                 markedCount++;
               }
