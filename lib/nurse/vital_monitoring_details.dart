@@ -124,9 +124,11 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
       draft.clear();
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Vital record updated successfully.")),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Vital record updated successfully.")),
+      );
+    }
   }
 
   Future<bool> _showConfirmationDialog() async {

@@ -77,6 +77,7 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
           'elderly_mobilityStatus': data['elderly_mobilityStatus'] ?? '',
           'elderly_sex': data['elderly_sex'] ?? '',
           'elderly_causeOfDeath': data['elderly_causeOfDeath'] ?? '',
+          'elderly_birthday': data['elderly_bday'] ?? data['birthdate'],
         };
       }).toList();
 
@@ -129,6 +130,22 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
     setState(() {
       filteredElderly = filtered;
     });
+  }
+
+  bool _isBirthdayToday(dynamic birthday) {
+    if (birthday == null) return false;
+
+    DateTime birthDate;
+    if (birthday is Timestamp) {
+      birthDate = birthday.toDate();
+    } else if (birthday is DateTime) {
+      birthDate = birthday;
+    } else {
+      return false;
+    }
+
+    final now = DateTime.now();
+    return birthDate.month == now.month && birthDate.day == now.day;
   }
 
   @override
@@ -329,6 +346,9 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                                       .toString();
                               final fullName =
                                   '${elderly['elderly_fname']} ${elderly['elderly_lname']}';
+                              final isBirthday = _isBirthdayToday(
+                                elderly['elderly_birthday'],
+                              );
 
                               return GestureDetector(
                                 onTap: () {
@@ -341,102 +361,126 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
                                     ),
                                   );
                                 },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: selectedStatus == "Deceased"
-                                        ? Colors
-                                              .grey[300] // ✅ Solid grey only if Deceased
-                                        : const Color(0xFFBFEAF2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: selectedStatus == "Deceased"
-                                          ? Colors.grey[300]
-                                          : const Color(0xFFBFEAF2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 10,
-                                    ),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const SizedBox(
-                                          height: 15,
-                                        ), // ⬆️ Space above profile pic
-                                        ClipOval(
-                                          child: ColorFiltered(
-                                            colorFilter:
-                                                selectedStatus == "Deceased"
-                                                ? const ColorFilter.matrix([
-                                                    0.2126,
-                                                    0.7152,
-                                                    0.0722,
-                                                    0,
-                                                    0, // red
-                                                    0.2126,
-                                                    0.7152,
-                                                    0.0722,
-                                                    0,
-                                                    0, // green
-                                                    0.2126,
-                                                    0.7152,
-                                                    0.0722,
-                                                    0,
-                                                    0, // blue
-                                                    0, 0, 0, 1, 0, // alpha
-                                                  ])
-                                                : const ColorFilter.mode(
-                                                    Colors.transparent,
-                                                    BlendMode.multiply,
-                                                  ),
-                                            child: Image(
-                                              image: imageUrl.isNotEmpty
-                                                  ? NetworkImage(imageUrl)
-                                                  : const AssetImage(
-                                                          'assets/images/people_icon.png',
-                                                        )
-                                                        as ImageProvider,
-                                              height: 100,
-                                              width: 100,
-                                              fit: BoxFit.cover,
+                                child: Stack(
+                                  children: [
+                                    Container(
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      decoration: BoxDecoration(
+                                        color: selectedStatus == "Deceased"
+                                            ? Colors.grey[300]
+                                            : const Color(0xFFBFEAF2),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.max,
+                                          children: [
+                                            const SizedBox(height: 15),
+                                            ClipOval(
+                                              child: ColorFiltered(
+                                                colorFilter:
+                                                    selectedStatus == "Deceased"
+                                                    ? const ColorFilter.matrix([
+                                                        0.2126,
+                                                        0.7152,
+                                                        0.0722,
+                                                        0,
+                                                        0,
+                                                        0.2126,
+                                                        0.7152,
+                                                        0.0722,
+                                                        0,
+                                                        0,
+                                                        0.2126,
+                                                        0.7152,
+                                                        0.0722,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        1,
+                                                        0,
+                                                      ])
+                                                    : const ColorFilter.mode(
+                                                        Colors.transparent,
+                                                        BlendMode.multiply,
+                                                      ),
+                                                child: Image(
+                                                  image: imageUrl.isNotEmpty
+                                                      ? NetworkImage(imageUrl)
+                                                      : const AssetImage(
+                                                              'assets/images/people_icon.png',
+                                                            )
+                                                            as ImageProvider,
+                                                  height: 100,
+                                                  width: 100,
+                                                  fit: BoxFit.cover,
+                                                ),
+                                              ),
                                             ),
-                                          ),
+                                            const SizedBox(height: 20),
+                                            Text(
+                                              fullName,
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              selectedStatus == "Deceased"
+                                                  ? (elderly['elderly_causeOfDeath'] ??
+                                                            '')
+                                                        .toString()
+                                                  : (elderly['elderly_condition'] ??
+                                                            '')
+                                                        .toString(),
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.black54,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-
-                                        const SizedBox(
-                                          height: 20,
-                                        ), // ✅ Tight control over spacing
-                                        Text(
-                                          fullName,
-                                          textAlign: TextAlign.center,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          selectedStatus == "Deceased"
-                                              ? (elderly['elderly_causeOfDeath'] ??
-                                                        '')
-                                                    .toString()
-                                              : (elderly['elderly_condition'] ??
-                                                        '')
-                                                    .toString(),
-                                          textAlign: TextAlign.center,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.black54,
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ),
-                                  ),
+                                    if (isBirthday)
+                                      Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.pink,
+                                            shape: BoxShape.circle,
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(
+                                                  0.2,
+                                                ),
+                                                blurRadius: 4,
+                                                offset: const Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                          child: const Icon(
+                                            Icons.cake,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               );
                             },

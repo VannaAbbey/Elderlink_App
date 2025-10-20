@@ -15,7 +15,6 @@ import 'nurse/emergency_screen_modal.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:intl/intl.dart';
 import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
@@ -120,7 +119,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 class EmergencyService {
   static final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
-  static final AudioPlayer _audioPlayer = AudioPlayer();
   static bool _modalOpen = false;
 
   static bool get isModalOpen => _modalOpen;
@@ -372,15 +370,6 @@ class EmergencyService {
       }
       print('📝 Final description: $finalDescription');
 
-      try {
-        print('🔊 Attempting to play alarm sound');
-        _audioPlayer.setReleaseMode(ReleaseMode.loop);
-        await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
-        print('✅ Alarm sound started');
-      } catch (e) {
-        print('❌ AudioPlayer error: $e');
-      }
-
       const android = AndroidNotificationDetails(
         'emergency_channel',
         'Emergency Alerts',
@@ -509,7 +498,6 @@ class EmergencyService {
   }
 
   static Future<void> stopAlarm() async {
-    await _audioPlayer.stop();
     await _notifications.cancelAll();
     _modalOpen = false;
   }

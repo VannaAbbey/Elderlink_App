@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'dart:async';
 import '../providers/auth_provider.dart' as my_auth;
 import 'elderly_list.dart';
 import 'medication_management.dart';
@@ -15,6 +15,8 @@ import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import 'activity_logs.dart';
 import '../main.dart' as main;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:confetti/confetti.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -32,12 +34,15 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   List<Map<String, dynamic>> _houses = [];
   bool _isLoadingHouses = true;
 
-  final AudioPlayer _taskAudioPlayer = AudioPlayer();
   final Map<String, bool> _shownTaskDialogs =
       {}; // track which tasks have been shown
 
   List<Map<String, dynamic>> _currentTasks =
       []; // Store current tasks for See All
+
+  List<Map<String, dynamic>> _todaysBirthdays = []; // Store today's birthdays
+
+  late ConfettiController _confettiController;
 
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
@@ -167,6 +172,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   @override
   void initState() {
     super.initState();
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 2),
+    );
     _loadHouses();
     _initializeEmergencyListener(); // Initialize emergency listener
     _initializeIncidentListener(); // Initialize incident listener
@@ -178,13 +186,15 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     // After first frame we can access context safely and generate medication tasks
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
-      _checkNurseScheduleAndShift(); // Check if nurse is scheduled
+      _checkForBirthday(); // Check for birthday on app start
       // Check for pending notification payload
       final pending = NotificationService.getAndClearPendingPayload();
       if (pending != null) {
         _handleNotificationTap(pending);
       }
     });
+    // Start timer to check for exact medication times
+    _startExactMedicationTimeChecker();
   }
 
   void _initializeEmergencyListener() {
@@ -267,8 +277,152 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     print('✅ Emergency dialog completed');
   }
 
+  void _startExactMedicationTimeChecker() {
+    // Check for exact medication times every minute
+    Timer.periodic(const Duration(minutes: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      await _checkExactMedicationTimes();
+    });
+  }
+
+  Future<void> _checkExactMedicationTimes() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) return;
+
+      final currentShift = _getCurrentShift();
+      final now = DateTime.now();
+      final currentTime = TimeOfDay.fromDateTime(now);
+
+      // Get nurse's assigned elderly for current shift
+      final assignQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      if (assignQuery.docs.isEmpty) return;
+
+      // Collect all elderly IDs
+      final Set<String> elderlyIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        final ids = List<String>.from(data['elderly_ids'] ?? []);
+        elderlyIds.addAll(ids);
+      }
+
+      if (elderlyIds.isEmpty) return;
+
+      // Query medications for these elderly
+      final medsQuery = await _firestore
+          .collection('medications')
+          .where('elderly_id', whereIn: elderlyIds.toList().take(10).toList())
+          .where('status', isEqualTo: 'active')
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      for (final mdoc in medsQuery.docs) {
+        final mdata = mdoc.data();
+        final medicationId = mdoc.id;
+        final intakeTimes = List<String>.from(mdata['intake_times'] ?? []);
+        final takeStatuses = List<Map<String, dynamic>>.from(
+          mdata['take_statuses'] ?? [],
+        );
+
+        for (int t = 0; t < intakeTimes.length; t++) {
+          final scheduled = intakeTimes[t];
+          final parts = scheduled.split(':');
+          if (parts.length != 2) continue;
+
+          final hour = int.tryParse(parts[0]) ?? 0;
+          final minute = int.tryParse(parts[1]) ?? 0;
+          final scheduledTime = TimeOfDay(hour: hour, minute: minute);
+
+          // Check if current time matches scheduled time (within 1 minute window)
+          final timeDiff =
+              (currentTime.hour * 60 + currentTime.minute) -
+              (scheduledTime.hour * 60 + scheduledTime.minute);
+
+          if (timeDiff.abs() <= 1) {
+            // Within 1 minute of exact time
+            // Check if task is still pending
+            final status =
+                (t < takeStatuses.length && takeStatuses[t]['status'] != null)
+                ? takeStatuses[t]['status'] as String
+                : 'pending';
+
+            if (status == 'pending') {
+              // Check if we haven't already shown this dialog recently
+              final dialogKey =
+                  '${medicationId}_${t}_${now.day}_${now.month}_${now.year}';
+              if (_shownTaskDialogs.containsKey(dialogKey)) continue;
+
+              _shownTaskDialogs[dialogKey] = true;
+
+              // Get task details
+              final elderlyId = mdata['elderly_id'] as String?;
+              final elderlyDoc = elderlyId != null
+                  ? await _firestore.collection('elderly').doc(elderlyId).get()
+                  : null;
+
+              String elderlyName = 'Unknown';
+              if (elderlyDoc != null && elderlyDoc.exists) {
+                final ed = elderlyDoc.data() as Map<String, dynamic>;
+                elderlyName =
+                    '${ed['elderly_fname'] ?? ''} ${ed['elderly_lname'] ?? ''}'
+                        .trim();
+                if (elderlyName.isEmpty) elderlyName = 'Unknown';
+              }
+
+              final medName = mdata['medication_name'] ?? 'Medication';
+              final dosage = mdata['dosage'] ?? '';
+
+              final taskTitle =
+                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+              final taskDesc =
+                  'Medication scheduled for $elderlyName at $scheduled';
+
+              // Find the corresponding medical task
+              final taskQuery = await _firestore
+                  .collection('medical_tasks')
+                  .where('medication_id', isEqualTo: medicationId)
+                  .where('take_index', isEqualTo: t)
+                  .limit(1)
+                  .get();
+
+              if (taskQuery.docs.isNotEmpty) {
+                final taskId = taskQuery.docs.first.id;
+
+                // Show dialog without alarm at exact medication time
+                if (mounted) {
+                  await _showTaskDialog(taskId, taskTitle, taskDesc, scheduled);
+                }
+
+                // Show phone notification for medication
+                await NotificationService.showMedicalTaskNotification(
+                  taskId: taskId,
+                  title: taskTitle,
+                  description: taskDesc,
+                  elderlyName: elderlyName,
+                  time: scheduled,
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error checking exact medication times: $e');
+    }
+  }
+
   void _initializeIncidentListener() {
-    print('🚨 Initializing incident listener');
     try {
       FirebaseFirestore.instance
           .collection('incident_report')
@@ -467,20 +621,256 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     }
   }
 
-  Future<void> _checkNurseScheduleAndShift() async {
+  Future<void> _checkForBirthday() async {
     try {
       final nurseId = await _getNurseIdFromAuth();
       if (nurseId == null) {
-        setState(() {});
+        debugPrint('Birthday check: No nurse ID found');
+        return;
+      }
+      debugPrint('Birthday check: Nurse ID = $nurseId');
+
+      final currentShift = _getCurrentShift();
+      debugPrint('Birthday check: Current shift = $currentShift');
+
+      // Get elderly_assignments for this nurse
+      final assignQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      debugPrint(
+        'Birthday check: Found ${assignQuery.docs.length} assignment docs',
+      );
+
+      if (assignQuery.docs.isEmpty) {
+        debugPrint('Birthday check: No assignments found for nurse');
+        setState(() => _todaysBirthdays = []);
         return;
       }
 
-      // Nurse exists, no further processing needed for now
-      setState(() {});
+      // Collect all elderly IDs
+      final Set<String> elderlyIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        final ids = List<String>.from(data['elderly_ids'] ?? []);
+        elderlyIds.addAll(ids);
+        debugPrint('Birthday check: Assignment ${doc.id} has elderly: $ids');
+      }
+
+      debugPrint('Birthday check: Total elderly IDs: $elderlyIds');
+
+      if (elderlyIds.isEmpty) {
+        debugPrint('Birthday check: No elderly assigned to nurse');
+        setState(() => _todaysBirthdays = []);
+        return;
+      }
+
+      // Query elderly for birthdays in chunks of 10
+      final List<Map<String, dynamic>> birthdays = [];
+      final elderlyList = elderlyIds.toList();
+      for (var i = 0; i < elderlyList.length; i += 10) {
+        final end = (i + 10 < elderlyList.length) ? i + 10 : elderlyList.length;
+        final chunk = elderlyList.sublist(i, end);
+
+        final elderlyQuery = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+
+        debugPrint(
+          'Birthday check: Chunk ${i ~/ 10 + 1} - Found ${elderlyQuery.docs.length} elderly docs',
+        );
+
+        for (final doc in elderlyQuery.docs) {
+          final data = doc.data();
+          final birthday = data['elderly_bday'] ?? data['birthdate'];
+          debugPrint(
+            'Birthday check: Elderly ${doc.id} - ${data['elderly_fname']} ${data['elderly_lname']}, birthday: $birthday',
+          );
+
+          if (_isBirthdayToday(birthday)) {
+            final gender = data['elderly_sex'] ?? 'male';
+            debugPrint('Birthday check: Elderly ${doc.id} gender: $gender');
+            final prefix = gender.toLowerCase().startsWith('f')
+                ? 'Lola'
+                : 'Lolo';
+            final fullName =
+                '$prefix ${data['elderly_fname']} ${data['elderly_lname']}';
+            birthdays.add({
+              'id': doc.id,
+              'name': fullName,
+              'birthday': birthday,
+            });
+            debugPrint('Birthday check: Today is $fullName\'s birthday!');
+          } else {
+            debugPrint(
+              'Birthday check: Not birthday today for ${data['elderly_fname']} ${data['elderly_lname']}',
+            );
+          }
+        }
+      }
+
+      setState(() => _todaysBirthdays = birthdays);
+      if (birthdays.isNotEmpty) {
+        final names = birthdays.map((b) => b['name'] as String).toList();
+        final today = DateTime.now().toIso8601String().split('T')[0];
+        final acknowledgedKey = 'birthday_acknowledged_all_$today';
+        await _showBirthdayDialog(names, acknowledgedKey, isManualTap: false);
+      }
     } catch (e) {
-      debugPrint('Error checking nurse schedule: $e');
-      setState(() {});
+      debugPrint('Error checking for birthday: $e');
+      setState(() => _todaysBirthdays = []);
     }
+  }
+
+  bool _isBirthdayToday(dynamic birthday) {
+    if (birthday == null) {
+      debugPrint('Birthday check: Birthday is null');
+      return false;
+    }
+
+    DateTime birthDate;
+    if (birthday is Timestamp) {
+      birthDate = birthday.toDate();
+    } else if (birthday is DateTime) {
+      birthDate = birthday;
+    } else {
+      debugPrint(
+        'Birthday check: Birthday is not Timestamp or DateTime: $birthday (type: ${birthday.runtimeType})',
+      );
+      return false;
+    }
+
+    final now = DateTime.now();
+    final isToday = birthDate.month == now.month && birthDate.day == now.day;
+    debugPrint(
+      'Birthday check: Birth date: ${birthDate.month}/${birthDate.day}, Today: ${now.month}/${now.day}, Is today: $isToday',
+    );
+    return isToday;
+  }
+
+  Future<void> _showBirthdayDialog(
+    List<String> names,
+    String acknowledgedKey, {
+    bool isManualTap = false,
+  }) async {
+    // Check if already acknowledged (only for auto-show, not manual tap)
+    if (!isManualTap) {
+      final prefs = await SharedPreferences.getInstance();
+      final alreadyAcknowledged = prefs.getBool(acknowledgedKey) ?? false;
+      if (alreadyAcknowledged) {
+        debugPrint('Birthday already acknowledged for today');
+        return;
+      }
+    }
+
+    _confettiController.play();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Stack(
+          children: [
+            AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15),
+              ),
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      '🎉 Happy Birthday! 🎂',
+                      style: const TextStyle(
+                        color: Color(0xFF00588E),
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Poppins',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    names.length == 1
+                        ? "Today is ${names[0]}'s birthday! 🎈🥳"
+                        : names.length == 2
+                        ? "Today is ${names[0]} and ${names[1]}'s birthday! 🎈🥳"
+                        : "Today is ${names.sublist(0, names.length - 1).join(', ')} and ${names.last}'s birthday! 🎈🥳",
+                    style: const TextStyle(fontSize: 16, fontFamily: 'Poppins'),
+                    textAlign: TextAlign.justify,
+                  ),
+                  const SizedBox(height: 30),
+                  const Text(
+                    'Greet them with a warm hug and love.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontFamily: 'Poppins',
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.justify,
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('🎂🍰🎈🎉🎊', style: TextStyle(fontSize: 24)),
+                ],
+              ),
+              actions: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool(acknowledgedKey, true);
+                      _confettiController.stop();
+                      Navigator.of(context).pop();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00588E),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(25),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text(
+                      'Acknowledge 🎉',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Positioned.fill(
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirectionality: BlastDirectionality.explosive,
+                shouldLoop: false,
+                colors: const [
+                  Colors.red,
+                  Colors.blue,
+                  Colors.green,
+                  Colors.yellow,
+                  Colors.pink,
+                  Colors.purple,
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // Generate medical_tasks entries for medication schedule for this nurse
@@ -773,6 +1163,12 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   }
 
   @override
+  void dispose() {
+    _confettiController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () {
@@ -791,283 +1187,295 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   SafeArea(
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
-                      child: ListView(
-                        children: [
-                          _headerSection(),
-                          const SizedBox(height: 20),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Color(0x3EB7DDF5),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: const [
-                                Text(
-                                  'Welcome to ElderLink!',
-                                  style: TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF00588E),
-                                  ),
-                                ),
-                                SizedBox(height: 10),
-                                Text(
-                                  'Manage your tasks, view your schedule, and stay connected with your elderly residents.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          _medicalTasksSection(),
-                          const SizedBox(height: 30),
-                          _housesSection(),
-                          const SizedBox(height: 30),
-
-                          // Your Status Section
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Color(0x3EB7DDF5),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: const [
-                                    Icon(
-                                      Icons.accessibility,
+                      child: RefreshIndicator(
+                        onRefresh: () async {
+                          // Refresh houses data
+                          await _loadHouses();
+                          // Refresh birthdays
+                          await _checkForBirthday();
+                          // The medical tasks will refresh automatically via StreamBuilder
+                        },
+                        child: ListView(
+                          children: [
+                            _headerSection(),
+                            const SizedBox(height: 20),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Color(0x3EB7DDF5),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: const [
+                                  Text(
+                                    'Welcome to ElderLink!',
+                                    style: TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
                                       color: Color(0xFF00588E),
-                                      size: 45,
                                     ),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      "Your Status",
-                                      style: TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w700,
+                                  ),
+                                  SizedBox(height: 10),
+                                  Text(
+                                    'Manage your tasks, view your schedule, and stay connected with your elderly residents.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            _birthdaySection(),
+                            const SizedBox(height: 20),
+                            _medicalTasksSection(),
+                            const SizedBox(height: 30),
+                            _housesSection(),
+                            const SizedBox(height: 30),
+
+                            // Your Status Section
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Color(0x3EB7DDF5),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: const [
+                                      Icon(
+                                        Icons.accessibility,
+                                        color: Color(0xFF00588E),
+                                        size: 45,
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 15),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        "Your Status",
+                                        style: TextStyle(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 15),
 
-                                FutureBuilder<Map<String, dynamic>?>(
-                                  future: getCaregiverStatus(),
-                                  builder: (context, snapshot) {
-                                    if (snapshot.connectionState ==
-                                        ConnectionState.waiting) {
-                                      return const Center(
-                                        child: CircularProgressIndicator(),
-                                      );
-                                    }
+                                  FutureBuilder<Map<String, dynamic>?>(
+                                    future: getCaregiverStatus(),
+                                    builder: (context, snapshot) {
+                                      if (snapshot.connectionState ==
+                                          ConnectionState.waiting) {
+                                        return const Center(
+                                          child: CircularProgressIndicator(),
+                                        );
+                                      }
 
-                                    final statusData = snapshot.data;
-                                    final daysAssigned =
-                                        statusData?['days_assigned']
-                                            as List<dynamic>? ??
-                                        [];
+                                      final statusData = snapshot.data;
+                                      final daysAssigned =
+                                          statusData?['days_assigned']
+                                              as List<dynamic>? ??
+                                          [];
 
-                                    // Handle shift field - could be String or Map
-                                    final shiftData = statusData?['shift'];
-                                    final shift = shiftData is String
-                                        ? shiftData
-                                        : shiftData is Map<String, dynamic>
-                                        ? (shiftData['name'] ??
-                                              shiftData['shift_name'] ??
-                                              'Not assigned')
-                                        : 'Not assigned';
+                                      // Handle shift field - could be String or Map
+                                      final shiftData = statusData?['shift'];
+                                      final shift = shiftData is String
+                                          ? shiftData
+                                          : shiftData is Map<String, dynamic>
+                                          ? (shiftData['name'] ??
+                                                shiftData['shift_name'] ??
+                                                'Not assigned')
+                                          : 'Not assigned';
 
-                                    // Handle start_time and end_time fields (NEW structure)
-                                    final startTime =
-                                        statusData?['start_time'] as String? ??
-                                        '';
-                                    final endTime =
-                                        statusData?['end_time'] as String? ??
-                                        '';
+                                      // Handle start_time and end_time fields (NEW structure)
+                                      final startTime =
+                                          statusData?['start_time']
+                                              as String? ??
+                                          '';
+                                      final endTime =
+                                          statusData?['end_time'] as String? ??
+                                          '';
 
-                                    final timeRange =
-                                        (startTime.isNotEmpty &&
-                                            endTime.isNotEmpty)
-                                        ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
-                                        : 'Not specified';
+                                      final timeRange =
+                                          (startTime.isNotEmpty &&
+                                              endTime.isNotEmpty)
+                                          ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
+                                          : 'Not specified';
 
-                                    return Column(
-                                      children: [
-                                        // Current Work Schedule
-                                        Container(
-                                          padding: const EdgeInsets.all(16),
-                                          decoration: BoxDecoration(
-                                            color: Color(0xFFB7DDF5),
-                                            borderRadius: BorderRadius.circular(
-                                              12,
+                                      return Column(
+                                        children: [
+                                          // Current Work Schedule
+                                          Container(
+                                            padding: const EdgeInsets.all(16),
+                                            decoration: BoxDecoration(
+                                              color: Color(0xFFB7DDF5),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
                                             ),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Text(
-                                                'Current Work Schedule',
-                                                style: TextStyle(
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Color(0xFF00588E),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                  'Current Work Schedule',
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Color(0xFF00588E),
+                                                  ),
                                                 ),
-                                              ),
-                                              const SizedBox(height: 15),
-                                              Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceEvenly,
-                                                children: [
-                                                  for (int i = 0; i < 7; i++)
-                                                    Column(
-                                                      children: [
-                                                        Container(
-                                                          width: 32,
-                                                          height: 32,
-                                                          decoration: BoxDecoration(
-                                                            shape:
-                                                                BoxShape.circle,
-                                                            color:
-                                                                daysAssigned.contains(
-                                                                  [
-                                                                    'Sunday',
-                                                                    'Monday',
-                                                                    'Tuesday',
-                                                                    'Wednesday',
-                                                                    'Thursday',
-                                                                    'Friday',
-                                                                    'Saturday',
-                                                                  ][i],
-                                                                )
-                                                                ? Color(
-                                                                    0xFF00588E,
+                                                const SizedBox(height: 15),
+                                                Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceEvenly,
+                                                  children: [
+                                                    for (int i = 0; i < 7; i++)
+                                                      Column(
+                                                        children: [
+                                                          Container(
+                                                            width: 32,
+                                                            height: 32,
+                                                            decoration: BoxDecoration(
+                                                              shape: BoxShape
+                                                                  .circle,
+                                                              color:
+                                                                  daysAssigned.contains(
+                                                                    [
+                                                                      'Sunday',
+                                                                      'Monday',
+                                                                      'Tuesday',
+                                                                      'Wednesday',
+                                                                      'Thursday',
+                                                                      'Friday',
+                                                                      'Saturday',
+                                                                    ][i],
                                                                   )
-                                                                : Colors
-                                                                      .grey
-                                                                      .shade300,
-                                                          ),
-                                                        ),
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Text(
-                                                          [
-                                                            'Sun',
-                                                            'Mon',
-                                                            'Tue',
-                                                            'Wed',
-                                                            'Thu',
-                                                            'Fri',
-                                                            'Sat',
-                                                          ][i],
-                                                          style: TextStyle(
-                                                            fontSize: 12,
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                            color: Color(
-                                                              0xFF00588E,
+                                                                  ? Color(
+                                                                      0xFF00588E,
+                                                                    )
+                                                                  : Colors
+                                                                        .grey
+                                                                        .shade300,
                                                             ),
                                                           ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-
-                                        const SizedBox(height: 15),
-
-                                        // Current Shift Schedule
-                                        Container(
-                                          padding: const EdgeInsets.all(16),
-                                          decoration: BoxDecoration(
-                                            color: Color(0xFFB7DDF5),
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              const Icon(
-                                                Icons.access_time,
-                                                color: Color(0xFF00588E),
-                                                size: 70,
-                                              ),
-                                              const SizedBox(width: 20),
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.center,
-                                                  children: [
-                                                    const Text(
-                                                      'Current Shift Schedule',
-                                                      style: TextStyle(
-                                                        fontSize: 16,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Color(
-                                                          0xFF00588E,
-                                                        ),
+                                                          const SizedBox(
+                                                            height: 4,
+                                                          ),
+                                                          Text(
+                                                            [
+                                                              'Sun',
+                                                              'Mon',
+                                                              'Tue',
+                                                              'Wed',
+                                                              'Thu',
+                                                              'Fri',
+                                                              'Sat',
+                                                            ][i],
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              color: Color(
+                                                                0xFF00588E,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
                                                       ),
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                    ),
-                                                    const SizedBox(height: 8),
-                                                    Text(
-                                                      '${shift.toUpperCase()} SHIFT',
-                                                      style: TextStyle(
-                                                        fontSize: 24,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Color(
-                                                          0xFF00588E,
-                                                        ),
-                                                      ),
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                    ),
-                                                    const SizedBox(height: 6),
-                                                    Text(
-                                                      timeRange,
-                                                      style: TextStyle(
-                                                        fontSize: 18,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        color: Color(
-                                                          0xFF00588E,
-                                                        ),
-                                                      ),
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                    ),
                                                   ],
                                                 ),
-                                              ),
-                                            ],
+                                              ],
+                                            ),
                                           ),
-                                        ),
 
-                                        const SizedBox(height: 15),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ],
+                                          const SizedBox(height: 15),
+
+                                          // Current Shift Schedule
+                                          Container(
+                                            padding: const EdgeInsets.all(16),
+                                            decoration: BoxDecoration(
+                                              color: Color(0xFFB7DDF5),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.access_time,
+                                                  color: Color(0xFF00588E),
+                                                  size: 70,
+                                                ),
+                                                const SizedBox(width: 20),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      const Text(
+                                                        'Current Shift Schedule',
+                                                        style: TextStyle(
+                                                          fontSize: 16,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: Color(
+                                                            0xFF00588E,
+                                                          ),
+                                                        ),
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Text(
+                                                        '${shift.toUpperCase()} SHIFT',
+                                                        style: TextStyle(
+                                                          fontSize: 24,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: Color(
+                                                            0xFF00588E,
+                                                          ),
+                                                        ),
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                      ),
+                                                      const SizedBox(height: 6),
+                                                      Text(
+                                                        timeRange,
+                                                        style: TextStyle(
+                                                          fontSize: 18,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: Color(
+                                                            0xFF00588E,
+                                                          ),
+                                                        ),
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+
+                                          const SizedBox(height: 15),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -2261,9 +2669,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   ) async {
     print('Showing task dialog for task: $taskId');
     try {
-      await _taskAudioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _taskAudioPlayer.play(AssetSource('sounds/alarm.mp3'));
-
       if (!mounted) return;
 
       // Fetch task data to get frequency
@@ -2297,7 +2702,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                 iconSize: 28,
                 icon: const Icon(Icons.close, color: Color(0xFF00588E)),
                 onPressed: () async {
-                  await _taskAudioPlayer.stop();
                   Navigator.of(main.navigatorKey.currentContext!).pop();
                   if (frequency == 'Once') {
                     await _firestore
@@ -2447,9 +2851,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       ),
                     ),
                     onPressed: () async {
-                      await _taskAudioPlayer.stop();
-                      Navigator.of(main.navigatorKey.currentContext!).pop();
-
                       // Handle task based on frequency
                       if (frequency == 'Once') {
                         await _firestore
@@ -2465,6 +2866,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               'task_start': Timestamp.fromDate(nextDate),
                             });
                       }
+
+                      Navigator.of(main.navigatorKey.currentContext!).pop();
                     },
                     child: Text(
                       'OK',
@@ -2489,7 +2892,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       ),
                     ),
                     onPressed: () async {
-                      await _taskAudioPlayer.stop();
                       Navigator.of(main.navigatorKey.currentContext!).pop();
                       if (frequency == 'Once') {
                         await _firestore
@@ -2834,6 +3236,110 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   },
                 ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------- BIRTHDAY SECTION ----------------------
+  Widget _birthdaySection() {
+    if (_todaysBirthdays.isEmpty) {
+      return const SizedBox.shrink(); // Don't show section if no birthdays
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color.fromRGBO(
+          255,
+          223,
+          186,
+          0.25,
+        ), // Light orange background
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(
+                Icons.cake,
+                color: Color(0xFFFF6B35), // Orange color for birthday
+                size: 45,
+              ),
+              SizedBox(width: 8),
+              Text(
+                "Today's Birthdays",
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFFF6B35),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: () {
+              final names = _todaysBirthdays
+                  .map((b) => b['name'] as String)
+                  .toList();
+              final today = DateTime.now().toIso8601String().split('T')[0];
+              final acknowledgedKey = 'birthday_acknowledged_all_$today';
+              _showBirthdayDialog(names, acknowledgedKey, isManualTap: true);
+            },
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFFF6B35).withOpacity(0.3),
+                  width: 2,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          '🎉 Happy Birthday! 🎂',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFFF6B35),
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.arrow_forward_ios,
+                        color: Color(0xFFFF6B35),
+                        size: 20,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ..._todaysBirthdays.map((birthday) {
+                    final name = birthday['name'] as String;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        name,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
+            ),
           ),
         ],
       ),

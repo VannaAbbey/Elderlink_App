@@ -131,11 +131,13 @@ class _MedicationDetailScreenState extends State<MedicationDetailScreen>
 
   Future<void> saveMedication() async {
     if (!_allFieldsValid()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Please fill all fields correctly before saving."),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Please fill all fields correctly before saving."),
+          ),
+        );
+      }
       return;
     }
 

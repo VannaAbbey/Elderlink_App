@@ -1,11 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
+
+// Top-level function for Android Alarm Manager callback
+@pragma('vm:entry-point')
+void showMedicationNotificationCallback(
+  int id,
+  Map<String, dynamic>? params,
+) async {
+  final title = params?['title'] as String? ?? 'Medication Reminder';
+  final body = params?['body'] as String? ?? 'Time for medication';
+  final payload = params?['payload'] as String?;
+
+  final notifications = FlutterLocalNotificationsPlugin();
+  const androidDetails = AndroidNotificationDetails(
+    'task_channel',
+    'Medical Tasks',
+    importance: Importance.max,
+    priority: Priority.max,
+    playSound: true,
+    fullScreenIntent: true,
+  );
+  final details = NotificationDetails(android: androidDetails);
+
+  await notifications.show(id, title, body, details, payload: payload);
+}
 
 class NotificationService {
   static final _notifications = FlutterLocalNotificationsPlugin();
@@ -20,7 +43,8 @@ class NotificationService {
     Function(String?)? onNotificationTap,
     Function(String?)? onNotificationReceived,
   }) async {
-    tz.initializeTimeZones();
+    // Initialize Android Alarm Manager
+    await AndroidAlarmManager.initialize();
 
     // Request notification permissions
     await _requestPermissions();
@@ -206,31 +230,14 @@ class NotificationService {
       return;
     }
 
-    await _notifications.zonedSchedule(
+    // Use Android Alarm Manager for reliable scheduling
+    await AndroidAlarmManager.oneShotAt(
+      dateTime,
       id,
-      title,
-      body,
-      tz.TZDateTime.from(dateTime, tz.local),
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'task_channel',
-          'Medical Tasks',
-          importance: Importance.max,
-          priority: Priority.max,
-          playSound: true,
-          fullScreenIntent:
-              true, // Set to true to ensure notifications show at exact time even on lock screen
-        ),
-        iOS: DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-        ),
-      ),
-      androidAllowWhileIdle: true,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      payload: payload,
+      showMedicationNotificationCallback,
+      params: {'title': title, 'body': body, 'payload': payload},
+      exact: true,
+      wakeup: true,
     );
   }
 

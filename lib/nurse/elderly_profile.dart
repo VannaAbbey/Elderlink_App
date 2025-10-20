@@ -965,17 +965,21 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
                                   Navigator.pop(context);
                                   Navigator.pop(context);
 
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Elderly details submitted for admin approval',
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Elderly details submitted for admin approval',
+                                        ),
                                       ),
-                                    ),
-                                  );
+                                    );
+                                  }
                                 } catch (e) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Error: $e')),
-                                  );
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Error: $e')),
+                                    );
+                                  }
                                 }
                               }
                             : null,

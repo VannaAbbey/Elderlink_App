@@ -13,15 +13,16 @@ class LeaveForm extends StatefulWidget {
 
 class _LeaveFormState extends State<LeaveForm> {
   final _formKey = GlobalKey<FormState>();
-  
+
   // Controllers
   late TextEditingController _fullNameController;
   late TextEditingController _contactInfoController;
-  final TextEditingController _emergencyContactController = TextEditingController();
+  final TextEditingController _emergencyContactController =
+      TextEditingController();
   final TextEditingController _reasonController = TextEditingController();
   final TextEditingController _startDateController = TextEditingController();
   final TextEditingController _endDateController = TextEditingController();
-  
+
   // Dropdown values
   String? _selectedLeaveType;
   final List<String> _leaveTypes = [
@@ -29,13 +30,13 @@ class _LeaveFormState extends State<LeaveForm> {
     'Vacation',
     'Emergency',
     'Personal',
-    'Others'
+    'Others',
   ];
-  
+
   DateTime? _startDate;
   DateTime? _endDate;
   bool _isSubmitting = false;
-  
+
   // Caregiver's assigned working days
   List<String> _assignedDays = [];
   String? _shiftStartTime; // Store shift start time (e.g., "08:00")
@@ -46,31 +47,30 @@ class _LeaveFormState extends State<LeaveForm> {
     // Initialize controllers with user data
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     _fullNameController = TextEditingController(
-      text: '${authProvider.userFirstName} ${authProvider.userLastName}'.trim()
+      text: '${authProvider.userFirstName} ${authProvider.userLastName}'.trim(),
     );
     _contactInfoController = TextEditingController(
-      text: authProvider.userContactNum
+      text: authProvider.userContactNum,
     );
-    
+
     // Load caregiver's assigned days
     _loadCaregiverSchedule();
   }
-  
+
   /// Load caregiver's assigned working days from Firestore
   Future<void> _loadCaregiverSchedule() async {
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final caregiverId = authProvider.currentUser?.uid;
-      
+
       if (caregiverId == null) {
         print('⚠️ LeaveForm: No caregiver ID found');
-        setState(() {
-        });
+        setState(() {});
         return;
       }
-      
+
       print('🔍 LeaveForm: Loading schedule for caregiver: $caregiverId');
-      
+
       // Query house_shift_assignments to get assigned days
       final assignSnapshot = await FirebaseFirestore.instance
           .collection('house_shift_assignments')
@@ -78,72 +78,82 @@ class _LeaveFormState extends State<LeaveForm> {
           .where('user_type', isEqualTo: 'caregiver')
           .limit(1)
           .get();
-      
+
       if (assignSnapshot.docs.isNotEmpty) {
         final assignData = assignSnapshot.docs.first.data();
-        final daysAssigned = List<String>.from(assignData['days_assigned'] ?? []);
+        final daysAssigned = List<String>.from(
+          assignData['days_assigned'] ?? [],
+        );
         final startTime = assignData['start_time'] as String? ?? '00:00';
-        
+
         setState(() {
           _assignedDays = daysAssigned;
           _shiftStartTime = startTime;
         });
-        
+
         print('✅ LeaveForm: Assigned days loaded: $_assignedDays');
         print('✅ LeaveForm: Shift start time: $_shiftStartTime');
       } else {
         print('⚠️ LeaveForm: No assignment found for caregiver');
-        setState(() {
-        });
+        setState(() {});
       }
     } catch (e) {
       print('❌ LeaveForm: Error loading caregiver schedule: $e');
-      setState(() {
-      });
+      setState(() {});
     }
   }
-  
+
   /// Check if a date falls on one of the caregiver's assigned working days
   bool _isWorkingDay(DateTime date) {
     if (_assignedDays.isEmpty) {
       // If no assigned days loaded, allow all dates (fallback)
       return true;
     }
-    
-    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    const weekdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
     final dayName = weekdays[date.weekday - 1];
-    
+
     return _assignedDays.contains(dayName);
   }
-  
+
   /// Check if the caregiver's duty has already started for today
   bool _hasDutyStartedToday(DateTime date) {
     final now = DateTime.now();
-    
+
     // Only check for today
-    if (date.year != now.year || date.month != now.month || date.day != now.day) {
+    if (date.year != now.year ||
+        date.month != now.month ||
+        date.day != now.day) {
       return false; // Not today, so duty hasn't started
     }
-    
+
     // Check if today is a working day
     if (!_isWorkingDay(date)) {
       return false; // Not a working day, so no duty
     }
-    
+
     // Parse shift start time
     if (_shiftStartTime == null || _shiftStartTime!.isEmpty) {
       return false; // No start time defined, allow selection
     }
-    
+
     try {
       final timeParts = _shiftStartTime!.split(':');
       if (timeParts.length != 2) {
         return false; // Invalid format
       }
-      
+
       final shiftHour = int.parse(timeParts[0]);
       final shiftMinute = int.parse(timeParts[1]);
-      
+
       final shiftStartDateTime = DateTime(
         now.year,
         now.month,
@@ -151,33 +161,37 @@ class _LeaveFormState extends State<LeaveForm> {
         shiftHour,
         shiftMinute,
       );
-      
+
       // If current time is past shift start time, duty has started
-      final dutyStarted = now.isAfter(shiftStartDateTime) || now.isAtSameMomentAs(shiftStartDateTime);
-      
+      final dutyStarted =
+          now.isAfter(shiftStartDateTime) ||
+          now.isAtSameMomentAs(shiftStartDateTime);
+
       if (dutyStarted) {
-        print('⏰ LeaveForm: Duty has already started today at $_shiftStartTime (current: ${now.hour}:${now.minute})');
+        print(
+          '⏰ LeaveForm: Duty has already started today at $_shiftStartTime (current: ${now.hour}:${now.minute})',
+        );
       }
-      
+
       return dutyStarted;
     } catch (e) {
       print('❌ LeaveForm: Error parsing shift start time: $e');
       return false; // On error, allow selection
     }
   }
-  
+
   /// Check if a date is selectable in the date picker
   bool _isDateSelectable(DateTime date) {
     // First check if it's a working day
     if (!_isWorkingDay(date)) {
       return false;
     }
-    
+
     // Then check if duty has already started for today
     if (_hasDutyStartedToday(date)) {
       return false;
     }
-    
+
     return true;
   }
 
@@ -205,7 +219,13 @@ class _LeaveFormState extends State<LeaveForm> {
           icon: const Icon(Icons.arrow_back, color: Color(0xFF00588e)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text('Leave Request', style: TextStyle(color: Color(0xFF00588e), fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Leave Request',
+          style: TextStyle(
+            color: Color(0xFF00588e),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         centerTitle: true,
       ),
       body: Stack(
@@ -315,7 +335,8 @@ class _LeaveFormState extends State<LeaveForm> {
                             icon: Icons.edit_note,
                             label: 'Reason for Leave',
                             controller: _reasonController,
-                            hint: 'Please provide details about your leave request',
+                            hint:
+                                'Please provide details about your leave request',
                             maxLines: 4,
                             required: true,
                           ),
@@ -328,7 +349,9 @@ class _LeaveFormState extends State<LeaveForm> {
                                 color: const Color(0xFF00588e).withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
-                                  color: const Color(0xFF00588e).withOpacity(0.3),
+                                  color: const Color(
+                                    0xFF00588e,
+                                  ).withOpacity(0.3),
                                   width: 1,
                                 ),
                               ),
@@ -336,7 +359,8 @@ class _LeaveFormState extends State<LeaveForm> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       const Icon(
                                         Icons.info_outline,
@@ -359,7 +383,8 @@ class _LeaveFormState extends State<LeaveForm> {
                                   if (_hasDutyStartedToday(DateTime.now())) ...[
                                     const SizedBox(height: 8),
                                     Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         const Icon(
                                           Icons.schedule,
@@ -395,7 +420,7 @@ class _LeaveFormState extends State<LeaveForm> {
                                   onDateSelected: (date) {
                                     setState(() {
                                       _startDate = date;
-                                      _startDateController.text = 
+                                      _startDateController.text =
                                           '${date.day}/${date.month}/${date.year}';
                                     });
                                     // Validate date range after setting start date
@@ -412,7 +437,7 @@ class _LeaveFormState extends State<LeaveForm> {
                                   onDateSelected: (date) {
                                     setState(() {
                                       _endDate = date;
-                                      _endDateController.text = 
+                                      _endDateController.text =
                                           '${date.day}/${date.month}/${date.year}';
                                     });
                                     // Validate date range after setting end date
@@ -428,7 +453,9 @@ class _LeaveFormState extends State<LeaveForm> {
                             width: double.infinity,
                             height: 50,
                             child: ElevatedButton(
-                              onPressed: _isSubmitting ? null : _submitLeaveRequest,
+                              onPressed: _isSubmitting
+                                  ? null
+                                  : _submitLeaveRequest,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF00588e),
                                 foregroundColor: Colors.white,
@@ -439,7 +466,8 @@ class _LeaveFormState extends State<LeaveForm> {
                               ),
                               child: _isSubmitting
                                   ? const Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
                                       children: [
                                         SizedBox(
                                           width: 20,
@@ -543,7 +571,10 @@ class _LeaveFormState extends State<LeaveForm> {
             ),
             filled: true,
             fillColor: enabled ? Colors.white : Colors.grey[50],
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
           ),
           validator: required
               ? (value) {
@@ -606,13 +637,13 @@ class _LeaveFormState extends State<LeaveForm> {
             ),
             filled: true,
             fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
           ),
           items: _leaveTypes.map((String type) {
-            return DropdownMenuItem<String>(
-              value: type,
-              child: Text(type),
-            );
+            return DropdownMenuItem<String>(value: type, child: Text(type));
           }).toList(),
           onChanged: (String? newValue) {
             setState(() {
@@ -641,7 +672,11 @@ class _LeaveFormState extends State<LeaveForm> {
       children: [
         Row(
           children: [
-            const Icon(Icons.calendar_today, color: Color(0xFF00588e), size: 20),
+            const Icon(
+              Icons.calendar_today,
+              color: Color(0xFF00588e),
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Text(
               label,
@@ -682,13 +717,19 @@ class _LeaveFormState extends State<LeaveForm> {
             ),
             filled: true,
             fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            suffixIcon: const Icon(Icons.calendar_today, color: Color(0xFF00588e)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
+            suffixIcon: const Icon(
+              Icons.calendar_today,
+              color: Color(0xFF00588e),
+            ),
           ),
           onTap: () async {
             // Find the initial date for the picker
             DateTime initialPickerDate = selectedDate ?? DateTime.now();
-            
+
             // If the initial date is not selectable, find the next selectable date
             if (!_isDateSelectable(initialPickerDate)) {
               DateTime candidate = initialPickerDate;
@@ -708,7 +749,7 @@ class _LeaveFormState extends State<LeaveForm> {
                 initialPickerDate = DateTime.now();
               }
             }
-            
+
             final DateTime? picked = await showDatePicker(
               context: context,
               initialDate: initialPickerDate,
@@ -749,46 +790,58 @@ class _LeaveFormState extends State<LeaveForm> {
 
   Future<void> _submitLeaveRequest() async {
     if (!_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please fill in all required fields'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please fill in all required fields'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
     // Additional validation for date range
     if (_startDate == null || _endDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select both start and end dates'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select both start and end dates'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
     // Validate dates using service
     if (!LeaveRequestService.validateLeaveDates(_startDate!, _endDate!)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Invalid dates. Start date cannot be in the past and end date must be after start date.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Invalid dates. Start date cannot be in the past and end date must be after start date.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
     // Validate maximum 3 days restriction
     final duration = _endDate!.difference(_startDate!).inDays + 1;
     if (duration > 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Leave request cannot exceed 3 days. Please select a shorter duration.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Leave request cannot exceed 3 days. Please select a shorter duration.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
       return;
     }
 
@@ -798,14 +851,21 @@ class _LeaveFormState extends State<LeaveForm> {
 
     try {
       // Check for overlapping leave requests
-      final hasOverlap = await LeaveRequestService.hasOverlappingLeave(_startDate!, _endDate!);
+      final hasOverlap = await LeaveRequestService.hasOverlappingLeave(
+        _startDate!,
+        _endDate!,
+      );
       if (hasOverlap) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('You already have a pending or approved leave request for these dates.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'You already have a pending or approved leave request for these dates.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
         return;
       }
 
@@ -821,50 +881,57 @@ class _LeaveFormState extends State<LeaveForm> {
       );
 
       // Show success message with request ID
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Leave request submitted successfully!\nRequest ID: $requestId'),
-          backgroundColor: const Color(0xFF00588e),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Leave request submitted successfully!\nRequest ID: $requestId',
+            ),
+            backgroundColor: const Color(0xFF00588e),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
 
-        // Save leave type for dialog before clearing form
-        final leaveTypeForDialog = _selectedLeaveType;
+      // Save leave type for dialog before clearing form
+      final leaveTypeForDialog = _selectedLeaveType;
 
-        // Clear form after successful submission
-        _emergencyContactController.clear();
-        _reasonController.clear();
-        _startDateController.clear();
-        _endDateController.clear();
-        setState(() {
-          _selectedLeaveType = null;
-          _startDate = null;
-          _endDate = null;
-        });
+      // Clear form after successful submission
+      _emergencyContactController.clear();
+      _reasonController.clear();
+      _startDateController.clear();
+      _endDateController.clear();
+      setState(() {
+        _selectedLeaveType = null;
+        _startDate = null;
+        _endDate = null;
+      });
 
-        // Show dialog with correct leave type
-        _showSuccessDialog(requestId, leaveTypeForDialog);
-
+      // Show dialog with correct leave type
+      _showSuccessDialog(requestId, leaveTypeForDialog);
     } catch (e) {
       print('Error submitting leave request: $e');
-      
+
       String errorMessage;
       if (e.toString().contains('User not authenticated')) {
         errorMessage = 'Please log in to submit a leave request.';
       } else if (e.toString().contains('network')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
+        errorMessage =
+            'Network error. Please check your connection and try again.';
       } else {
-        errorMessage = 'Failed to submit leave request. Please try again later.';
+        errorMessage =
+            'Failed to submit leave request. Please try again later.';
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMessage),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } finally {
       setState(() {
         _isSubmitting = false;
@@ -932,10 +999,7 @@ class _LeaveFormState extends State<LeaveForm> {
               const SizedBox(height: 12),
               const Text(
                 'You will be notified once your request has been reviewed.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
-                ),
+                style: TextStyle(fontSize: 14, color: Colors.grey),
               ),
             ],
           ),
@@ -982,11 +1046,7 @@ class _LeaveFormState extends State<LeaveForm> {
           ),
           title: Row(
             children: [
-              Icon(
-                Icons.warning,
-                color: Colors.orange,
-                size: 28,
-              ),
+              Icon(Icons.warning, color: Colors.orange, size: 28),
               const SizedBox(width: 12),
               const Text(
                 'Maximum Days Exceeded',

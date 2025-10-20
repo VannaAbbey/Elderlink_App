@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
 import 'notification_service.dart';
+import 'package:confetti/confetti.dart';
 
 class UpcomingMedicationsTab extends StatefulWidget {
   final String houseId;
@@ -30,25 +31,65 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   // Keyed by: houseId|nurseName|shift|day to avoid cross-shift staleness.
   static final Map<String, List<Map<String, dynamic>>> _medsCache = {};
   static final Map<String, DateTime> _medsCacheTime = {};
-  static const Duration _cacheDuration = Duration(minutes: 2);
+  // Track medication IDs that were recently created by this instance so they
+  // can be included immediately in the upcoming list without relying on
+  // server timestamps or background sync.
+  static final Set<String> _recentlyCreatedMedIds = {};
+  static const Duration _cacheDuration = Duration(minutes: 10);
   List<Map<String, String>> _elderlyList = [];
   String? _selectedElderly;
   bool _isLoading = false;
   List<Map<String, dynamic>> _upcomingMedications = [];
+  // Selection mode for bulk deletion
+  bool _selectionMode = false;
+  final Set<String> _selectedMedicationIds = {};
   Timer? _missedMedicationTimer;
   Timer? _autoRefreshTimer;
   Timer? _scheduleCheckTimer;
+  late ConfettiController _confettiController;
   late DateTime _selectedDate;
   bool _isNurseScheduled = false;
   bool _isAddMedicationDialogOpen = false;
+  List<String> _nurseWorkingDays = [];
+
+  Future<List<String>> _fetchNurseWorkingDays() async {
+    try {
+      final nurseId = await _getNurseId();
+      if (nurseId == null) return [];
+      final query = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .get();
+      final days = <String>{};
+      for (var doc in query.docs) {
+        final data = doc.data();
+        final assigned = List<String>.from(data['days_assigned'] ?? []);
+        for (var d in assigned) {
+          days.add(d);
+        }
+      }
+      return days.toList();
+    } catch (e) {
+      print('Error fetching nurse working days: $e');
+      return [];
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _selectedDate = widget.selectedDate ?? DateTime.now();
+    // Normalize selected date to date-only (year, month, day)
+    final initDate = widget.selectedDate ?? DateTime.now();
+    _selectedDate = DateTime(initDate.year, initDate.month, initDate.day);
     // Prewarm nurse id and load data (uses cache if available) to make
     // the first frame appear faster when switching tabs/houses.
     _prewarm();
+    // Load nurse working days to restrict calendar selection
+    _fetchNurseWorkingDays().then((days) {
+      if (mounted) setState(() => _nurseWorkingDays = days);
+    });
     _checkSchedule();
     _scheduleCheckTimer = Timer.periodic(
       Duration(seconds: 60),
@@ -56,6 +97,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     );
     _startMissedMedicationTimer();
     _startAutoRefreshTimer();
+    _confettiController = ConfettiController(duration: Duration(seconds: 2));
   }
 
   @override
@@ -67,6 +109,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       initialDate: _selectedDate,
       firstDate: DateTime(2020),
       lastDate: DateTime(2030),
+      selectableDayPredicate: (date) {
+        if (_nurseWorkingDays.isEmpty) return true;
+        final weekday = DateFormat('EEEE').format(date);
+        return _nurseWorkingDays.contains(weekday);
+      },
       builder: (BuildContext context, Widget? child) {
         return Theme(
           data: ThemeData.light().copyWith(
@@ -77,19 +124,23 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       },
     );
     if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-      });
-      // Reload medications for the new date
-      _prewarm();
+      final normalized = DateTime(picked.year, picked.month, picked.day);
+      if (normalized != _selectedDate) {
+        setState(() {
+          _selectedDate = normalized;
+        });
+        // Reload medications for the new date
+        _loadUpcomingMedications(forceRefresh: true);
+        _loadAssignedElderly();
+      }
     }
   }
 
   Future<void> _prewarm() async {
-    // Kick off assigned elderly and medications loading in background.
-    // We intentionally don't await both sequentially to reduce perceived wait.
-    _loadAssignedElderly();
-    _loadUpcomingMedications();
+    // Load assigned elderly first to determine nurse schedule and available elderly
+    await _loadAssignedElderly();
+    // Then load upcoming medications for the assigned elderly
+    await _loadUpcomingMedications();
   }
 
   @override
@@ -97,27 +148,47 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     _missedMedicationTimer?.cancel();
     _autoRefreshTimer?.cancel();
     _scheduleCheckTimer?.cancel();
+    _cancelAllMedicationTimers();
+    _confettiController.dispose();
     super.dispose();
   }
 
   Future<void> _checkSchedule() async {
     final scheduled = await _isNurseScheduledForToday();
-    if (mounted) setState(() => _isNurseScheduled = scheduled);
+    if (mounted) {
+      setState(() => _isNurseScheduled = scheduled || _elderlyList.isNotEmpty);
+    }
   }
 
   String _getSelectedDay() {
-    final now = _selectedDate;
+    // Determine the selected day name for shift assignment checks.
+    // Use the real current time to determine whether we're after midnight
+    // in the 3rd shift so we attribute the shift to the previous calendar day.
+    final now = DateTime.now();
     final currentHour = now.hour;
     final currentShift = _getCurrentShift();
-    if (currentHour >= 0 && currentHour < 6 && currentShift != "3rd") {
-      final previousDay = now.subtract(Duration(days: 1));
-      return DateFormat('EEEE').format(previousDay);
+    // If the selected date is today, preserve the original after-midnight
+    // logic so third-shift (22:00-06:00) early hours map to the previous day.
+    final today = DateTime(now.year, now.month, now.day);
+    final selectedDateOnly = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    if (selectedDateOnly.isAtSameMomentAs(today)) {
+      if (currentHour >= 0 && currentHour < 6 && currentShift == "3rd") {
+        final previousDay = now.subtract(Duration(days: 1));
+        return DateFormat('EEEE').format(previousDay);
+      }
+      return DateFormat('EEEE').format(now);
     }
-    return DateFormat('EEEE').format(now);
+
+    // For non-today selected dates, return the weekday of the selected date.
+    return DateFormat('EEEE').format(_selectedDate);
   }
 
   String _getCurrentShift() {
-    final currentHour = _selectedDate.hour;
+    final currentHour = DateTime.now().hour;
     if (currentHour >= 6 && currentHour < 14) return "1st";
     if (currentHour >= 14 && currentHour < 22) return "2nd";
     return "3rd";
@@ -145,85 +216,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
-  Future<String?> _getNurseId() async {
-    try {
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) return null;
-
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      return userQuery.docs.isNotEmpty ? userQuery.docs.first.id : null;
-    } catch (e) {
-      print('Error getting nurse ID: $e');
-      return null;
-    }
-  }
-
-  Future<List<String>> _getNurseWorkingDays(String nurseId) async {
-    try {
-      final currentShift = _getCurrentShift();
-      final currentDay = _getSelectedDay();
-
-      // For shifts that span midnight (like 3rd shift), we need special handling
-      if (currentShift == "3rd" && _selectedDate.hour < 6) {
-        // If it's 3rd shift and before 6 AM, check if nurse was assigned to previous day
-        final days = [
-          'Monday',
-          'Tuesday',
-          'Wednesday',
-          'Thursday',
-          'Friday',
-          'Saturday',
-          'Sunday',
-        ];
-        final currentDayIndex = days.indexOf(currentDay);
-        final previousDayIndex = currentDayIndex == 0 ? 6 : currentDayIndex - 1;
-        final previousDay = days[previousDayIndex];
-
-        // Check if nurse has 3rd shift assignment on the previous day
-        final shiftQuery = await _firestore
-            .collection('house_shift_assignments')
-            .where('user_id', isEqualTo: nurseId)
-            .where('user_type', isEqualTo: 'nurse')
-            .where('is_current', isEqualTo: true)
-            .where('shift', isEqualTo: currentShift)
-            .where('days_assigned', arrayContains: previousDay)
-            .get();
-
-        if (shiftQuery.docs.isNotEmpty) {
-          // Nurse was assigned to 3rd shift on previous day, so they're working today
-          return [currentDay];
-        }
-      }
-
-      // Normal case: check current shift and current day
-      final shiftQuery = await _firestore
-          .collection('house_shift_assignments')
-          .where('user_id', isEqualTo: nurseId)
-          .where('user_type', isEqualTo: 'nurse')
-          .where('is_current', isEqualTo: true)
-          .where('shift', isEqualTo: currentShift)
-          .get();
-
-      if (shiftQuery.docs.isNotEmpty) {
-        final data = shiftQuery.docs.first.data();
-        return List<String>.from(data['days_assigned'] ?? []);
-      }
-      return [];
-    } catch (e) {
-      print('Error getting nurse working days: $e');
-      return [];
-    }
-  }
-
   Future<bool> _isNurseScheduledForToday() async {
     try {
       final nurseId = await _getNurseId();
@@ -248,6 +240,25 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         }
       }
 
+      // If we didn't find an assignment that explicitly lists the current
+      // day, try a fallback: check whether the nurse has any current
+      // assignment that includes this house. This guards against cases
+      // where assignment documents may be structured differently or when
+      // days_assigned isn't populated but the nurse is effectively
+      // assigned to the house (we prefer being permissive here to avoid
+      // blocking the Add Medication action for nurses who should have access).
+      final fallbackQuery = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .get();
+      for (var doc in fallbackQuery.docs) {
+        final assignment = doc.data();
+        final assignedHouses = List<String>.from(assignment['house_ids'] ?? []);
+        if (assignedHouses.contains(widget.houseId)) return true;
+      }
+
       return false;
     } catch (e) {
       print('Error checking if nurse is scheduled for today: $e');
@@ -255,47 +266,89 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
-  Future<List<String>> _getNurseAssignedShiftsForToday() async {
+  // Removed unused helper functions: _getNurseAssignedShiftsForToday and
+  // _getShiftTimeString. Shift and schedule logic is handled elsewhere.
+
+  /// Returns the current nurse user id. First try to find a user document
+  /// that matches the provided widget.nurseName (if any). If that fails,
+  /// fall back to the authenticated Firebase user id.
+  Future<String?> _getNurseId() async {
     try {
-      final nurseId = await _getNurseId();
-      if (nurseId == null) return [];
+      // If a nurseName was provided, try a lookup by first/last name
+      if (widget.nurseName != null && widget.nurseName!.trim().isNotEmpty) {
+        final parts = widget.nurseName!.trim().split(' ');
+        final fname = parts.isNotEmpty ? parts.first : null;
+        final lname = parts.length > 1 ? parts.sublist(1).join(' ') : null;
 
-      final currentDay = _getSelectedDay();
+        Query query = _firestore
+            .collection('users')
+            .where('user_type', isEqualTo: 'nurse');
+        if (fname != null && fname.isNotEmpty) {
+          query = query.where('user_fname', isEqualTo: fname);
+        }
+        if (lname != null && lname.isNotEmpty) {
+          query = query.where('user_lname', isEqualTo: lname);
+        }
 
+        final snap = await query.limit(1).get();
+        if (snap.docs.isNotEmpty) {
+          return snap.docs.first.id;
+        }
+      }
+
+      // Fallback: use currently authenticated user id
+      final currentUser = FirebaseAuth.instance.currentUser;
+      return currentUser?.uid;
+    } catch (e) {
+      print('Error resolving nurse id: $e');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      return currentUser?.uid;
+    }
+  }
+
+  /// Get nurse working days for a specific nurse id (returns weekdays as list of names)
+  Future<List<String>> _getNurseWorkingDays(String nurseId) async {
+    try {
       final query = await _firestore
           .collection('house_shift_assignments')
           .where('user_id', isEqualTo: nurseId)
           .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('days_assigned', arrayContains: currentDay)
           .get();
-
-      final shifts = <String>[];
-      for (var doc in query.docs) {
-        final data = doc.data();
-        final shift = data['shift'] as String?;
-        if (shift != null && !shifts.contains(shift)) {
-          shifts.add(shift);
+      final days = <String>{};
+      for (final d in query.docs) {
+        final data = d.data();
+        final assigned = List<String>.from(data['days_assigned'] ?? []);
+        for (var ds in assigned) {
+          days.add(ds);
         }
       }
-      return shifts;
+      return days.toList();
     } catch (e) {
-      print('Error getting nurse assigned shifts: $e');
+      print('Error getting nurse working days for $nurseId: $e');
       return [];
     }
   }
 
-  String _getShiftTimeString(String shift) {
-    switch (shift) {
-      case '1st':
-        return '6:00AM TO 2:00PM';
-      case '2nd':
-        return '2:00PM TO 10:00PM';
-      case '3rd':
-        return '10:00PM TO 6:00AM';
-      default:
-        return '';
+  /// Safely show a SnackBar using the provided context if this State is still mounted.
+  void _safeShowSnackBar(BuildContext ctx, SnackBar sb) {
+    if (!mounted) return;
+    try {
+      ScaffoldMessenger.of(ctx).showSnackBar(sb);
+    } catch (e) {
+      // ignore errors when context is no longer valid
+      print('Failed to show SnackBar: $e');
     }
+  }
+
+  void _showNotScheduledMessage() {
+    _safeShowSnackBar(
+      context,
+      SnackBar(
+        content: Text('You are not scheduled for this shift today'),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   Future<void> _saveMedicationToDatabase({
@@ -335,9 +388,13 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         'dosage': dosage,
         'repeat_interval': repeatInterval,
         'shift': _getCurrentShift(),
-        'working_days': repeatInterval == 'Daily'
-            ? null // null means all days for Daily medications
-            : workingDays, // specific days for Once medications
+        // For Daily meds, working_days=null meaning every day. For Once,
+        // we'll store a one_time_date (exact calendar date) so the loader
+        // can include it only on that date.
+        'working_days': repeatInterval == 'Daily' ? null : null,
+        'one_time_date': repeatInterval == 'Once'
+            ? Timestamp.fromDate(_selectedDate)
+            : null,
         'created_at': Timestamp.fromDate(DateTime.now()),
         'updated_at': Timestamp.fromDate(DateTime.now()),
         'status': 'active',
@@ -348,6 +405,24 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           .add(medicationData);
 
       final medicationId = medicationDocRef.id;
+
+      // Track this medication id so loaders include it immediately.
+      try {
+        _recentlyCreatedMedIds.add(medicationId);
+        print(
+          'DEBUG: Added medId $medicationId to _recentlyCreatedMedIds (will expire in 5 minutes)',
+        );
+        // Remove after 5 minutes to avoid leaking memory and to revert to
+        // normal server-driven behavior.
+        Timer(Duration(minutes: 5), () {
+          _recentlyCreatedMedIds.remove(medicationId);
+          print(
+            'DEBUG: Removed medId $medicationId from _recentlyCreatedMedIds after 5 minutes',
+          );
+        });
+      } catch (e) {
+        print('DEBUG: Failed to add medId to recentlyCreated set: $e');
+      }
 
       // Update medication_id in the document
       await medicationDocRef.update({'medication_id': medicationId});
@@ -361,6 +436,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           'medication_id': medicationId,
           'take_number': i + 1,
           'scheduled_time': intakeTimesFormatted[i],
+          // For one-time medications, record the specific scheduled date so
+          // loaders can match takes to the exact calendar day.
+          'scheduled_date': repeatInterval == 'Once'
+              ? Timestamp.fromDate(_selectedDate)
+              : null,
           'status': 'pending',
           'completed_at': null,
           'completed_by': null,
@@ -371,6 +451,132 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Commit the batch
       await batch.commit();
+
+      // Debug: verify the medication_takes were created as expected
+      try {
+        final createdTakesSnap = await _firestore
+            .collection('medication_takes')
+            .where('medication_id', isEqualTo: medicationId)
+            .get();
+        print(
+          'DEBUG: After commit, found ${createdTakesSnap.docs.length} takes for med $medicationId',
+        );
+        for (var d in createdTakesSnap.docs) {
+          final td = d.data();
+          print(
+            'DEBUG: take doc ${d.id} -> scheduled_time:${td['scheduled_time']} status:${td['status']} scheduled_date:${td['scheduled_date'] ?? 'null'}',
+          );
+        }
+      } catch (e) {
+        print('DEBUG: Error fetching created takes for med $medicationId: $e');
+      }
+
+      // Immediately include the newly created medication into local state
+      // so the Upcoming UI displays it without waiting for background sync.
+      try {
+        final createdTakesSnap2 = await _firestore
+            .collection('medication_takes')
+            .where('medication_id', isEqualTo: medicationId)
+            .where('status', isEqualTo: 'pending')
+            .get();
+
+        final List<QueryDocumentSnapshot> createdTakesDocs =
+            createdTakesSnap2.docs;
+        // Build take_statuses and intake_times similar to loader
+        final takeStatusesLocal = <Map<String, dynamic>>[];
+        final intakeTimesLocal = <String>[];
+        for (final d in createdTakesDocs) {
+          final td = d.data() as Map<String, dynamic>;
+          takeStatusesLocal.add({
+            'take_number': td['take_number'],
+            'scheduled_time': td['scheduled_time'],
+            'status': td['status'],
+            'completed_at': td['completed_at'],
+            'completed_by': td['completed_by'],
+          });
+          intakeTimesLocal.add(td['scheduled_time']);
+        }
+
+        // Fetch elderly name for display
+        String elderlyName = 'Unknown';
+        try {
+          final elderlyDoc = await _firestore
+              .collection('elderly')
+              .doc(elderlyId)
+              .get();
+          if (elderlyDoc.exists) {
+            final ed = elderlyDoc.data() as Map<String, dynamic>;
+            elderlyName =
+                '${ed['elderly_fname'] ?? ''} ${ed['elderly_lname'] ?? ''}'
+                    .trim();
+            if (elderlyName.isEmpty) elderlyName = 'Unknown';
+          }
+        } catch (e) {
+          print('DEBUG: Error fetching elderly name for local include: $e');
+        }
+
+        final medicationEntry = {
+          'id': medicationId,
+          'elderly_name': elderlyName,
+          'medication_name': medicationData['medication_name'],
+          'dosage': medicationData['dosage'],
+          'repeat_interval': medicationData['repeat_interval'],
+          'shift': medicationData['shift'],
+          'working_days': medicationData['working_days'],
+          'status': medicationData['status'],
+          'elderly_id': elderlyId,
+          'house_id': medicationData['house_id'],
+          'created_nurse_id': medicationData['created_nurse_id'],
+          'number_of_intakes': takeStatusesLocal.length,
+          'intake_times': intakeTimesLocal,
+          'take_statuses': takeStatusesLocal,
+          'created_at': medicationData['created_at'],
+          'updated_at': medicationData['updated_at'],
+        };
+
+        // Insert into state and cache if it matches selected date takes
+        // Only include if at least one take is scheduled for the selected date
+        bool hasScheduledForSelected = false;
+        for (final t in takeStatusesLocal) {
+          final scheduled = t['scheduled_time'] as String?;
+          if (scheduled == null) continue;
+          final parts = scheduled.split(':');
+          if (parts.length < 2) continue;
+          final h = int.tryParse(parts[0]) ?? 0;
+          final min = int.tryParse(parts[1]) ?? 0;
+          final scheduledDateTime = DateTime(
+            _selectedDate.year,
+            _selectedDate.month,
+            _selectedDate.day,
+            h,
+            min,
+          );
+          if (scheduledDateTime.year == _selectedDate.year &&
+              scheduledDateTime.month == _selectedDate.month &&
+              scheduledDateTime.day == _selectedDate.day) {
+            hasScheduledForSelected = true;
+            break;
+          }
+        }
+
+        if (hasScheduledForSelected) {
+          if (mounted) {
+            setState(() {
+              // Prepend so new meds show at top
+              _upcomingMedications.insert(0, medicationEntry);
+              // Update cache for current key
+              final ck =
+                  '${widget.houseId}|${widget.nurseName ?? ''}|${_getCurrentShift()}|${_getSelectedDay()}';
+              final existing = _medsCache[ck] ?? [];
+              _medsCache[ck] = [medicationEntry, ...existing];
+              _medsCacheTime[ck] = DateTime.now();
+            });
+            widget.onCountChanged?.call(_getTotalTakeCount());
+          }
+        }
+      } catch (e) {
+        print('DEBUG: Error including newly created medication locally: $e');
+      }
 
       // Log the add medication activity to Medication_Activity_Logs for each take
       for (int i = 0; i < numberOfIntakes; i++) {
@@ -399,6 +605,26 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         medicationData,
         intakeTimes,
       );
+      // Clear relevant cache entries so the newly created medication shows immediately
+      try {
+        final keys = _medsCache.keys.toList();
+        print(
+          'DEBUG: Clearing meds cache entries for house ${widget.houseId}. Keys before clear: ${keys.length}',
+        );
+        for (final k in keys) {
+          if (k.startsWith('${widget.houseId}|')) {
+            print('DEBUG: Removing cache key: $k');
+            _medsCache.remove(k);
+            _medsCacheTime.remove(k);
+          }
+        }
+        final keysAfter = _medsCache.keys.toList();
+        print('DEBUG: Cache keys after clear: ${keysAfter.length}');
+      } catch (e) {
+        print('Error clearing meds cache after save: $e');
+      }
+
+      // Force-refresh upcoming medications so the UI includes the newly created med
       await _loadUpcomingMedications(forceRefresh: true);
 
       // Restart auto-refresh timer to prevent immediate auto-refresh after manual operation
@@ -436,12 +662,39 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final hour = int.tryParse(timeParts[0]) ?? 0;
         final minute = int.tryParse(timeParts[1]) ?? 0;
 
-        final taskStart = DateTime(now.year, now.month, now.day, hour, minute);
+        // If this take has an explicit scheduled_date (one-time medication),
+        // use that date instead of today.
+        final scheduledDateTs = takeData['scheduled_date'] as Timestamp?;
+        DateTime scheduledDate = now;
+        if (scheduledDateTs != null) {
+          scheduledDate = scheduledDateTs.toDate();
+        }
 
-        // If the scheduled time has already passed today, schedule for tomorrow
+        final taskStart = DateTime(
+          scheduledDate.year,
+          scheduledDate.month,
+          scheduledDate.day,
+          hour,
+          minute,
+        );
+
         DateTime finalTaskStart = taskStart;
+        // For any medication (recurring or one-time), if the computed taskStart is already past
+        // then schedule for the next day to avoid creating immediate past tasks.
         if (taskStart.isBefore(now)) {
           finalTaskStart = taskStart.add(Duration(days: 1));
+          // Update the scheduled_date in the take document to match the new day
+          await takeDoc.reference.update({
+            'scheduled_date': Timestamp.fromDate(
+              DateTime(
+                finalTaskStart.year,
+                finalTaskStart.month,
+                finalTaskStart.day,
+                hour,
+                minute,
+              ),
+            ),
+          });
         }
 
         // Skip past takes (shouldn't happen now, but keep as safety check)
@@ -494,15 +747,54 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           'days': 1,
         });
 
-        // schedule notification 5 minutes before (only if in future)
+        // Schedule notifications using timer-based approach (bypasses Android restrictions)
+        // Schedule notification 5 minutes before medication time
         final notifyTime = finalTaskStart.subtract(Duration(minutes: 5));
         if (notifyTime.isAfter(DateTime.now())) {
-          NotificationService.scheduleTaskNotification(
-            id: ('${medicationId}_${takeNumber - 1}').hashCode,
-            title: 'Medication Reminder',
-            body: '$medName for $elderlyName in 5 minutes',
-            dateTime: notifyTime,
-          );
+          final timeUntilNotify = notifyTime.difference(DateTime.now());
+          final timer = Timer(timeUntilNotify, () async {
+            try {
+              await NotificationService.showMedicalTaskNotification(
+                taskId: ('${medicationId}_${takeNumber - 1}').hashCode
+                    .toString(),
+                title: 'Medication Reminder',
+                description: '$medName for $elderlyName in 5 minutes',
+                elderlyName: elderlyName,
+                time:
+                    '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+              );
+              print(
+                '✅ Timer-based 5-minute medication reminder sent for: $medName at ${notifyTime.toString()}',
+              );
+            } catch (e) {
+              print('❌ Error sending 5-minute medication reminder: $e');
+            }
+          });
+          _activeMedicationTimers.add(timer);
+        }
+
+        // Schedule notification at exact medication time
+        if (finalTaskStart.isAfter(DateTime.now())) {
+          final timeUntilExact = finalTaskStart.difference(DateTime.now());
+          final exactTimer = Timer(timeUntilExact, () async {
+            try {
+              await NotificationService.showMedicalTaskNotification(
+                taskId: ('${medicationId}_${takeNumber - 1}_exact').hashCode
+                    .toString(),
+                title: 'Medication Time!',
+                description: 'Time for $medName for $elderlyName',
+                elderlyName: elderlyName,
+                time:
+                    '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+              );
+              print(
+                '✅ Timer-based exact medication notification sent for: $medName at ${finalTaskStart.toString()}',
+              );
+            } catch (e) {
+              print('❌ Error sending exact medication notification: $e');
+            }
+          });
+          _activeMedicationTimers.add(exactTimer);
         }
       }
     } catch (e) {
@@ -534,6 +826,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         setState(() {
           _elderlyList = [];
           _isLoading = false;
+          _isNurseScheduled = false;
         });
         return;
       }
@@ -554,8 +847,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       // For future dates, don't filter by shift to check if assigned to any shift on that day
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
-      if (_selectedDate.isAtSameMomentAs(today) ||
-          _selectedDate.isBefore(today)) {
+      // Only restrict by the CURRENT shift when viewing today.
+      // For past/future dates we should not force the current shift filter
+      // because assignments for other shifts on other days may exist.
+      if (_selectedDate.isAtSameMomentAs(today)) {
         shiftQueryBuilder = shiftQueryBuilder.where(
           'shift',
           isEqualTo: currentShift,
@@ -571,6 +866,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         setState(() {
           _elderlyList = [];
           _isLoading = false;
+          _isNurseScheduled = false;
         });
         return;
       }
@@ -590,9 +886,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           .where('is_current', isEqualTo: true)
           .where('day', isEqualTo: currentDay);
 
-      // For future dates, don't filter by shift
-      if (_selectedDate.isAtSameMomentAs(today) ||
-          _selectedDate.isBefore(today)) {
+      // Only restrict by shift when the selected date is today. For past
+      // dates we should not force the currentShift filter -- pending takes
+      // for past dates are considered missed and will be handled elsewhere.
+      if (_selectedDate.isAtSameMomentAs(today)) {
         nurseElderlyQueryBuilder = nurseElderlyQueryBuilder.where(
           'shift',
           isEqualTo: currentShift,
@@ -615,6 +912,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         setState(() {
           _elderlyList = [];
           _isLoading = false;
+          _isNurseScheduled = false;
         });
         return;
       }
@@ -636,6 +934,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         setState(() {
           _elderlyList = [];
           _isLoading = false;
+          _isNurseScheduled = false;
         });
         return;
       }
@@ -697,6 +996,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       setState(() {
         _elderlyList = newElderlyList;
         _isLoading = false;
+        // If we successfully loaded assigned elderly, treat nurse as scheduled
+        // for this house/date so the Add Medication FAB is available.
+        _isNurseScheduled = _elderlyList.isNotEmpty;
       });
     } catch (e) {
       print('Error loading assigned elderly: $e');
@@ -704,6 +1006,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         setState(() {
           _elderlyList = [];
           _isLoading = false;
+          _isNurseScheduled = false;
         });
       }
     }
@@ -813,10 +1116,18 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         return;
       }
 
-      // Filter medications by assigned elderly, shift and working day
+      // Filter medications by assigned elderly, shift and working day.
+      // Additionally, include medications created by the current nurse within
+      // the last few minutes so newly created medications appear immediately
+      // in the Upcoming tab even before background syncing completes.
       final medsToInclude = <Map<String, dynamic>>[];
       final elderlyIdsNeeded = <String>{};
       final medicationIds = <String>[];
+
+      // Determine a recent cutoff timestamp (5 minutes)
+      final recentCutoff = DateTime.now().subtract(Duration(minutes: 5));
+      final currentUser = FirebaseAuth.instance.currentUser;
+      final currentUserId = currentUser?.uid;
 
       for (final doc in medicationsQuery.docs) {
         final data = doc.data() as Map<String, dynamic>;
@@ -826,27 +1137,210 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         if (!assignedElderlyIds.contains(elderlyId)) continue;
 
         final medicationShift = data['shift'] as String?;
-        final workingDays = data['working_days'] as List?;
         final repeatInterval = data['repeat_interval'] as String?;
 
         // Check if medication is scheduled for current shift and day
         bool isScheduledForToday = false;
-        if (medicationShift == currentShift) {
-          if (repeatInterval == 'Daily' || workingDays == null) {
-            // Daily medications or null working_days means all days
-            isScheduledForToday = true;
-          } else if (workingDays.contains(currentDay)) {
-            // Once medications with specific working days
-            isScheduledForToday = true;
+        // If medication is Daily, it's scheduled every day (shift must match)
+        if (medicationShift == currentShift && repeatInterval == 'Daily') {
+          isScheduledForToday = true;
+        }
+
+        // If medication is Once, include it only on its scheduled date
+        if (repeatInterval == 'Once') {
+          final oneTimeDateTs = data['one_time_date'] as Timestamp?;
+          if (oneTimeDateTs != null) {
+            final oneTimeDate = DateTime(
+              oneTimeDateTs.toDate().year,
+              oneTimeDateTs.toDate().month,
+              oneTimeDateTs.toDate().day,
+            );
+            final sel = DateTime(
+              _selectedDate.year,
+              _selectedDate.month,
+              _selectedDate.day,
+            );
+            if (oneTimeDate.isAtSameMomentAs(sel)) {
+              // For once meds, still ensure shift matches if viewing today
+              if (!_selectedDate.isAtSameMomentAs(
+                    DateTime(now.year, now.month, now.day),
+                  ) ||
+                  medicationShift == currentShift) {
+                isScheduledForToday = true;
+              }
+            }
           }
         }
 
-        if (isScheduledForToday) {
+        final createdAt = data['created_at'] as Timestamp?;
+        final createdDate = createdAt?.toDate();
+
+        final bool isRecentByThisNurse =
+            createdDate != null &&
+            currentUserId != null &&
+            createdDate.isAfter(recentCutoff) &&
+            (data['created_nurse_id'] == currentUserId ||
+                data['created_nurse'] == currentUserId);
+
+        // Debug logs to understand inclusion/exclusion
+        try {
+          print(
+            'DEBUG: Med ${doc.id} elderly:$elderlyId shift:${medicationShift ?? 'null'} repeat:${repeatInterval ?? 'null'} created_at:${createdDate?.toIso8601String() ?? 'null'} created_by:${data['created_nurse_id'] ?? data['created_nurse'] ?? 'unknown'} isScheduled:$isScheduledForToday isRecentByThisNurse:$isRecentByThisNurse',
+          );
+        } catch (e) {
+          print('DEBUG: Failed to print med debug info for ${doc.id}: $e');
+        }
+
+        final bool isRecentById = _recentlyCreatedMedIds.contains(doc.id);
+        if (isRecentById) {
+          print(
+            'DEBUG: Med ${doc.id} is in _recentlyCreatedMedIds and will be included immediately',
+          );
+        }
+
+        if (isScheduledForToday || isRecentByThisNurse || isRecentById) {
           medsToInclude.add({'id': doc.id, ...data});
           elderlyIdsNeeded.add(elderlyId);
           medicationIds.add(doc.id);
         }
       }
+
+      // Ensure any recently created meds by this instance are included even
+      // if the initial collection query returned other medications. Firestore
+      // can be eventually consistent, so fetch any recent ids not already
+      // included and add them when they match the current house and
+      // assignment.
+      if (_recentlyCreatedMedIds.isNotEmpty) {
+        for (final recentId in _recentlyCreatedMedIds.toList()) {
+          try {
+            if (medicationIds.contains(recentId)) continue;
+            final recentSnap = await _firestore
+                .collection('medications')
+                .doc(recentId)
+                .get();
+            if (!recentSnap.exists) continue;
+            final data = recentSnap.data() as Map<String, dynamic>;
+            final house = data['house_id'] as String?;
+            final elderlyId = data['elderly_id'] as String?;
+            if (house != widget.houseId || elderlyId == null) continue;
+            if (!assignedElderlyIds.contains(elderlyId)) continue;
+
+            // Determine scheduling rules similar to the main loop
+            final medicationShift = data['shift'] as String?;
+            final repeatInterval = data['repeat_interval'] as String?;
+            bool isScheduledForToday = false;
+            if (medicationShift == currentShift && repeatInterval == 'Daily') {
+              isScheduledForToday = true;
+            }
+            if (repeatInterval == 'Once') {
+              final oneTimeDateTs = data['one_time_date'] as Timestamp?;
+              if (oneTimeDateTs != null) {
+                final oneTimeDate = DateTime(
+                  oneTimeDateTs.toDate().year,
+                  oneTimeDateTs.toDate().month,
+                  oneTimeDateTs.toDate().day,
+                );
+                final sel = DateTime(
+                  _selectedDate.year,
+                  _selectedDate.month,
+                  _selectedDate.day,
+                );
+                if (oneTimeDate.isAtSameMomentAs(sel)) {
+                  if (!_selectedDate.isAtSameMomentAs(
+                        DateTime(now.year, now.month, now.day),
+                      ) ||
+                      medicationShift == currentShift) {
+                    isScheduledForToday = true;
+                  }
+                }
+              }
+            }
+
+            if (isScheduledForToday) {
+              medsToInclude.add({'id': recentSnap.id, ...data});
+              elderlyIdsNeeded.add(elderlyId);
+              medicationIds.add(recentSnap.id);
+              print(
+                'DEBUG: Included recent med $recentId via unconditional fallback',
+              );
+            }
+          } catch (e) {
+            print('DEBUG: Error including recent med $recentId: $e');
+          }
+        }
+      }
+
+      // Fallback: if no medications were returned by the main query but we
+      // recently created medications in this instance, attempt to fetch
+      // those medication documents directly and include them when they match
+      // the current house and assignment. This handles race conditions where
+      // the newly created med may not appear in the initial collection query
+      // immediately.
+      if (medsToInclude.isEmpty && _recentlyCreatedMedIds.isNotEmpty) {
+        try {
+          for (final recentId in _recentlyCreatedMedIds.toList()) {
+            final docSnap = await _firestore
+                .collection('medications')
+                .doc(recentId)
+                .get();
+            if (!docSnap.exists) continue;
+            final data = docSnap.data() as Map<String, dynamic>;
+            // Quick filters: house and elderly must match
+            final house = data['house_id'] as String?;
+            final elderlyId = data['elderly_id'] as String?;
+            if (house != widget.houseId || elderlyId == null) continue;
+
+            // Ensure elderly is assigned to this nurse for the selected date
+            if (!assignedElderlyIds.contains(elderlyId)) continue;
+
+            final medicationShift = data['shift'] as String?;
+            final repeatInterval = data['repeat_interval'] as String?;
+
+            bool isScheduledForToday = false;
+            if (medicationShift == currentShift && repeatInterval == 'Daily') {
+              isScheduledForToday = true;
+            }
+            if (repeatInterval == 'Once') {
+              final oneTimeDateTs = data['one_time_date'] as Timestamp?;
+              if (oneTimeDateTs != null) {
+                final oneTimeDate = DateTime(
+                  oneTimeDateTs.toDate().year,
+                  oneTimeDateTs.toDate().month,
+                  oneTimeDateTs.toDate().day,
+                );
+                final sel = DateTime(
+                  _selectedDate.year,
+                  _selectedDate.month,
+                  _selectedDate.day,
+                );
+                if (oneTimeDate.isAtSameMomentAs(sel)) {
+                  if (!_selectedDate.isAtSameMomentAs(
+                        DateTime(now.year, now.month, now.day),
+                      ) ||
+                      medicationShift == currentShift) {
+                    isScheduledForToday = true;
+                  }
+                }
+              }
+            }
+
+            if (isScheduledForToday) {
+              medsToInclude.add({'id': docSnap.id, ...data});
+              elderlyIdsNeeded.add(elderlyId);
+              medicationIds.add(docSnap.id);
+            }
+          }
+        } catch (e) {
+          print('DEBUG: Fallback fetch for recently created meds failed: $e');
+        }
+      }
+
+      print(
+        'DEBUG: medsToInclude count: ${medsToInclude.length}. medicationIds: ${medicationIds}',
+      );
+      print(
+        'DEBUG: _recentlyCreatedMedIds currently contains: ${_recentlyCreatedMedIds}',
+      );
 
       if (medicationIds.isEmpty) {
         if (mounted) {
@@ -887,21 +1381,49 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         // Include takes that are either:
         // 1. Pending and within current shift (normal upcoming medications)
+        //    OR pending and belong to a recently-created medication (show immediately)
         // 2. Completed or missed for medications assigned to this nurse (show history)
         bool shouldInclude = false;
 
+        final bool isRecentById = _recentlyCreatedMedIds.contains(medId);
+
         if (status == 'pending') {
-          // For pending takes, include if the selected date is today and within current shift, or if future date
+          // For pending takes:
+          // - If selected date is in the future -> include (upcoming)
+          // - If selected date is today -> include those in current shift
+          //   OR include all pending takes for medications just created by this nurse
+          // - If selected date is before today -> DO NOT include (these are missed)
           final scheduledTimeStr = takeData['scheduled_time'] as String?;
           final now = DateTime.now();
           final today = DateTime(now.year, now.month, now.day);
-          if (_selectedDate.isAtSameMomentAs(today) ||
-              _selectedDate.isBefore(today)) {
-            shouldInclude =
-                scheduledTimeStr != null &&
-                _isTimeInCurrentShift(scheduledTimeStr);
+          if (_selectedDate.isAfter(today)) {
+            shouldInclude = true; // future pending takes
+          } else if (_selectedDate.isAtSameMomentAs(today)) {
+            if (isRecentById) {
+              // Newly created med: show all its pending takes for today
+              shouldInclude = true;
+            } else if (scheduledTimeStr != null) {
+              // Parse scheduled time and include only if it's not already past
+              final parts = scheduledTimeStr.split(':');
+              int h = 0;
+              int min = 0;
+              if (parts.isNotEmpty) h = int.tryParse(parts[0]) ?? 0;
+              if (parts.length > 1) min = int.tryParse(parts[1]) ?? 0;
+              final scheduledDateTime = DateTime(
+                _selectedDate.year,
+                _selectedDate.month,
+                _selectedDate.day,
+                h,
+                min,
+              );
+              // Show take if scheduled time is now or later
+              // Modified: Always include pending medications so nurses can manually mark them as completed or missed
+              shouldInclude = true;
+            } else {
+              shouldInclude = false;
+            }
           } else {
-            shouldInclude = true; // Include all pending takes for future dates
+            shouldInclude = false; // past pending takes are considered missed
           }
         } else if (status == 'completed' || status == 'missed') {
           // For completed/missed takes, show if medication belongs to assigned elderly
@@ -915,6 +1437,32 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           }
           takesByMedication[medId]!.add({'id': takeDoc.id, ...takeData});
         }
+      }
+
+      // Debug: print summary of takes discovered per medication id
+      try {
+        print('DEBUG: Total takes fetched: ${allTakesDocs.length}');
+        final medsListForDebug = medicationIds;
+        for (final mid in medsListForDebug) {
+          final allForMed = allTakesDocs.where((d) {
+            final ddata = d.data() as Map<String, dynamic>;
+            return (ddata['medication_id'] as String?) == mid;
+          }).toList();
+          final grouped = takesByMedication[mid] ?? [];
+          print(
+            'DEBUG: Med $mid => total takes in DB: ${allForMed.length}, grouped (after include filter): ${grouped.length}',
+          );
+          if (allForMed.isNotEmpty) {
+            for (final d in allForMed) {
+              final dd = d.data() as Map<String, dynamic>;
+              print(
+                'DEBUG:   take ${d.id} scheduled:${dd['scheduled_time']} status:${dd['status']} scheduled_date:${dd['scheduled_date'] ?? 'null'}',
+              );
+            }
+          }
+        }
+      } catch (e) {
+        print('DEBUG: failed to print takes summary: $e');
       }
 
       // Fetch elderly docs in chunks of 30 to build a lookup map
@@ -946,30 +1494,84 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final allTakes = takesByMedication[medicationId] ?? [];
 
         // Filter out completed takes - only show active takes
-        final activeTakes = allTakes
-            .where((take) => take['status'] != 'complete')
-            .toList();
+        // Accept both 'complete' and 'completed' values for backwards compatibility
+        final activeTakes = allTakes.where((take) {
+          final s = (take['status'] as String?) ?? '';
+          return s != 'complete' && s != 'completed';
+        }).toList();
 
-        // Filter takes to only include those scheduled for the selected date
+        // Filter takes to only include those scheduled for the selected date.
+        // If a take has an explicit 'scheduled_date' (set for Once meds), use
+        // that date; otherwise assume the take is scheduled on the currently
+        // selected date and combine with its scheduled_time.
         final filteredTakes = activeTakes.where((take) {
-          final scheduledTimeStr = take['scheduled_time'] as String;
+          final scheduledTimeStr = take['scheduled_time'] as String?;
+          if (scheduledTimeStr == null) return false;
           final timeParts = scheduledTimeStr.split(':');
           if (timeParts.length < 2) return false;
           final hour = int.tryParse(timeParts[0]) ?? 0;
           final minute = int.tryParse(timeParts[1]) ?? 0;
-          final scheduledDateTime = DateTime(
-            _selectedDate.year,
-            _selectedDate.month,
-            _selectedDate.day,
-            hour,
-            minute,
-          );
-          final now = DateTime.now();
-          final effectiveDate = scheduledDateTime.isBefore(now)
-              ? _selectedDate.add(Duration(days: 1))
-              : _selectedDate;
-          return effectiveDate.isAtSameMomentAs(_selectedDate);
+
+          final takeScheduledDateTs = take['scheduled_date'] as Timestamp?;
+          DateTime scheduledDateForTake;
+          if (takeScheduledDateTs != null) {
+            final d = takeScheduledDateTs.toDate();
+            scheduledDateForTake = DateTime(
+              d.year,
+              d.month,
+              d.day,
+              hour,
+              minute,
+            );
+          } else {
+            scheduledDateForTake = DateTime(
+              _selectedDate.year,
+              _selectedDate.month,
+              _selectedDate.day,
+              hour,
+              minute,
+            );
+          }
+
+          // Only compare the date portion — user expects to see takes scheduled
+          // for the selected calendar day regardless of current time of day.
+          return scheduledDateForTake.year == _selectedDate.year &&
+              scheduledDateForTake.month == _selectedDate.month &&
+              scheduledDateForTake.day == _selectedDate.day;
         }).toList();
+
+        // Sort takes by scheduled time (earliest first). For medications
+        // assigned to the 3rd shift (22:00-06:00) treat times between
+        // 00:00-05:59 as next-day values by adding 24 hours so they sort
+        // after late-night times (e.g., 23:30 < 00:30 -> 23.5 < 24.5).
+        try {
+          final medShift = (m['shift'] as String?) ?? '';
+          filteredTakes.sort((a, b) {
+            String at = (a['scheduled_time'] ?? '') as String;
+            String bt = (b['scheduled_time'] ?? '') as String;
+
+            double parseTimeForSort(String t) {
+              final parts = t.split(':');
+              int h = 0;
+              int min = 0;
+              if (parts.isNotEmpty) h = int.tryParse(parts[0]) ?? 0;
+              if (parts.length > 1) min = int.tryParse(parts[1]) ?? 0;
+              double val = h + (min / 60.0);
+              // If med is 3rd shift, shift early-morning hours to after 24
+              if (medShift.toLowerCase() == '3rd' && h < 6) {
+                val += 24.0;
+              }
+              return val;
+            }
+
+            final aVal = parseTimeForSort(at);
+            final bVal = parseTimeForSort(bt);
+            return aVal.compareTo(bVal);
+          });
+        } catch (e) {
+          // Non-fatal: if sorting fails, leave original order
+          print('DEBUG: Failed to sort filteredTakes for med ${m['id']}: $e');
+        }
 
         // Skip medications that have no active takes for the selected date
         if (filteredTakes.isEmpty) continue;
@@ -1046,8 +1648,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     int? numberOfIntakesTemp;
     List<TimeOfDay?> intakeTimes = List<TimeOfDay?>.filled(6, null);
 
-    final int originalNumberOfIntakes = 0;
-    final List<String> formattedExistingTimes = [];
+    // local temporaries for constructing the dialog; populated below as needed
 
     // Common medications for elderly
     final List<String> commonMedications = [
@@ -1664,12 +2265,15 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 }
 
                                 if (!timesAreValid) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(validationMessage!),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
+                                  if (mounted) {
+                                    _safeShowSnackBar(
+                                      context,
+                                      SnackBar(
+                                        content: Text(validationMessage!),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
                                   return;
                                 }
 
@@ -1684,12 +2288,17 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   intakeTimes.cast<TimeOfDay>(),
                                 );
                               } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Please fill in all fields'),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
+                                if (mounted) {
+                                  _safeShowSnackBar(
+                                    context,
+                                    SnackBar(
+                                      content: Text(
+                                        'Please fill in all fields',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
                               }
                             },
                             child: Text(
@@ -1727,102 +2336,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         );
       },
     ).then((_) => _isAddMedicationDialogOpen = false);
-  }
-
-  Future<void> _showNotScheduledDialog() async {
-    final assignedShifts = await _getNurseAssignedShiftsForToday();
-    String shiftInfo = '';
-    if (assignedShifts.isNotEmpty) {
-      shiftInfo = assignedShifts
-          .map((s) => 'YOUR SHIFT $s SHIFT (${_getShiftTimeString(s)})')
-          .join('\n');
-    } else {
-      shiftInfo = 'You have no shifts assigned today.';
-    }
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.red, size: 45),
-              SizedBox(height: 8),
-              Text(
-                'Not Scheduled \n Today',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF00588E),
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'It is not your shift or schedule today. You cannot add medications when you are not scheduled.',
-                style: TextStyle(fontSize: 16),
-                textAlign: TextAlign.justify,
-              ),
-              SizedBox(height: 12),
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Color(0xFF00588E).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Color(0xFF00588E).withOpacity(0.3)),
-                ),
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.access_time,
-                        color: Color(0xFF00588E),
-                        size: 20,
-                      ),
-                      SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          shiftInfo,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: Color(0xFF00588E),
-                          ),
-                          softWrap: true,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            Center(
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFF00588E),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                ),
-                child: Text(
-                  'OK',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   void showMedicationConfirmation(
@@ -2049,9 +2562,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   Navigator.of(parentContext).pop();
 
                                   // Show success message
-                                  ScaffoldMessenger.of(
+                                  _safeShowSnackBar(
                                     parentContext,
-                                  ).showSnackBar(
                                     SnackBar(
                                       content: Text(
                                         'Medication added successfully',
@@ -2070,9 +2582,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   Navigator.of(parentContext).pop();
 
                                   // Show error message
-                                  ScaffoldMessenger.of(
+                                  _safeShowSnackBar(
                                     parentContext,
-                                  ).showSnackBar(
                                     SnackBar(
                                       content: Text(
                                         'Error adding medication: ${e.toString()}',
@@ -2177,8 +2688,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   }
 
   void _startAutoRefreshTimer() {
-    // Auto-refresh medication data every 45 seconds to ensure data is always updated
-    _autoRefreshTimer = Timer.periodic(Duration(seconds: 45), (timer) {
+    // Auto-refresh medication data every 10 minutes to ensure data is always updated
+    _autoRefreshTimer = Timer.periodic(Duration(seconds: 600), (timer) {
       if (mounted) {
         _loadUpcomingMedications(forceRefresh: true);
       }
@@ -2262,20 +2773,36 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
             // Only check pending medications
             if (status == 'pending') {
-              // Parse scheduled time (assuming format is HH:mm)
+              // Parse scheduled time (accept HH:mm or HH:mm:ss)
               final timeParts = scheduledTimeStr.split(':');
-              if (timeParts.length == 2) {
+              if (timeParts.length >= 2) {
                 final scheduledHour = int.tryParse(timeParts[0]) ?? 0;
                 final scheduledMinute = int.tryParse(timeParts[1]) ?? 0;
 
-                // Create scheduled DateTime for today
-                final scheduledDateTime = DateTime(
-                  currentTime.year,
-                  currentTime.month,
-                  currentTime.day,
-                  scheduledHour,
-                  scheduledMinute,
-                );
+                // Create scheduled DateTime. If the take has an explicit
+                // scheduled_date (used for Once meds), use that date; otherwise
+                // assume today.
+                final takeScheduledDateTs =
+                    take['scheduled_date'] as Timestamp?;
+                DateTime scheduledDateTime;
+                if (takeScheduledDateTs != null) {
+                  final d = takeScheduledDateTs.toDate();
+                  scheduledDateTime = DateTime(
+                    d.year,
+                    d.month,
+                    d.day,
+                    scheduledHour,
+                    scheduledMinute,
+                  );
+                } else {
+                  scheduledDateTime = DateTime(
+                    currentTime.year,
+                    currentTime.month,
+                    currentTime.day,
+                    scheduledHour,
+                    scheduledMinute,
+                  );
+                }
 
                 // Check if more than 1 hour has passed since scheduled time
                 final timeDifference = currentTime.difference(
@@ -2292,6 +2819,77 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                   takeStatuses[i]['missed_reason'] =
                       'Automatically marked as missed after 1 hour';
                   hasUpdates = true;
+                  // Also update the medication_takes documents so UI (which
+                  // reads medication_takes) reflects the missed status. If the
+                  // take has an explicit scheduled_date, include it in the
+                  // query to avoid marking other dates' takes.
+                  try {
+                    var query = _firestore
+                        .collection('medication_takes')
+                        .where('medication_id', isEqualTo: doc.id)
+                        .where('take_number', isEqualTo: take['take_number'])
+                        .where('status', isEqualTo: 'pending');
+                    if (takeScheduledDateTs != null) {
+                      // Match the exact scheduled_date timestamp used when created
+                      query = query.where(
+                        'scheduled_date',
+                        isEqualTo: takeScheduledDateTs,
+                      );
+                    }
+                    final pendingTakesQuery = await query.get();
+                    for (final td in pendingTakesQuery.docs) {
+                      try {
+                        await td.reference.update({
+                          'status': 'missed',
+                          'missed_at': Timestamp.fromDate(currentTime),
+                          'missed_reason':
+                              'Automatically marked as missed after 1 hour',
+                          'updated_at': Timestamp.fromDate(currentTime),
+                        });
+                        // Write an activity log entry so the Missed tab (which reads
+                        // medication_activity_logs) will include this automatic miss
+                        // for the calendar and list views.
+                        try {
+                          await _logMedicationActivityNew(
+                            action: 'take_missed',
+                            medicationId: doc.id,
+                            elderlyId: elderlyId,
+                            nurseId: nurseId,
+                            houseId: widget.houseId,
+                            shift: medicationShift ?? currentShift,
+                            medicationName: data['medication_name'] ?? '',
+                            dosage: data['dosage'] ?? '',
+                            repeatInterval: data['repeat_interval'] ?? '',
+                            takeNumber: take['take_number'] as int,
+                            scheduledTime: scheduledTimeStr,
+                          );
+                        } catch (e) {
+                          print(
+                            'Error logging missed activity for med ${doc.id}: $e',
+                          );
+                        }
+                        // Cancel scheduled notification for this take (if any)
+                        try {
+                          final notifyId =
+                              ('${doc.id}_${(take['take_number'] as int) - 1}')
+                                  .hashCode;
+                          NotificationService.cancelNotification(notifyId);
+                        } catch (e) {
+                          print(
+                            'Error cancelling notification for missed take: $e',
+                          );
+                        }
+                      } catch (e) {
+                        print(
+                          'Error updating medication_takes doc to missed: $e',
+                        );
+                      }
+                    }
+                  } catch (e) {
+                    print(
+                      'Error querying medication_takes for missed update: $e',
+                    );
+                  }
                 }
               }
             }
@@ -2316,9 +2914,17 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
-  // Removed _createCompletedMedicationIntake - using unified activity logs only
+  // Timer-based notification system to bypass Android restrictions
+  final List<Timer> _activeMedicationTimers = [];
 
-  // Removed methods that use separate collections - now using unified activity logs only
+  // Cancel all active medication timers
+  void _cancelAllMedicationTimers() {
+    for (final timer in _activeMedicationTimers) {
+      timer.cancel();
+    }
+    _activeMedicationTimers.clear();
+    print('✅ Cancelled ${_activeMedicationTimers.length} medication timers');
+  }
 
   Future<void> _logMedicationActivity({
     required String action,
@@ -2478,25 +3084,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     int? numberOfIntakesTemp = medicationData['number_of_intakes'];
     List<TimeOfDay?> intakeTimes = List<TimeOfDay?>.filled(6, null);
 
-    // Store original number of intakes to track changes
-    final int originalNumberOfIntakes =
-        medicationData['number_of_intakes'] ?? 0;
+    // originalNumberOfIntakes removed (not needed)
 
-    // Parse existing intake times
-    final existingTimes = List<String>.from(
-      medicationData['intake_times'] ?? [],
-    );
-    // Create formatted existing times for placeholders
-    final List<String> formattedExistingTimes = existingTimes.map((timeStr) {
-      final parts = timeStr.split(':');
-      if (parts.length == 2) {
-        final hour = int.parse(parts[0]);
-        final minute = int.parse(parts[1]);
-        final timeOfDay = TimeOfDay(hour: hour, minute: minute);
-        return timeOfDay.format(context);
-      }
-      return 'Select time';
-    }).toList();
+    // Parse existing intake times when needed inside hasChanges
 
     final List<String> commonMedications = [
       'Lisinopril',
@@ -3024,14 +3614,16 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                             onPressed: () async {
                               // Check if any changes were made
                               if (!hasChanges()) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'No changes detected. Please modify at least one field before updating.',
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'No changes detected. Please modify at least one field before updating.',
+                                      ),
+                                      backgroundColor: Colors.orange,
                                     ),
-                                    backgroundColor: Colors.orange,
-                                  ),
-                                );
+                                  );
+                                }
                                 return;
                               }
 
@@ -3049,13 +3641,15 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 }
 
                                 if (!allTimesSelected) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Please select all intake times',
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Please select all intake times',
+                                        ),
                                       ),
-                                    ),
-                                  );
+                                    );
+                                  }
                                   return;
                                 }
 
@@ -3089,12 +3683,14 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 }
 
                                 if (!timesAreValid) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(validationMessage!),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(validationMessage!),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
                                   return;
                                 }
 
@@ -3260,14 +3856,18 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       _autoRefreshTimer?.cancel();
       _startAutoRefreshTimer();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Medication updated successfully')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Medication updated successfully')),
+        );
+      }
     } catch (e) {
       print('Error updating medication: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error updating medication')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error updating medication')));
+      }
     }
   }
 
@@ -3744,9 +4344,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   Navigator.of(parentContext).pop();
 
                                   // Show success message
-                                  ScaffoldMessenger.of(
+                                  _safeShowSnackBar(
                                     parentContext,
-                                  ).showSnackBar(
                                     SnackBar(
                                       content: Text(
                                         'Medication updated successfully',
@@ -3765,9 +4364,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                   Navigator.of(parentContext).pop();
 
                                   // Show error message
-                                  ScaffoldMessenger.of(
+                                  _safeShowSnackBar(
                                     parentContext,
-                                  ).showSnackBar(
                                     SnackBar(
                                       content: Text(
                                         'Error updating medication: ${e.toString()}',
@@ -3833,14 +4431,16 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     try {
       // Prevent deleting any take except the last one if there are multiple takes
       if (takeNumber != (medicationData['number_of_intakes'] ?? 1)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Please delete the last take first (${_getOrdinal(medicationData['number_of_intakes'])} take)',
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Please delete the last take first (${_getOrdinal(medicationData['number_of_intakes'])} take)',
+              ),
+              backgroundColor: Colors.orange,
             ),
-            backgroundColor: Colors.orange,
-          ),
-        );
+          );
+        }
         return;
       }
 
@@ -3856,12 +4456,14 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       );
 
       if (takeToDelete.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Take not found'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Take not found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
         return;
       }
 
@@ -4536,20 +5138,27 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 _autoRefreshTimer?.cancel();
                                 _startAutoRefreshTimer();
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Medication deleted successfully',
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Medication deleted successfully',
+                                      ),
                                     ),
-                                  ),
-                                );
+                                  );
+                                }
                               } catch (e) {
                                 print('Error deleting medication: $e');
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Error deleting medication'),
-                                  ),
-                                );
+                                Navigator.of(dialogContext).pop();
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error deleting medication',
+                                      ),
+                                    ),
+                                  );
+                                }
                               }
                             }
                           : null,
@@ -4566,6 +5175,106 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         );
       },
     );
+  }
+
+  /// Delete multiple medications (bulk) and update UI/cache. This is a
+  /// conservative deletion: for each medication id we delete the medication
+  /// document, its medication_takes, associated medical_tasks, cancel
+  /// notifications and remove from in-memory cache/state.
+  Future<void> _deleteMedicationsBulk(List<String> medicationIds) async {
+    int success = 0;
+    int failed = 0;
+    for (final medicationId in medicationIds) {
+      try {
+        // Fetch medication doc to check existence and then proceed to delete related data
+        final medDoc = await _firestore
+            .collection('medications')
+            .doc(medicationId)
+            .get();
+        if (medDoc.exists) {
+          // Delete associated medical_tasks
+          try {
+            final tasksQuery = await _firestore
+                .collection('medical_tasks')
+                .where('task_source', isEqualTo: 'Medication')
+                .where('medication_id', isEqualTo: medicationId)
+                .get();
+            for (final t in tasksQuery.docs) {
+              await t.reference.delete();
+            }
+          } catch (e) {
+            print('Error deleting medical_tasks for $medicationId: $e');
+          }
+
+          // Delete medication_takes and cancel notifications
+          try {
+            final takesQuery = await _firestore
+                .collection('medication_takes')
+                .where('medication_id', isEqualTo: medicationId)
+                .get();
+            for (final t in takesQuery.docs) {
+              final tdata = t.data();
+              final takeIndex = (tdata['take_number'] as int? ?? 1) - 1;
+              // Try canceling notification that may have been scheduled
+              try {
+                final nid = ('${medicationId}_$takeIndex').hashCode;
+                NotificationService.cancelNotification(nid);
+              } catch (e) {
+                // ignore
+              }
+              await t.reference.delete();
+            }
+          } catch (e) {
+            print('Error deleting medication_takes for $medicationId: $e');
+          }
+
+          // Finally delete medication doc
+          try {
+            await medDoc.reference.delete();
+          } catch (e) {
+            print('Error deleting medication doc $medicationId: $e');
+            throw e;
+          }
+        }
+
+        // Clear related cache entries
+        try {
+          final keys = _medsCache.keys.toList();
+          for (final k in keys) {
+            if (k.startsWith('${widget.houseId}|')) {
+              _medsCache.remove(k);
+              _medsCacheTime.remove(k);
+            }
+          }
+        } catch (e) {
+          print('Error clearing meds cache after bulk delete: $e');
+        }
+
+        // Remove from in-memory list
+        if (mounted) {
+          setState(() {
+            _upcomingMedications.removeWhere((m) => m['id'] == medicationId);
+          });
+        }
+
+        success++;
+      } catch (e) {
+        print('Bulk delete failed for $medicationId: $e');
+        failed++;
+      }
+    }
+
+    // Refresh UI
+    await _loadUpcomingMedications(forceRefresh: true);
+
+    // Show summary
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted $success medications. Failed: $failed'),
+        ),
+      );
+    }
   }
 
   int _getTotalTakeCount() {
@@ -4646,6 +5355,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
     switch (status) {
       case 'complete':
+      case 'completed':
         statusColor = Colors.green;
         statusIcon = Icons.check_circle;
         break;
@@ -4658,287 +5368,349 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         statusIcon = Icons.schedule;
     }
 
-    return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Dismissible(
+      key: ValueKey('${medication['id']}_$takeNumber'),
+      // Only allow swipe left (endToStart) so both actions are exposed from one gesture
+      direction: DismissDirection.endToStart,
+      // Keep a neutral left-side background (not used when swiping left)
+      background: Container(color: Colors.transparent),
+      // When swiping left, show a split area: blue Edit (left) and red Delete (right)
+      secondaryBackground: Container(
+        height: double.infinity,
+        child: Row(
           children: [
-            // Elderly Name
-            Row(
-              children: [
-                Icon(Icons.person, color: Color(0xFF00588E)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    medication['elderly_name'] ?? 'Unknown',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF00588E),
+            // Blue edit area (left half of revealed area)
+            Expanded(
+              child: Container(
+                // Soft/light blue background for edit reveal
+                color: Color(0xFFBEEAF9),
+                alignment: Alignment.centerRight,
+                padding: EdgeInsets.only(right: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Use a darker blue icon/text for contrast on the light background
+                    Icon(Icons.edit, color: Color(0xFF22688E)),
+                    SizedBox(width: 8),
+                    Text(
+                      'Edit',
+                      style: TextStyle(
+                        color: Color(0xFF22688E),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
-            SizedBox(height: 12),
-
-            // Medication Name and Dosage
-            Row(
-              children: [
-                Icon(Icons.medication, color: Colors.green),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '${medication['medication_name']} - ${medication['dosage']}',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 8),
-
-            // Frequency
-            Row(
-              children: [
-                Icon(Icons.schedule, color: Colors.orange),
-                SizedBox(width: 8),
-                Text(
-                  'Frequency: ${medication['repeat_interval']}',
-                  style: TextStyle(fontSize: 14),
-                ),
-              ],
-            ),
-            SizedBox(height: 12),
-
-            // Take Information Container
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                border: Border.all(color: statusColor.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(8),
-                color: statusColor.withOpacity(0.1),
               ),
-              child: Row(
-                children: [
-                  Icon(statusIcon, color: statusColor, size: 24),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '$takeOrdinal Take',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: statusColor,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          _formatScheduledTimeWithDate(scheduledTime),
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                      ],
+            ),
+            // Red delete area (right half of revealed area)
+            Expanded(
+              child: Container(
+                // Soft/light red background for delete reveal
+                color: Color(0xFFF8D7DA),
+                alignment: Alignment.centerRight,
+                padding: EdgeInsets.only(right: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Use a darker red icon/text for contrast on the light background
+                    Text(
+                      'Delete',
+                      style: TextStyle(
+                        color: Color(0xFFD32F2F),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
+                    SizedBox(width: 8),
+                    Icon(Icons.delete_forever, color: Color(0xFFD32F2F)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      confirmDismiss: (direction) async {
+        // Show options sheet but don't dismiss the widget permanently
+        await showModalBottomSheet(
+          context: context,
+          builder: (ctx) {
+            return SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.edit, color: Color(0xFF22688E)),
+                    title: Text('Edit Medication'),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _editMedication(medication['id'], medication);
+                    },
                   ),
-                  Column(
-                    children: [
-                      Text(
-                        status.toUpperCase(),
-                        style: TextStyle(
-                          color: statusColor,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      PopupMenuButton<String>(
-                        icon: Icon(
-                          Icons.more_vert,
-                          size: 20,
-                          color: statusColor,
-                        ),
-                        onSelected: (String newStatus) {
-                          _updateTakeStatus(
-                            medication['id'],
-                            take['take_number'],
-                            newStatus,
-                          );
-                        },
-                        itemBuilder: (BuildContext context) {
-                          final canMarkAsMissed = _canMarkAsMissed(
-                            scheduledTime,
-                          );
-                          return <PopupMenuEntry<String>>[
-                            PopupMenuItem<String>(
-                              value: 'pending',
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.schedule,
-                                    color: Colors.orange,
-                                    size: 16,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text('Pending'),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem<String>(
-                              value: 'complete',
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.check_circle,
-                                    color: Colors.green,
-                                    size: 16,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text('Complete'),
-                                ],
-                              ),
-                            ),
-                            if (canMarkAsMissed) ...[
-                              PopupMenuItem<String>(
-                                value: 'missed',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.cancel,
-                                      color: Colors.red,
-                                      size: 16,
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text('Missed'),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ];
-                        },
-                      ),
-                    ],
+                  ListTile(
+                    leading: Icon(
+                      Icons.delete_forever,
+                      color: Color(0xFFD32F2F),
+                    ),
+                    title: Text('Delete'),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _deleteMedication(medication['id'], medication);
+                    },
                   ),
                 ],
               ),
-            ),
-
-            // Created timestamp (smaller and at bottom)
-            if (medication['created_at'] != null)
-              Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: Text(
-                  'Created: ${DateFormat('MMM dd, yyyy hh:mm a').format((medication['created_at'] as Timestamp).toDate())}',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                ),
-              ),
-
-            // Action buttons section
-            SizedBox(height: 12),
-
-            // Edit and Delete Entire Medication buttons
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            );
+          },
+        );
+        return false;
+      },
+      // Wrap the card in a GestureDetector so long-pressing it enters
+      // selection mode and selects the medication. When in selection
+      // mode, a normal tap toggles selection. Non-selection-mode taps
+      // are left untouched to preserve existing interactions.
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: () {
+          final medId = medication['id'] as String?;
+          if (medId == null) return;
+          setState(() {
+            _selectionMode = true;
+            _selectedMedicationIds.add(medId);
+          });
+        },
+        onTap: () {
+          if (!_selectionMode) return;
+          final medId = medication['id'] as String?;
+          if (medId == null) return;
+          setState(() {
+            if (_selectedMedicationIds.contains(medId)) {
+              _selectedMedicationIds.remove(medId);
+              if (_selectedMedicationIds.isEmpty) _selectionMode = false;
+            } else {
+              _selectedMedicationIds.add(medId);
+            }
+          });
+        },
+        child: Card(
+          // Use soft blue background for medication containers; when selected,
+          // show light red highlight for bulk-delete selection.
+          color: _selectedMedicationIds.contains(medication['id'])
+              ? const Color(0xFFFFEBEE)
+              : const Color.fromARGB(255, 234, 243, 249),
+          margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextButton.icon(
-                  onPressed: () =>
-                      _editMedication(medication['id'], medication),
-                  icon: Icon(Icons.edit, color: Color(0xFF22688E)),
-                  label: Text(
-                    'Edit',
-                    style: TextStyle(
-                      color: Color(0xFF22688E),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                // Elderly Name (and optional selection checkbox)
+                Row(
+                  children: [
+                    if (_selectionMode)
+                      Checkbox(
+                        value: _selectedMedicationIds.contains(
+                          medication['id'],
+                        ),
+                        onChanged: (val) {
+                          setState(() {
+                            if (val == true) {
+                              _selectedMedicationIds.add(medication['id']);
+                            } else {
+                              _selectedMedicationIds.remove(medication['id']);
+                            }
+                          });
+                        },
+                      ),
+                    Icon(Icons.person, color: Color(0xFF00588E)),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        medication['elderly_name'] ?? 'Unknown',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF00588E),
+                        ),
+                      ),
                     ),
+                  ],
+                ),
+                SizedBox(height: 12),
+
+                // Medication Name and Dosage
+                Row(
+                  children: [
+                    Icon(Icons.medication, color: Colors.green),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${medication['medication_name']} - ${medication['dosage']}',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 8),
+
+                // Frequency
+                Row(
+                  children: [
+                    Icon(Icons.schedule, color: Colors.orange),
+                    SizedBox(width: 8),
+                    Text(
+                      'Frequency: ${medication['repeat_interval']}',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12),
+
+                // Take Information Container
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: statusColor.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                    color: statusColor.withOpacity(0.1),
                   ),
-                  style: TextButton.styleFrom(
-                    backgroundColor: const Color.fromARGB(255, 186, 231, 255),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    minimumSize: Size(120, 36),
+                  child: Row(
+                    children: [
+                      Icon(statusIcon, color: statusColor, size: 24),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$takeOrdinal Take',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: statusColor,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              _formatScheduledTimeWithDate(scheduledTime),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        children: [
+                          // Square checkbox-style button on the right side.
+                          GestureDetector(
+                            onTap: () async {
+                              // Toggle between pending and completed on tap.
+                              final current =
+                                  (take['status'] as String?) ?? 'pending';
+                              final target =
+                                  current == 'completed' ||
+                                      current == 'complete'
+                                  ? 'pending'
+                                  : 'completed';
+                              _updateTakeStatus(
+                                medication['id'],
+                                take['take_number'],
+                                target,
+                              );
+                            },
+                            onLongPress: () async {
+                              // Long press opens a bottom sheet with full options
+                              final canMarkAsMissed = _canMarkAsMissed(
+                                scheduledTime,
+                              );
+                              showModalBottomSheet(
+                                context: context,
+                                builder: (ctx) {
+                                  return SafeArea(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        ListTile(
+                                          leading: Icon(
+                                            Icons.check_circle,
+                                            color: Colors.green,
+                                          ),
+                                          title: Text('Complete'),
+                                          onTap: () {
+                                            Navigator.of(ctx).pop();
+                                            _updateTakeStatus(
+                                              medication['id'],
+                                              take['take_number'],
+                                              'completed',
+                                            );
+                                          },
+                                        ),
+                                        if (canMarkAsMissed)
+                                          ListTile(
+                                            leading: Icon(
+                                              Icons.cancel,
+                                              color: Colors.red,
+                                            ),
+                                            title: Text('Missed'),
+                                            onTap: () {
+                                              Navigator.of(ctx).pop();
+                                              _updateTakeStatus(
+                                                medication['id'],
+                                                take['take_number'],
+                                                'missed',
+                                              );
+                                            },
+                                          ),
+                                        SizedBox(height: 8),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: statusColor,
+                                  width: 1.5,
+                                ),
+                                borderRadius: BorderRadius.circular(6),
+                                color:
+                                    status == 'complete' ||
+                                        status == 'completed'
+                                    ? statusColor
+                                    : Colors.transparent,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: () =>
-                      _deleteMedication(medication['id'], medication),
-                  icon: Icon(Icons.delete_forever, color: Color(0xFFD32F2F)),
-                  label: Text(
-                    'Delete All',
-                    style: TextStyle(
-                      color: Color(0xFFD32F2F),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+
+                // Created timestamp (smaller and at bottom)
+                if (medication['created_at'] != null)
+                  Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: Text(
+                      'Created: ${DateFormat('MMM dd, yyyy hh:mm a').format((medication['created_at'] as Timestamp).toDate())}',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
                   ),
-                  style: TextButton.styleFrom(
-                    backgroundColor: const Color.fromARGB(255, 247, 215, 215),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    minimumSize: Size(120, 36),
-                  ),
-                ),
+
+                // Spacing before potential actions
+                SizedBox(height: 12),
               ],
             ),
-
-            // Individual Take Delete Button (only show for the last take if there are 2 or more takes total)
-            if (status == 'pending' &&
-                (medication['number_of_intakes'] ?? 1) > 1 &&
-                takeNumber == (medication['number_of_intakes'] ?? 1))
-              Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: TextButton.icon(
-                    onPressed: () => _deleteIndividualTake(
-                      medication['id'],
-                      medication,
-                      takeNumber,
-                    ),
-                    icon: Icon(
-                      Icons.remove_circle_outline,
-                      size: 16,
-                      color: Colors.orange[700],
-                    ),
-                    label: Text(
-                      'Delete This ${_getOrdinal(takeNumber)} Take',
-                      style: TextStyle(
-                        color: Colors.orange[700],
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    style: TextButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(255, 249, 227, 190),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      minimumSize: Size(double.infinity, 44),
-                    ),
-                  ),
-                ),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -5015,7 +5787,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         'updated_at': Timestamp.fromDate(DateTime.now()),
       };
 
-      if (newStatus == 'complete') {
+      if (newStatus == 'completed') {
         updateData['completed_at'] = Timestamp.fromDate(DateTime.now());
         updateData['completed_by'] = nurseId;
         print(
@@ -5032,7 +5804,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       // Log the activity to Medication_Activity_Logs
       final scheduledTime = takeData['scheduled_time'] as String;
-      if (newStatus == 'complete' && originalStatus != 'complete') {
+      if (newStatus == 'completed' && originalStatus != 'completed') {
         await _logMedicationActivityNew(
           action: 'take_completed',
           medicationId: medicationId,
@@ -5046,6 +5818,12 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           takeNumber: takeNumber,
           scheduledTime: scheduledTime,
         );
+        // Play confetti to celebrate the completed take
+        try {
+          _confettiController.play();
+        } catch (e) {
+          print('Error playing confetti: $e');
+        }
       } else if (newStatus == 'missed' && originalStatus != 'missed') {
         await _logMedicationActivityNew(
           action: 'take_missed',
@@ -5112,24 +5890,28 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       _startAutoRefreshTimer();
 
       // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Take status updated to ${newStatus.toUpperCase()}'),
-          backgroundColor: newStatus == 'completed'
-              ? Colors.green
-              : newStatus == 'missed'
-              ? Colors.red
-              : Colors.orange,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Take status updated to ${newStatus.toUpperCase()}'),
+            backgroundColor: newStatus == 'completed'
+                ? Colors.green
+                : newStatus == 'missed'
+                ? Colors.red
+                : Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       print('Error updating take status: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error updating status'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating status'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -5172,6 +5954,88 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             ],
           ),
         ),
+        // Selection toolbar for bulk actions (only visible when in selection mode)
+        if (_selectionMode)
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _selectionMode = false;
+                      _selectedMedicationIds.clear();
+                    });
+                  },
+                  icon: Icon(Icons.close, color: Colors.white),
+                  label: Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF00588E),
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton.icon(
+                  onPressed: _selectedMedicationIds.isEmpty
+                      ? null
+                      : () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: Text('Delete selected medications'),
+                              content: Text(
+                                'Are you sure you want to delete ${_selectedMedicationIds.length} selected medication(s)? This cannot be undone.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                  child: Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                  child: Text(
+                                    'Delete',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            await _deleteMedicationsBulk(
+                              _selectedMedicationIds.toList(),
+                            );
+                            setState(() {
+                              _selectionMode = false;
+                              _selectedMedicationIds.clear();
+                            });
+                          }
+                        },
+                  icon: Icon(Icons.delete_forever, color: Colors.white),
+                  label: Text(
+                    'Delete (${_selectedMedicationIds.length})',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                ),
+              ],
+            ),
+          ),
         // Main Content
         Expanded(
           child: Stack(
@@ -5212,7 +6076,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                           return _buildIndividualTakeContainer(takeInfo);
                         },
                       ),
-              if (!_isLoading)
+              if (!_isLoading && _isNurseScheduled)
                 Positioned(
                   bottom: 16,
                   left: 0,
@@ -5230,6 +6094,40 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                       ),
                       icon: Icon(Icons.add, color: Colors.white),
                       backgroundColor: Color(0xFF00588E),
+                    ),
+                  ),
+                ),
+              // Confetti overlay (sibling in the Stack)
+              Positioned(
+                top: 40,
+                left: 0,
+                right: 0,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConfettiWidget(
+                    confettiController: _confettiController,
+                    blastDirectionality: BlastDirectionality.explosive,
+                    shouldLoop: false,
+                    emissionFrequency: 0.05,
+                    numberOfParticles: 20,
+                    maxBlastForce: 20,
+                    minBlastForce: 5,
+                    gravity: 0.3,
+                  ),
+                ),
+              ),
+              if (!_isLoading && !_isNurseScheduled)
+                Positioned(
+                  bottom: 16,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: ElevatedButton(
+                      onPressed: _showNotScheduledMessage,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFF00588E),
+                      ),
+                      child: Text('Not Scheduled Today'),
                     ),
                   ),
                 ),
