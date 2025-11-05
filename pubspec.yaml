@@ -70,6 +70,8 @@ dependencies:
   pdf: ^3.10.7
   confetti: ^0.7.0
   shared_preferences: ^2.2.3
+  fl_chart: ^0.68.0
+  google_mlkit_text_recognition: ^0.13.0
 
 
 
@@ -125,6 +127,7 @@ flutter:
     - assets/images/Rose_Logo.png
     - assets/sounds/alarm.mp3
     - assets/houses_img/
+    - assets/images/birthdaybg.png
 
   fonts:
     - family: Poppins

@@ -1,0 +1,72 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "elderly_id", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "assigned_nurse_id", "order": "ASCENDING"},
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "recorded_at", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "updated_at", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "elderly_assignments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "is_current", "order": "ASCENDING"},
+        {"fieldPath": "house_id", "mode": "ARRAY_CONTAINS"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "day", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "elderly_assignments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "user_id", "order": "ASCENDING"},
+        {"fieldPath": "user_type", "order": "ASCENDING"},
+        {"fieldPath": "is_current", "order": "ASCENDING"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "days_assigned", "mode": "ARRAY_CONTAINS"}
+      ]
+    },
+    {
+      "collectionGroup": "house_shift_assignments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "user_id", "order": "ASCENDING"},
+        {"fieldPath": "user_type", "order": "ASCENDING"},
+        {"fieldPath": "is_current", "order": "ASCENDING"},
+        {"fieldPath": "shift", "order": "ASCENDING"},
+        {"fieldPath": "days_assigned", "mode": "ARRAY_CONTAINS"}
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

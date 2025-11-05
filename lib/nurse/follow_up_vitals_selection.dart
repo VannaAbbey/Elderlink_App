@@ -385,8 +385,7 @@ class _FollowUpVitalsSelectionScreenState
             'previous_vitals': hasAnyVitals ? vitalsData : null,
             'can_follow_up': canFollowUp,
             'completed_by_nurse':
-                nurseNamesCache[elderlyData['assigned_nurse_id']] ??
-                'Unknown Nurse',
+                vitalsData['recorded_by_name'] ?? 'Unknown Nurse',
             'completed_in_shift': elderlyData['shift'],
           });
         } else {

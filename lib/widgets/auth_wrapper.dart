@@ -4,6 +4,7 @@ import '../providers/auth_provider.dart';
 import '../providers/cg_providers/absence_provider.dart';
 import '../services/cg_services/leave_notification_listener.dart';
 import '../services/cg_services/missed_task_monitor_service.dart';
+import '../services/medication_missed_monitor_service.dart';
 import '../auth/get_started.dart';
 import '../caregiver/home.dart';
 import '../nurse/home.dart';
@@ -70,6 +71,22 @@ class _AuthWrapperState extends State<AuthWrapper> {
             // Import the main.dart file to access the listener method
             // Since we can't directly call it, we'll need to trigger it differently
             // For now, let's trigger a rebuild of MyApp or find another way
+          });
+        }
+
+        // Initialize medication missed monitor for nurses
+        if (userId != null && userRole == 'nurse') {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            print(
+              '🔄 Initializing MedicationMissedMonitorService for nurse: $userId',
+            );
+            if (!MedicationMissedMonitorService().isRunning) {
+              print('▶️ Starting MedicationMissedMonitorService...');
+              await MedicationMissedMonitorService().start();
+              print('✅ MedicationMissedMonitorService started successfully');
+            } else {
+              print('ℹ️ MedicationMissedMonitorService already running');
+            }
           });
         }
 

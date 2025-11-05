@@ -38,10 +38,6 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   // Simple in-memory cache per houseId
   static final Map<String, List<Map<String, dynamic>>> _houseVitalsCache = {};
   static final Map<String, DateTime> _houseVitalsCacheTime = {};
-  // Keep a longer cache to avoid repeated reloads when switching houses/tabs
-  static const Duration cacheDuration = Duration(minutes: 30); // Cache for 30m
-  // Track completed cleanup operations to avoid repeated work
-  static final Set<String> _completedCleanups = {};
   late DateTime _selectedDate;
 
   String _getCurrentShift() {
@@ -220,8 +216,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   }
 
   Future<void> _loadUpcomingVitals({bool forceRefresh = false}) async {
+    print('🔄 _loadUpcomingVitals called with forceRefresh=$forceRefresh');
     final cacheKey = widget.houseId + (widget.nurseName ?? "");
-    final now = DateTime.now();
 
     // Always set loading to true at the start, so spinner is shown until data is ready
     if (mounted) {
@@ -239,7 +235,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         });
       }
 
+      // ⚠️ DISABLED: Background refresh temporarily to avoid interference
       // ⚡ OPTIMIZATION: Smart background refresh - only refresh if cache is really stale
+      /*
       if (_houseVitalsCacheTime.containsKey(cacheKey)) {
         final cacheTime = _houseVitalsCacheTime[cacheKey]!;
         final timeSinceCache = now.difference(cacheTime);
@@ -275,6 +273,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           });
         }
       }
+      */
       return;
     }
 
@@ -301,12 +300,10 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       // Run both checks in parallel to speed up the process
       final parallelChecks = await Future.wait([
         _isNurseAssignedToCurrentShift(nurseId),
-        // Quick check for any pending vitals in this house/shift
+        // Quick check for ANY pending vitals for today (ALL shifts)
         _firestore
             .collection('vitals')
-            .where('house_id', isEqualTo: widget.houseId)
             .where('assigned_date', isEqualTo: today)
-            .where('shift', isEqualTo: currentShift)
             .where('status', isEqualTo: 'pending')
             .limit(1)
             .get(),
@@ -365,10 +362,26 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         });
       }
     }
+    print('✅ _loadUpcomingVitals completed');
   }
 
   Future<void> _refreshVitals() async {
+    print(
+      '🔄 FORCE REFRESH: Starting complete refresh for house ${widget.houseId}',
+    );
+
+    // Clear ALL caches to ensure absolutely fresh data
+    final cacheKey = widget.houseId + (widget.nurseName ?? "");
+    print('🔄 Clearing cache for key: $cacheKey');
+    _houseVitalsCache.clear();
+    _houseVitalsCacheTime.clear();
+    print('🗑️ ALL caches cleared');
+
+    // Force complete reload without any caching
+    print('🔄 Loading fresh data with forceRefresh=true');
     await _loadUpcomingVitals(forceRefresh: true);
+
+    print('✅ Force refresh completed');
   }
 
   String _getCurrentDay() {
@@ -403,258 +416,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     return DateFormat('yyyy-MM-dd').format(now);
   }
 
-  String _getPreviousShift() {
-    final currentShift = _getCurrentShift();
-    switch (currentShift) {
-      case "1st":
-        return "3rd"; // Previous shift was 3rd
-      case "2nd":
-        return "1st"; // Previous shift was 1st
-      case "3rd":
-        return "2nd"; // Previous shift was 2nd
-      default:
-        return "1st";
-    }
-  }
-
   // Check if we need to handle shift transition based on actual nurse change
-  Future<void> _handleShiftTransition(String currentNurseId) async {
-    final today = _getTodayDateString();
-    final currentShift = _getCurrentShift();
-    final previousShift = _getPreviousShift();
-    final currentDay = _getCurrentDay();
-
-    print('🔄 Checking shift transition: $previousShift → $currentShift');
-
-    // 🔧 FIXED: Get elderly assigned to current nurse for PREVIOUS shift/day (not current)
-    final previousNurseAssignments = await _firestore
-        .collection('elderly_assignments')
-        .where('user_id', isEqualTo: currentNurseId)
-        .where('user_type', isEqualTo: 'nurse')
-        .where('is_current', isEqualTo: true)
-        .where('shift', isEqualTo: previousShift)
-        .where('day', isEqualTo: currentDay)
-        .get();
-
-    final previousNurseElderlyIds = <String>{};
-    for (final doc in previousNurseAssignments.docs) {
-      final data = doc.data();
-      final elderlyIds = List<String>.from(data['elderly_ids'] ?? []);
-      previousNurseElderlyIds.addAll(elderlyIds);
-    }
-
-    print(
-      '👥 Current nurse was assigned to ${previousNurseElderlyIds.length} elderly in previous shift',
-    );
-
-    // Get all pending vital assignments from previous shift for this house
-    final previousShiftAssignments = await _firestore
-        .collection('vitals')
-        .where('house_id', isEqualTo: widget.houseId)
-        .where('assigned_date', isEqualTo: today)
-        .where('shift', isEqualTo: previousShift)
-        .where('status', isEqualTo: 'pending')
-        .get();
-
-    print(
-      '📋 Found ${previousShiftAssignments.docs.length} pending assignments from previous shift',
-    );
-
-    // 🔧 FIXED: Only inherit assignments for elderly assigned to current nurse in previous shift
-    if (previousShiftAssignments.docs.isNotEmpty &&
-        previousNurseElderlyIds.isNotEmpty) {
-      print(
-        '🔄 Shift transition detected - inheriting previous shift assignments for elderly assigned to current nurse',
-      );
-
-      for (final doc in previousShiftAssignments.docs) {
-        final data = doc.data();
-        final elderlyId = data['elderly_id'];
-
-        // Only inherit if this elderly was assigned to the current nurse in the previous shift
-        if (!previousNurseElderlyIds.contains(elderlyId)) {
-          print(
-            '⏭️ Skipping inheritance for elderly $elderlyId - not assigned to current nurse in previous shift',
-          );
-          continue;
-        }
-
-        final previousNurseId = data['assigned_nurse_id'];
-
-        // Derive previous nurse name from ID
-        String previousNurseName = 'Unknown Nurse';
-        if (previousNurseId != null) {
-          try {
-            final nurseDoc = await _firestore
-                .collection('users')
-                .doc(previousNurseId)
-                .get();
-            if (nurseDoc.exists) {
-              final nurseData = nurseDoc.data();
-              previousNurseName = nurseData?['user_fname'] ?? 'Unknown Nurse';
-            }
-          } catch (e) {
-            print('Error getting previous nurse name: $e');
-          }
-        }
-
-        print(
-          '✅ Inheriting assignment for elderly $elderlyId from $previousNurseName ($previousShift shift)',
-        );
-
-        // Transfer the assignment to the current nurse
-        await doc.reference.update({
-          'assigned_nurse_id': currentNurseId,
-          'shift': currentShift, // Update to current shift
-          'updated_at': FieldValue.serverTimestamp(),
-          // Add inheritance tracking
-          'inherited_from_shift': previousShift,
-          'inherited_from_nurse_id': data['assigned_nurse_id'],
-          'transfer_reason': 'Shift ended - inherited from previous shift',
-        });
-
-        // Schedule notification for the inherited vital task
-        final notificationTime = _getShiftStartTime(today, currentShift);
-        if (notificationTime != null &&
-            notificationTime.isAfter(DateTime.now())) {
-          final notificationId = 'vital_${doc.id}'.hashCode;
-          NotificationService.cancelNotification(notificationId);
-          NotificationService.scheduleTaskNotification(
-            id: notificationId,
-            title: 'Vital Check Reminder',
-            body:
-                'Time to check vitals for $elderlyId (inherited from previous shift)',
-            dateTime: notificationTime,
-          );
-          print(
-            '✅ Scheduled notification for inherited vital task: $elderlyId at $notificationTime',
-          );
-        }
-
-        // Log the transfer action
-        final logDocRef = _firestore.collection('vitals_activity_logs').doc();
-        await logDocRef.set({
-          'vitals_activity_log_id': logDocRef.id,
-          'elderly_id': data['elderly_id'],
-          'nurse_id': currentNurseId,
-          'house_id': data['house_id'],
-          'vitals_id': doc.id,
-          'shift': currentShift,
-          'action_type': 'inherited',
-          'timestamp': FieldValue.serverTimestamp(),
-          'old_values': {
-            'assigned_nurse_id': data['assigned_nurse_id'],
-            'shift': previousShift,
-          },
-          'new_values': {
-            'assigned_nurse_id': currentNurseId,
-            'shift': currentShift,
-          },
-          'remarks': 'Shift ended - inherited from previous shift',
-        });
-
-        print('✅ Successfully inherited assignment for elderly: $elderlyId');
-      }
-    } else {
-      print(
-        'ℹ️ No previous shift assignments to inherit or no elderly assigned to current nurse',
-      );
-    }
-  }
-
-  // Clean up assignments for elderly no longer assigned to this nurse
-  // ⚠️ IMPORTANT: Never delete vital records - only update status to maintain history
-  Future<void> _cleanupStaleAssignments(
-    String currentShift,
-    String currentDay,
-    String today,
-  ) async {
-    try {
-      print(
-        '🧹 Updating stale assignments for all nurses in current house (no deletions - preserving history)...',
-      );
-
-      // Get all elderly IDs assigned to ANY nurse for this shift/day (then filter by house)
-      final validElderlyToNurse = <String, String>{};
-
-      final allAssignedElderlyQuery = await _firestore
-          .collection('elderly_assignments')
-          .where('is_current', isEqualTo: true)
-          .where(
-            'house_id',
-            arrayContains: widget.houseId,
-          ) // 🔧 FIXED: Filter by house first
-          .where('day', isEqualTo: currentDay)
-          .where('shift', isEqualTo: currentShift)
-          .get();
-
-      // Build mapping of elderly to their assigned nurse (already filtered by current house)
-      for (var assignDoc in allAssignedElderlyQuery.docs) {
-        final nurseId = assignDoc['user_id'] as String;
-        final elderlyIds = List<String>.from(assignDoc['elderly_ids'] ?? []);
-        for (final elderlyId in elderlyIds) {
-          // No need to check house_id since we filtered by house_id arrayContains
-          validElderlyToNurse[elderlyId] = nurseId;
-        }
-      }
-
-      print(
-        '🧹 Valid elderly-to-nurse mappings for current house: $validElderlyToNurse',
-      );
-
-      // Get all pending vital assignments for CURRENT house, shift, and date
-      final existingAssignments = await _firestore
-          .collection('vitals')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      int updatedCount = 0;
-      for (final doc in existingAssignments.docs) {
-        final data = doc.data();
-        final elderlyId = data['elderly_id'];
-        final currentAssignedNurse = data['assigned_nurse_id'];
-
-        // Check if this elderly is still assigned to the same nurse
-        final correctNurse = validElderlyToNurse[elderlyId];
-
-        if (correctNurse == null) {
-          // Elderly is no longer assigned to any nurse in this house
-          await doc.reference.update({
-            'status': 'reassigned',
-            'updated_at': FieldValue.serverTimestamp(),
-            'reassignment_reason':
-                'Elderly no longer assigned to any nurse in this house',
-            'reassigned_at': FieldValue.serverTimestamp(),
-          });
-          updatedCount++;
-          print(
-            '🧹 Marked assignment as reassigned for elderly: $elderlyId (no longer assigned to any nurse)',
-          );
-        } else if (currentAssignedNurse != correctNurse) {
-          // Elderly is assigned to a different nurse now
-          await doc.reference.update({
-            'assigned_nurse_id': correctNurse,
-            'updated_at': FieldValue.serverTimestamp(),
-            'reassignment_reason': 'Elderly reassigned to different nurse',
-            'reassigned_at': FieldValue.serverTimestamp(),
-          });
-          updatedCount++;
-          print(
-            '🧹 Reassigned elderly: $elderlyId from nurse $currentAssignedNurse to nurse $correctNurse',
-          );
-        }
-      }
-
-      print(
-        '🧹 Status update complete: Updated $updatedCount stale assignments',
-      );
-    } catch (e) {
-      print('❌ Error updating stale assignments: $e');
-    }
-  }
 
   /// ⚡ OPTIMIZED: Get authenticated nurse ID directly from Firebase Auth
   Future<String?> _getCachedNurseId() async {
@@ -682,28 +444,6 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       if (nurseId == null) return [];
 
       print('✅ Nurse ID: $nurseId');
-
-      // 🔧 OPTIMIZATION: Only run cleanup operations once per day per nurse to avoid repeated work
-      final cleanupKey = '$nurseId-$today-$currentShift';
-      final needsCleanup = !_completedCleanups.contains(cleanupKey);
-
-      if (needsCleanup) {
-        print('🔄 Ensuring all assignments are created before fetching...');
-
-        // First handle shift transition to create inherited assignments
-        await _handleShiftTransition(nurseId);
-
-        // Clean up any assignments for elderly no longer assigned to any nurse in this house
-        await _cleanupStaleAssignments(currentShift, currentDay, today);
-
-        // Then ensure all regular assignments are created
-        await _ensureAllAssignmentsExist(currentShift, currentDay, today);
-
-        _completedCleanups.add(cleanupKey);
-        print('✅ Cleanup operations completed for today');
-      } else {
-        print('⏭️ Skipping cleanup operations - already done for today');
-      }
 
       // Get elderly assigned to all nurses (general assignments, not per shift)
       final elderlyToNurse = <String, String>{};
@@ -841,13 +581,52 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         '⚡ Found ${allVitals.length} pending vital assignments for current nurse\'s elderly',
       );
 
+      // Debug: Check status of returned vitals and filter out any completed ones
+      int completedCount = 0;
+      int pendingCount = 0;
+      for (final doc in allVitals) {
+        final data = doc.data() as Map<String, dynamic>;
+        final status = data['status'];
+        if (status == 'completed') {
+          completedCount++;
+          print(
+            '   ❌ COMPLETED Vital ${doc.id}: status=$status, elderly=${data['elderly_id']} - SHOULD NOT BE HERE!',
+          );
+        } else if (status == 'pending') {
+          pendingCount++;
+          print(
+            '   ✅ PENDING Vital ${doc.id}: status=$status, elderly=${data['elderly_id']}',
+          );
+        } else {
+          print(
+            '   ⚠️ OTHER Vital ${doc.id}: status=$status, elderly=${data['elderly_id']}',
+          );
+        }
+      }
+
+      print(
+        '📊 Query results: $pendingCount pending, $completedCount completed',
+      );
+
+      // Filter out any completed vitals that somehow got through the query
+      final filteredVitals = allVitals.where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return data['status'] == 'pending';
+      }).toList();
+
+      if (filteredVitals.length != allVitals.length) {
+        print(
+          '🧹 Filtered out ${allVitals.length - filteredVitals.length} completed vitals from results',
+        );
+      }
+
       // Process vitals assignments for current nurse only
       final upcomingVitals = <Map<String, dynamic>>[];
       final seenElderlyIds = <String>{};
 
       // ⚡ OPTIMIZATION: Collect all unique nurse IDs that need name lookup
       final nurseIdsToFetch = <String>{};
-      for (final vitalDoc in allVitals) {
+      for (final vitalDoc in filteredVitals) {
         final vitalData = vitalDoc.data() as Map<String, dynamic>;
         final assignedNurseId = vitalData['assigned_nurse_id'];
         final inheritedNurseId = vitalData['inherited_from_nurse_id'];
@@ -873,7 +652,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       // Reset seenElderlyIds for final processing
       seenElderlyIds.clear();
 
-      for (final vitalDoc in allVitals) {
+      for (final vitalDoc in filteredVitals) {
         final vitalData = vitalDoc.data() as Map<String, dynamic>;
         final elderlyId = vitalData['elderly_id'];
 
@@ -953,7 +732,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     }
   }
 
-  /// ⚡ BACKGROUND: Ensure assignments exist and return the vitals list
+  /// ⚡ BACKGROUND: Ensure assignments exist for ALL shifts and ALL houses and return the vitals list
   Future<List<Map<String, dynamic>>> _ensureAssignmentsExistInBackground(
     String nurseId,
     String currentShift,
@@ -961,46 +740,60 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     String today,
   ) async {
     try {
-      print('🔄 Background: Ensuring assignments exist for all nurses...');
+      print(
+        '🔄 Background: Ensuring assignments exist for ALL shifts and ALL houses...',
+      );
 
-      // Get all elderly assignments (general, not per shift)
+      // Get ALL elderly assignments for ALL shifts and ALL houses (not just current house)
       final allAssignmentsQuery = await _firestore
           .collection('elderly_assignments')
           .where('is_current', isEqualTo: true)
-          .where(
-            'house_id',
-            arrayContains: widget.houseId,
-          ) // 🔧 FIXED: Filter by house
-          .where(
-            'shift',
-            isEqualTo: currentShift,
-          ) // 🔧 FIXED: Filter by current shift
-          .where(
-            'day',
-            isEqualTo: currentDay,
-          ) // 🔧 FIXED: Filter by current day
-          .get();
+          .where('day', isEqualTo: currentDay)
+          .get(); // 🔧 REMOVED: No house filter - get ALL houses
 
-      final elderlyToNurse = <String, String>{};
+      final elderlyToNurseByShift =
+          <String, Map<String, String>>{}; // shift -> {elderlyId -> nurseId}
+
       for (final doc in allAssignmentsQuery.docs) {
         final data = doc.data();
         final nurseId = data['user_id'] as String;
+        final shift = data['shift'] as String;
         final elderlyIds = List<String>.from(data['elderly_ids'] ?? []);
+
+        if (!elderlyToNurseByShift.containsKey(shift)) {
+          elderlyToNurseByShift[shift] = <String, String>{};
+        }
+
         for (final elderlyId in elderlyIds) {
-          elderlyToNurse[elderlyId] = nurseId;
+          elderlyToNurseByShift[shift]![elderlyId] = nurseId;
         }
       }
 
-      print('✅ Found assignments for ${elderlyToNurse.length} elderly');
+      print(
+        '✅ Found assignments for ${elderlyToNurseByShift.length} shifts across all houses',
+      );
 
-      // Ensure assignments exist for all elderly in this house
-      if (elderlyToNurse.isNotEmpty) {
-        await _ensureAllAssignmentsExist(currentShift, currentDay, today);
+      // Ensure assignments exist for ALL shifts
+      for (final entry in elderlyToNurseByShift.entries) {
+        final shift = entry.key;
+        final elderlyToNurse = entry.value;
+        if (elderlyToNurse.isNotEmpty) {
+          print(
+            '🔄 Creating assignments for shift: $shift (${elderlyToNurse.length} elderly)',
+          );
+          await _ensureAllAssignmentsExistForAllHouses(
+            shift,
+            currentDay,
+            today,
+          );
+        }
       }
 
-      print('✅ Background assignment creation completed');
+      print(
+        '✅ Background assignment creation completed for ALL shifts and ALL houses',
+      );
 
-      // Now fetch the vitals
+      // Now fetch the vitals for current shift only
       return await _getUpcomingVitals();
     } catch (e) {
       print('❌ Error ensuring assignments exist: $e');
@@ -1028,8 +821,12 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
     // Refresh the list if vitals were updated (removes from upcoming)
     if (result == true && mounted) {
+      print('✅ Vitals updated successfully, refreshing upcoming list...');
       await _refreshVitals();
+      print('✅ Upcoming list refresh completed');
       // Optionally: trigger a callback/event to update completed tab if needed
+    } else {
+      print('ℹ️ Vitals update cancelled or failed, no refresh needed');
     }
   }
 
@@ -1126,6 +923,11 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       );
     }
 
+    // Filter out completed vitals for UI display (additional safety check)
+    final pendingVitals = upcomingVitals
+        .where((vital) => vital['status'] == 'pending')
+        .toList();
+
     return Column(
       children: [
         // Date Picker Row
@@ -1164,272 +966,327 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         Expanded(
           child: Stack(
             children: [
-              RefreshIndicator(
-                onRefresh: _refreshVitals,
-                child: ListView.builder(
-                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
-                  itemCount: upcomingVitals.length,
-                  itemBuilder: (context, index) {
-                    final elderlyInfo = upcomingVitals[index];
-                    final lastVital =
-                        elderlyInfo['last_vital'] as Map<String, dynamic>?;
-
-                    return Card(
-                      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
+              if (_isLoading)
+                const Center(child: CircularProgressIndicator())
+              else
+                // Vitals List
+                pendingVitals.isEmpty
+                    ? Center(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            // Elderly Name
-                            Row(
-                              children: [
-                                CircleAvatar(
-                                  backgroundColor: const Color(0xFF00588E),
-                                  child:
-                                      elderlyInfo['elderly_profilePic']
-                                              ?.isNotEmpty ==
-                                          true
-                                      ? ClipOval(
-                                          child: Image.network(
-                                            elderlyInfo['elderly_profilePic'],
-                                            fit: BoxFit.cover,
-                                          ),
-                                        )
-                                      : Icon(Icons.person, color: Colors.white),
-                                ),
-                                SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    elderlyInfo['elderly_name'] ?? 'Unknown',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF00588E),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            SizedBox(height: 12),
-
-                            // Status and Tap to Update
-                            GestureDetector(
-                              onTap: () => _updateVitals(elderlyInfo),
-                              child: Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: elderlyInfo['status'] == 'missed'
-                                        ? Colors.red.withOpacity(0.3)
-                                        : Colors.orange.withOpacity(0.3),
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                  color: elderlyInfo['status'] == 'missed'
-                                      ? Colors.red.withOpacity(0.1)
-                                      : Colors.orange.withOpacity(0.1),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      elderlyInfo['status'] == 'missed'
-                                          ? Icons.warning
-                                          : Icons.pending_actions,
-                                      color: elderlyInfo['status'] == 'missed'
-                                          ? Colors.red
-                                          : Colors.orange,
-                                      size: 24,
-                                    ),
-                                    SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Container(
-                                                padding: EdgeInsets.symmetric(
-                                                  horizontal: 8,
-                                                  vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color:
-                                                      elderlyInfo['is_inherited'] ==
-                                                          true
-                                                      ? Colors.blue
-                                                      : Colors.orange,
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                ),
-                                                child: Text(
-                                                  elderlyInfo['is_inherited'] ==
-                                                          true
-                                                      ? 'INHERITED'
-                                                      : 'PENDING',
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.white,
-                                                  ),
-                                                ),
-                                              ),
-                                              SizedBox(width: 8),
-                                              Expanded(
-                                                child: Text(
-                                                  elderlyInfo['is_inherited'] ==
-                                                          true
-                                                      ? 'From Previous Shift'
-                                                      : 'Not Updated Today',
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 14,
-                                                    color:
-                                                        elderlyInfo['is_inherited'] ==
-                                                            true
-                                                        ? Colors.blue
-                                                        : Colors.orange,
-                                                  ),
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          SizedBox(height: 4),
-                                          // Split the inherited info into separate lines to prevent overflow
-                                          if (elderlyInfo['is_inherited'] ==
-                                              true) ...[
-                                            Text(
-                                              'Originally: ${elderlyInfo['original_nurse']}',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[700],
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            Text(
-                                              '${elderlyInfo['inherited_from_shift']} shift - Tap to complete',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[700],
-                                              ),
-                                            ),
-                                          ] else
-                                            Text(
-                                              'Tap to update vital signs for ${_getTodayDateString()}',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[700],
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                    Icon(
-                                      Icons.arrow_forward_ios,
-                                      color: elderlyInfo['is_inherited'] == true
-                                          ? Colors.blue
-                                          : Colors.orange,
-                                      size: 16,
-                                    ),
-                                  ],
-                                ),
+                            SizedBox(height: 24),
+                            Icon(Icons.favorite, size: 64, color: Colors.grey),
+                            SizedBox(height: 16),
+                            Text(
+                              'No upcoming vitals',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.grey,
                               ),
                             ),
+                          ],
+                        ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _refreshVitals,
+                        child: ListView.builder(
+                          padding: EdgeInsets.only(bottom: 80),
+                          itemCount: pendingVitals.length,
+                          itemBuilder: (context, index) {
+                            final elderlyInfo = pendingVitals[index];
+                            final lastVital =
+                                elderlyInfo['last_vital']
+                                    as Map<String, dynamic>?;
 
-                            // Last vital info if available
-                            if (lastVital != null) ...[
-                              SizedBox(height: 12),
-                              Text(
-                                'Last recorded vitals:',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey[700],
-                                ),
+                            return Card(
+                              margin: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
                               ),
-                              SizedBox(height: 8),
-                              Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: Colors.grey.withOpacity(0.3),
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                  color: Colors.grey.withOpacity(0.1),
-                                ),
+                              color: const Color(0xFFE6F3FA),
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
+                                    // Elderly Name
                                     Row(
                                       children: [
-                                        Expanded(
-                                          child: Text(
-                                            'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
+                                        CircleAvatar(
+                                          backgroundColor: const Color(
+                                            0xFF00588E,
                                           ),
+                                          child:
+                                              elderlyInfo['elderly_profilePic']
+                                                      ?.isNotEmpty ==
+                                                  true
+                                              ? ClipOval(
+                                                  child: Image.network(
+                                                    elderlyInfo['elderly_profilePic'],
+                                                    fit: BoxFit.cover,
+                                                  ),
+                                                )
+                                              : Icon(
+                                                  Icons.person,
+                                                  color: Colors.white,
+                                                ),
                                         ),
+                                        SizedBox(width: 12),
                                         Expanded(
                                           child: Text(
-                                            'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
+                                            elderlyInfo['elderly_name'] ??
+                                                'Unknown',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF00588E),
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: 4),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
+                                    SizedBox(height: 12),
+
+                                    // Status and Tap to Update
+                                    GestureDetector(
+                                      onTap: () => _updateVitals(elderlyInfo),
+                                      child: Container(
+                                        padding: EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color:
+                                                elderlyInfo['status'] ==
+                                                    'missed'
+                                                ? Colors.red
+                                                : Colors.orange,
                                           ),
-                                        ),
-                                        Expanded(
-                                          child: Text(
-                                            'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
+                                          borderRadius: BorderRadius.circular(
+                                            8,
                                           ),
+                                          color: Colors.white,
                                         ),
-                                      ],
-                                    ),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
-                                    ),
-                                    if (lastVital['vital_record_at'] != null)
-                                      Text(
-                                        'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600],
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              elderlyInfo['status'] == 'missed'
+                                                  ? Icons.warning
+                                                  : Icons.pending_actions,
+                                              color:
+                                                  elderlyInfo['status'] ==
+                                                      'missed'
+                                                  ? Colors.red
+                                                  : Colors.orange,
+                                              size: 24,
+                                            ),
+                                            SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Row(
+                                                    children: [
+                                                      Container(
+                                                        padding:
+                                                            EdgeInsets.symmetric(
+                                                              horizontal: 8,
+                                                              vertical: 2,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              elderlyInfo['is_inherited'] ==
+                                                                  true
+                                                              ? Colors.blue
+                                                              : Colors.orange,
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        child: Text(
+                                                          elderlyInfo['is_inherited'] ==
+                                                                  true
+                                                              ? 'INHERITED'
+                                                              : 'PENDING',
+                                                          style: TextStyle(
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            color: Colors.white,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: Text(
+                                                          elderlyInfo['is_inherited'] ==
+                                                                  true
+                                                              ? 'From Previous Shift'
+                                                              : 'Not Updated Today',
+                                                          style: TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            fontSize: 14,
+                                                            color:
+                                                                elderlyInfo['is_inherited'] ==
+                                                                    true
+                                                                ? Colors.blue
+                                                                : Colors.orange,
+                                                          ),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  SizedBox(height: 4),
+                                                  // Split the inherited info into separate lines to prevent overflow
+                                                  if (elderlyInfo['is_inherited'] ==
+                                                      true) ...[
+                                                    Text(
+                                                      'Originally: ${elderlyInfo['original_nurse']}',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.grey[700],
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                    Text(
+                                                      '${elderlyInfo['inherited_from_shift']} shift - Tap to complete',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.grey[700],
+                                                      ),
+                                                    ),
+                                                  ] else
+                                                    Text(
+                                                      'Tap to update vital signs for ${_getTodayDateString()}',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.grey[700],
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                            Icon(
+                                              Icons.arrow_forward_ios,
+                                              color:
+                                                  elderlyInfo['is_inherited'] ==
+                                                      true
+                                                  ? Colors.blue
+                                                  : Colors.orange,
+                                              size: 16,
+                                            ),
+                                          ],
                                         ),
                                       ),
+                                    ),
+
+                                    // Last vital info if available
+                                    if (lastVital != null) ...[
+                                      SizedBox(height: 12),
+                                      Text(
+                                        'Last recorded vitals:',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                      SizedBox(height: 8),
+                                      Container(
+                                        padding: EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: Colors.grey.withOpacity(0.3),
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          // UI-only change: make last vitals container white
+                                          color: Colors.white,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  child: Text(
+                                                    'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            SizedBox(height: 4),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  child: Text(
+                                                    'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            SizedBox(height: 4),
+                                            Text(
+                                              'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
+                                            ),
+                                            if (lastVital['vital_record_at'] !=
+                                                null)
+                                              Text(
+                                                'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
-                            ],
-                          ],
+                            );
+                          },
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
-              Positioned(
-                bottom: 20,
-                right: 20,
-                child: FloatingActionButton.extended(
-                  onPressed: _showFollowUpVitalsSelection,
-                  backgroundColor: Colors.green[600],
-                  foregroundColor: Colors.white,
-                  icon: Icon(Icons.add_circle_outline),
-                  label: Text(
-                    'Follow-up',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+              if (!_isLoading)
+                Positioned(
+                  bottom: 16,
+                  right: 16,
+                  child: FloatingActionButton.extended(
+                    onPressed: _showFollowUpVitalsSelection,
+                    backgroundColor: Colors.green[600],
+                    foregroundColor: Colors.white,
+                    icon: Icon(Icons.add_circle_outline),
+                    label: Text(
+                      'Follow-up',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    heroTag: "followup_vitals_fab",
                   ),
-                  heroTag: "followup_vitals_fab",
                 ),
-              ),
             ],
           ),
         ),
@@ -1437,28 +1294,21 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     );
   }
 
-  Future<void> _ensureAllAssignmentsExist(
+  Future<void> _ensureAllAssignmentsExistForAllHouses(
     String shift,
     String currentDay,
     String today,
   ) async {
     try {
-      print('🔍 Checking all nurse assignments...');
+      print('🔍 Checking ALL nurse assignments across ALL houses...');
 
-      // Get elderly assigned to ALL nurses (general assignments)
+      // Get elderly assigned to ALL nurses across ALL houses for this shift
       final nurseAssignmentsQuery = await _firestore
           .collection('elderly_assignments')
           .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where(
-            'house_id',
-            arrayContains: widget.houseId,
-          ) // 🔧 FIXED: Filter by house
-          .where('shift', isEqualTo: shift) // 🔧 FIXED: Filter by current shift
-          .where(
-            'day',
-            isEqualTo: currentDay,
-          ) // 🔧 FIXED: Filter by current day
+          .where('shift', isEqualTo: shift)
+          .where('day', isEqualTo: currentDay)
           .get();
 
       final elderlyToProcess = <String, String>{}; // elderlyId -> nurseId
@@ -1473,7 +1323,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       }
 
       print(
-        '📋 Found ${elderlyToProcess.length} elderly assignments for all nurses',
+        '📋 Found ${elderlyToProcess.length} elderly assignments for all nurses across all houses',
       );
 
       // Process each elderly assignment
@@ -1494,15 +1344,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
         final elderlyData = elderlyDoc.data()!;
 
-        // Only process elderly in the current house (like medication does)
-        if (elderlyData['house_id'] != widget.houseId) {
-          print(
-            '⏭️ Skipping elderly $elderlyId - not in current house ${widget.houseId}',
-          );
-          continue;
-        }
-
-        // Only process alive elderly
+        // Process ALL elderly regardless of house (no house filtering)
+        // Only skip if not alive
         if (elderlyData['elderly_status'] != 'Alive') {
           print(
             '⏭️ Skipping elderly $elderlyId - status is ${elderlyData['elderly_status']}',
@@ -1580,7 +1423,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           if (notificationTime != null &&
               notificationTime.isAfter(DateTime.now())) {
             final notificationId =
-                'vital_${elderlyId}_${today}_${shift}'.hashCode;
+                'vital_${elderlyId}_${today}_$shift'.hashCode;
             NotificationService.cancelNotification(notificationId);
             NotificationService.scheduleTaskNotification(
               id: notificationId,
@@ -1597,9 +1440,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         }
       }
 
-      print('✅ All assignments verified and created if needed');
+      print('✅ All assignments verified and created for ALL houses');
     } catch (e) {
-      print('❌ Error ensuring assignments exist: $e');
+      print('❌ Error ensuring assignments exist for all houses: $e');
     }
   }
 }

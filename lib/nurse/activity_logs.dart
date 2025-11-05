@@ -192,7 +192,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
           }
           // Skip duplicate create actions for the same medication
         } else {
-          // Keep all other actions (complete_take, miss_take, etc.)
+          // Keep all other actions (take_completed, miss_take, etc.)
           deduplicatedActivities.add(activity);
         }
       }
@@ -373,7 +373,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       case 'create':
         return 'Nurse $nurseName created medication "$medicationName" for $elderlyTitle $elderlyName';
 
-      case 'complete_take':
+      case 'take_completed':
         final takeText = takeNumber != null
             ? _getOrdinalFromNumber(takeNumber)
             : (takeOrdinal ?? '1st');
@@ -476,18 +476,20 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
 
   Color _getMedicationActionColor(String action) {
     switch (action) {
+      case 'create':
+        return Colors.blue;
       case 'create_medication':
       case 'add_medication':
-        return Colors.green;
-      case 'complete_take':
-        return Colors.blue;
-      case 'miss_take':
         return Colors.orange;
+      case 'take_completed':
+        return Colors.green;
+      case 'miss_take':
+        return Colors.red;
       case 'edit_medication':
         return Colors.purple;
       case 'delete_medication':
       case 'delete_individual_take':
-        return Colors.red;
+        return Colors.redAccent;
       case 'status_change':
         return Colors.teal;
       default:
@@ -519,7 +521,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       case 'create_medication':
       case 'add_medication':
         return Icons.add_circle;
-      case 'complete_take':
+      case 'take_completed':
         return Icons.check_circle;
       case 'miss_take':
         return Icons.cancel;
@@ -579,11 +581,64 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       } else if (difference.inDays < 7) {
         return '${difference.inDays}d ago';
       } else {
-        return DateFormat('MMM dd, yyyy • HH:mm').format(dateTime);
+        return DateFormat('MMM d, yyyy • HH:mm').format(dateTime);
       }
     } catch (e) {
       return 'Invalid time';
     }
+  }
+
+  // 🔧 NEW: Build message spans with bold action words
+  List<TextSpan> _buildMessageSpans(String message) {
+    // Common action words to make bold
+    final actionWords = [
+      'created',
+      'completed',
+      'marked as MISSED',
+      'marked',
+      'MISSED',
+      'edited',
+      'deleted',
+      'added',
+      'changed',
+      'verified',
+      'updated',
+    ];
+
+    List<TextSpan> spans = [];
+    String remainingMessage = message;
+
+    // Try to find and bold the first action word
+    for (String action in actionWords) {
+      final actionIndex = remainingMessage.toLowerCase().indexOf(
+        action.toLowerCase(),
+      );
+      if (actionIndex != -1) {
+        // Add text before the action word
+        if (actionIndex > 0) {
+          spans.add(TextSpan(text: remainingMessage.substring(0, actionIndex)));
+        }
+
+        // Add the bold action word
+        final actionEndIndex = actionIndex + action.length;
+        spans.add(
+          TextSpan(
+            text: remainingMessage.substring(actionIndex, actionEndIndex),
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+          ),
+        );
+
+        // Add remaining text
+        if (actionEndIndex < remainingMessage.length) {
+          spans.add(TextSpan(text: remainingMessage.substring(actionEndIndex)));
+        }
+
+        return spans; // Return after finding the first action word
+      }
+    }
+
+    // If no action word found, return the whole message as normal text
+    return [TextSpan(text: message)];
   }
 
   Widget _buildMedicationActivityCard(Map<String, dynamic> activity) {
@@ -596,6 +651,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       elevation: 2,
+      color: Color(0xFFE6F3FA),
       child: Padding(
         padding: EdgeInsets.all(16),
         child: Row(
@@ -618,15 +674,13 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Activity Message
-                  Text(
-                    message,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
+                  RichText(
+                    text: TextSpan(
+                      children: _buildMessageSpans(message),
+                      style: TextStyle(fontSize: 16, color: Colors.black87),
                     ),
                   ),
-                  SizedBox(height: 4),
+                  SizedBox(height: 8),
 
                   // Timestamp
                   Text(
@@ -638,7 +692,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                   if (activity['medication_name'] != null &&
                       activity['medication_name'].toString().isNotEmpty)
                     Padding(
-                      padding: EdgeInsets.only(top: 4),
+                      padding: EdgeInsets.only(top: 8),
                       child: Container(
                         padding: EdgeInsets.symmetric(
                           horizontal: 8,
@@ -647,11 +701,14 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                         decoration: BoxDecoration(
                           color: actionColor.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: actionColor.withValues(alpha: 0.3),
+                          ),
                         ),
                         child: Text(
                           activity['medication_name'],
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 12,
                             color: actionColor,
                             fontWeight: FontWeight.w500,
                           ),
@@ -679,6 +736,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       elevation: 2,
+      color: Color(0xFFE6F3FA),
       child: Padding(
         padding: EdgeInsets.all(16),
         child: Row(
@@ -701,15 +759,13 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Activity Message
-                  Text(
-                    message,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
+                  RichText(
+                    text: TextSpan(
+                      children: _buildMessageSpans(message),
+                      style: TextStyle(fontSize: 16, color: Colors.black87),
                     ),
                   ),
-                  SizedBox(height: 4),
+                  SizedBox(height: 8),
 
                   // Timestamp and Shift
                   Row(
@@ -732,7 +788,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                           child: Text(
                             '${activity['shift']} shift',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 12,
                               color: Colors.blue[700],
                               fontWeight: FontWeight.w500,
                             ),
@@ -744,7 +800,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
 
                   // Vital Signs Details (if available)
                   if (newValues.isNotEmpty) ...[
-                    SizedBox(height: 8),
+                    SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 4,
@@ -786,7 +842,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                   // Remarks (if available)
                   if (activity['remarks'] != null &&
                       activity['remarks'].toString().isNotEmpty) ...[
-                    SizedBox(height: 6),
+                    SizedBox(height: 8),
                     Container(
                       padding: EdgeInsets.all(8),
                       decoration: BoxDecoration(
@@ -802,7 +858,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                             child: Text(
                               activity['remarks'].toString(),
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 14,
                                 color: Colors.grey[700],
                                 fontStyle: FontStyle.italic,
                               ),
@@ -833,7 +889,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       child: Text(
         '$label: $value',
         style: TextStyle(
-          fontSize: 10,
+          fontSize: 12,
           color: color,
           fontWeight: FontWeight.w500,
         ),
@@ -845,6 +901,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       body: Stack(
+        clipBehavior: Clip.none,
         children: [
           // Background
           Positioned.fill(
@@ -923,13 +980,19 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
 
                 // Tab Content
                 Expanded(
-                  child: TabBarView(
-                    controller: _tabController,
+                  child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      // Medication Activities Tab
-                      _buildMedicationTab(),
-                      // Vitals Activities Tab
-                      _buildVitalsTab(),
+                      TabBarView(
+                        controller: _tabController,
+                        clipBehavior: Clip.none,
+                        children: [
+                          // Medication Activities Tab
+                          _buildMedicationTab(),
+                          // Vitals Activities Tab
+                          _buildVitalsTab(),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -945,103 +1008,117 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     return Column(
       children: [
         // Filter Section
-        Container(
-          padding: EdgeInsets.all(16),
-          color: Colors.grey[50],
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Elderly Filter
-              Text(
-                'Filter by Elderly:',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-              ),
-              SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
-                  borderRadius: BorderRadius.circular(8),
-                  color: Colors.white,
+        Material(
+          elevation: 0,
+          borderRadius: BorderRadius.circular(8),
+          clipBehavior: Clip.none,
+          child: Container(
+            margin: EdgeInsets.all(16),
+            padding: EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.grey[50]?.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Elderly Filter
+                Text(
+                  'Filter by Elderly:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    color: Color(0xFF00588E),
+                  ),
                 ),
-                child: DropdownButton<String>(
-                  value: _selectedElderlyMed,
-                  isExpanded: true,
-                  hint: Text('All Elderly'),
-                  underline: Container(),
-                  items: [
-                    DropdownMenuItem<String>(
-                      value: null,
-                      child: Text('All Elderly'),
-                    ),
-                    ..._elderlyList.map((elderly) {
-                      return DropdownMenuItem<String>(
-                        value: elderly['id'],
-                        child: Text(elderly['name']!),
-                      );
-                    }),
-                  ],
-                  onChanged: (String? value) {
-                    setState(() {
-                      _selectedElderlyMed = value;
-                    });
-                    _loadMedicationLogs();
-                  },
+                SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Color(0xFF00588E)),
+                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFFD8F4FF),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _selectedElderlyMed,
+                    isExpanded: true,
+                    hint: Text('All Elderly'),
+                    icon: Icon(Icons.arrow_drop_down, color: Color(0xFF00588E)),
+                    dropdownColor: Colors.white,
+                    underline: Container(),
+                    items: [
+                      DropdownMenuItem<String>(
+                        value: null,
+                        child: Text('All Elderly'),
+                      ),
+                      ..._elderlyList.map((elderly) {
+                        return DropdownMenuItem<String>(
+                          value: elderly['id'],
+                          child: Text(elderly['name']!),
+                        );
+                      }),
+                    ],
+                    onChanged: (String? value) {
+                      setState(() {
+                        _selectedElderlyMed = value;
+                      });
+                      _loadMedicationLogs();
+                    },
+                  ),
                 ),
-              ),
-              SizedBox(height: 16),
+                SizedBox(height: 16),
 
-              // Date Filter Row
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Date: ${DateFormat('MMM dd, yyyy').format(_selectedDateMed)}',
+                // Date Filter Row
+                Row(
+                  children: [
+                    Text(
+                      'Date: ${DateFormat('MMM d, yyyy').format(_selectedDateMed)}',
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Total: ${_medicationLogs.length} activities',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                    ),
-                  ),
-                  InkWell(
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _selectedDateMed,
-                        firstDate: DateTime(2023),
-                        lastDate: DateTime.now(),
-                      );
-                      if (picked != null && picked != _selectedDateMed) {
-                        setState(() {
-                          _selectedDateMed = picked;
-                        });
-                        _loadMedicationLogs();
-                      }
-                    },
-                    child: Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
                         color: Color(0xFF00588E),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Icon(
-                        Icons.calendar_today,
-                        color: Colors.white,
-                        size: 20,
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Total: ${_medicationLogs.length} activities',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedDateMed,
+                          firstDate: DateTime(2023),
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null && picked != _selectedDateMed) {
+                          setState(() {
+                            _selectedDateMed = picked;
+                          });
+                          _loadMedicationLogs();
+                        }
+                      },
+                      child: Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Color(0xFF00588E),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(
+                          Icons.calendar_today,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
 
@@ -1096,103 +1173,116 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     return Column(
       children: [
         // Filter Section
-        Container(
-          padding: EdgeInsets.all(16),
-          color: Colors.grey[50],
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Elderly Filter
-              Text(
-                'Filter by Elderly:',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-              ),
-              SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
-                  borderRadius: BorderRadius.circular(8),
-                  color: Colors.white,
+        Material(
+          elevation: 0,
+          borderRadius: BorderRadius.circular(8),
+          clipBehavior: Clip.none,
+          child: Container(
+            margin: EdgeInsets.all(16),
+            padding: EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.grey[50]?.withValues(alpha: 0.5),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Elderly Filter
+                Text(
+                  'Filter by Elderly:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    color: Color(0xFF00588E),
+                  ),
                 ),
-                child: DropdownButton<String>(
-                  value: _selectedElderlyVitals,
-                  isExpanded: true,
-                  hint: Text('All Elderly'),
-                  underline: Container(),
-                  items: [
-                    DropdownMenuItem<String>(
-                      value: null,
-                      child: Text('All Elderly'),
-                    ),
-                    ..._elderlyList.map((elderly) {
-                      return DropdownMenuItem<String>(
-                        value: elderly['id'],
-                        child: Text(elderly['name']!),
-                      );
-                    }),
-                  ],
-                  onChanged: (String? value) {
-                    setState(() {
-                      _selectedElderlyVitals = value;
-                    });
-                    _loadVitalsLogs();
-                  },
+                SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Color(0xFF00588E)),
+                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFFD8F4FF),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _selectedElderlyVitals,
+                    isExpanded: true,
+                    hint: Text('All Elderly'),
+                    icon: Icon(Icons.arrow_drop_down, color: Color(0xFF00588E)),
+                    dropdownColor: Colors.white,
+                    underline: Container(),
+                    items: [
+                      DropdownMenuItem<String>(
+                        value: null,
+                        child: Text('All Elderly'),
+                      ),
+                      ..._elderlyList.map((elderly) {
+                        return DropdownMenuItem<String>(
+                          value: elderly['id'],
+                          child: Text(elderly['name']!),
+                        );
+                      }),
+                    ],
+                    onChanged: (String? value) {
+                      setState(() {
+                        _selectedElderlyVitals = value;
+                      });
+                      _loadVitalsLogs();
+                    },
+                  ),
                 ),
-              ),
-              SizedBox(height: 16),
+                SizedBox(height: 16),
 
-              // Date Filter Row
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Date: ${DateFormat('MMM dd, yyyy').format(_selectedDateVitals)}',
+                // Date Filter Row
+                Row(
+                  children: [
+                    Text(
+                      'Date: ${DateFormat('MMM d, yyyy').format(_selectedDateVitals)}',
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Total: ${_vitalsLogs.length} activities',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                    ),
-                  ),
-                  InkWell(
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _selectedDateVitals,
-                        firstDate: DateTime(2023),
-                        lastDate: DateTime.now(),
-                      );
-                      if (picked != null && picked != _selectedDateVitals) {
-                        setState(() {
-                          _selectedDateVitals = picked;
-                        });
-                        _loadVitalsLogs();
-                      }
-                    },
-                    child: Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
                         color: Color(0xFF00588E),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Icon(
-                        Icons.calendar_today,
-                        color: Colors.white,
-                        size: 20,
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Total: ${_vitalsLogs.length} activities',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedDateVitals,
+                          firstDate: DateTime(2023),
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null && picked != _selectedDateVitals) {
+                          setState(() {
+                            _selectedDateVitals = picked;
+                          });
+                          _loadVitalsLogs();
+                        }
+                      },
+                      child: Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Color(0xFF00588E),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(
+                          Icons.calendar_today,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
 

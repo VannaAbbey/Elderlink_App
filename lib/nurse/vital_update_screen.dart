@@ -177,7 +177,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(30),
-              borderSide: const BorderSide(color: Color(0XFF1D66A0)),
+              borderSide: BorderSide.none,
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(30),
@@ -957,6 +957,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
+                          color: Colors.white,
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: Row(
@@ -1016,6 +1017,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
+                          color: Colors.white,
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: Column(
@@ -1154,9 +1156,7 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
                                           borderRadius: BorderRadius.circular(
                                             8,
                                           ),
-                                          borderSide: const BorderSide(
-                                            color: Color(0XFF1D66A0),
-                                          ),
+                                          borderSide: BorderSide.none,
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(

@@ -17,6 +17,7 @@ import 'activity_logs.dart';
 import '../main.dart' as main;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
+import '../services/attendance_check_service.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -43,6 +44,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   List<Map<String, dynamic>> _todaysBirthdays = []; // Store today's birthdays
 
   late ConfettiController _confettiController;
+
+  bool _hasCheckedAttendance =
+      false; // Track if attendance has been checked this session
 
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
@@ -187,14 +191,137 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
       _checkForBirthday(); // Check for birthday on app start
+      _checkAndShowAttendance(); // Check and show attendance dialog
       // Check for pending notification payload
       final pending = NotificationService.getAndClearPendingPayload();
       if (pending != null) {
         _handleNotificationTap(pending);
       }
+      // Clean up old medication task descriptions (one-time fix)
+      _cleanupOldMedicationDescriptions();
     });
     // Start timer to check for exact medication times
     _startExactMedicationTimeChecker();
+    // Start timer to check for missed medical tasks
+    _startMissedTaskChecker();
+  }
+
+  /// One-time cleanup to fix old medication task descriptions
+  Future<void> _cleanupOldMedicationDescriptions() async {
+    try {
+      debugPrint('🧹 Starting cleanup of old medication tasks...');
+
+      // Get all medical tasks (both 'medication' and 'Medication' task_source)
+      final allTasksQuery = await _firestore.collection('medical_tasks').get();
+
+      int updatedCount = 0;
+      for (final doc in allTasksQuery.docs) {
+        final data = doc.data();
+        final taskSource = data['task_source'] as String?;
+        final title = data['task_title'] as String?;
+        final description = data['task_description'] as String?;
+
+        // Check if it's a medication task (case-insensitive)
+        if (taskSource != null && taskSource.toLowerCase() == 'medication') {
+          Map<String, dynamic> updates = {};
+
+          // Standardize task_source to lowercase
+          if (taskSource != 'medication') {
+            updates['task_source'] = 'medication';
+          }
+
+          // Fix title: should be just "Medication"
+          // Old format: "Metformin - 10mg for Graciela Mendoza"
+          if (title != null && title != 'Medication') {
+            updates['task_title'] = 'Medication';
+            // Move old title to description
+            updates['task_description'] = title;
+          }
+
+          // Fix description: remove "at [time]" if present and only if we haven't already set description
+          if (description != null &&
+              description.contains(' at ') &&
+              !updates.containsKey('task_description')) {
+            final cleanDesc = description.replaceAll(
+              RegExp(r' at \d{1,2}:\d{2}'),
+              '',
+            );
+            updates['task_description'] = cleanDesc;
+          }
+
+          // Apply updates if any
+          if (updates.isNotEmpty) {
+            debugPrint('📝 Updating task ${doc.id}:');
+            debugPrint('   Old title: $title');
+            debugPrint('   Old description: $description');
+            debugPrint('   Updates: $updates');
+
+            await doc.reference.update(updates);
+            updatedCount++;
+          }
+        }
+      }
+      debugPrint('✅ Cleaned up $updatedCount medication tasks');
+    } catch (e) {
+      debugPrint('Error cleaning up old medication tasks: $e');
+    }
+  }
+
+  /// Check and show attendance dialog if conditions are met
+  Future<void> _checkAndShowAttendance() async {
+    // Skip if already checked this session
+    if (_hasCheckedAttendance) return;
+
+    try {
+      print('🔍 Checking attendance conditions...');
+
+      // Check if user is scheduled to work today
+      final isScheduled = await AttendanceCheckService.isScheduledToday();
+      print('📅 Is scheduled today: $isScheduled');
+
+      if (!isScheduled) {
+        print('⏭️ Not scheduled today, skipping attendance check');
+        return;
+      }
+
+      // Check if at shift start time
+      final isAtShiftStart = await AttendanceCheckService.isAtShiftStart();
+      print('⏰ Is at shift start: $isAtShiftStart');
+
+      if (!isAtShiftStart) {
+        print('⏭️ Not at shift start time, skipping attendance check');
+        return;
+      }
+
+      // Check if already marked attendance today
+      print('🔍 About to check if already marked...');
+      final hasMarked = await AttendanceCheckService.hasMarkedAttendanceToday();
+      print('✅ Already marked attendance: $hasMarked');
+
+      if (hasMarked) {
+        print('⏭️ Already marked attendance today, skipping');
+        _hasCheckedAttendance = true;
+        return;
+      }
+
+      // All conditions met - show attendance dialog
+      print('🎯 All conditions met! Showing attendance dialog...');
+
+      if (mounted) {
+        await AttendanceCheckService.showAttendanceDialog(
+          context,
+          onDismissed: () {
+            if (mounted) {
+              setState(() {
+                _hasCheckedAttendance = true;
+              });
+            }
+          },
+        );
+      }
+    } catch (e) {
+      print('❌ Error checking attendance: $e');
+    }
   }
 
   void _initializeEmergencyListener() {
@@ -383,10 +510,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               final medName = mdata['medication_name'] ?? 'Medication';
               final dosage = mdata['dosage'] ?? '';
 
-              final taskTitle =
-                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+              final taskTitle = 'Medication';
               final taskDesc =
-                  'Medication scheduled for $elderlyName at $scheduled';
+                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
 
               // Find the corresponding medical task
               final taskQuery = await _firestore
@@ -419,6 +545,72 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       }
     } catch (e) {
       debugPrint('Error checking exact medication times: $e');
+    }
+  }
+
+  void _startMissedTaskChecker() {
+    // Check for missed medical tasks every 1 minute
+    Timer.periodic(const Duration(minutes: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      await _checkMissedTasks();
+    });
+    // Also check immediately on startup
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkMissedTasks();
+    });
+  }
+
+  Future<void> _checkMissedTasks() async {
+    try {
+      final now = DateTime.now();
+      print(
+        '🔍 Checking for missed medical tasks at ${DateFormat('HH:mm').format(now)}',
+      );
+
+      // Get all medical tasks that are medication-related and still pending
+      // Check both lowercase 'medication' and capitalized 'Medication'
+      final tasksQuery = await _firestore
+          .collection('medical_tasks')
+          .where('task_status', isEqualTo: 'pending')
+          .get();
+
+      print('📋 Found ${tasksQuery.docs.length} pending tasks (all types)');
+
+      for (final doc in tasksQuery.docs) {
+        final data = doc.data();
+        final taskSource = data['task_source'] as String?;
+        final taskStart = (data['task_start'] as Timestamp?)?.toDate();
+
+        // Only check medication tasks (case-insensitive)
+        if (taskSource == null || taskSource.toLowerCase() != 'medication') {
+          continue;
+        }
+
+        if (taskStart == null) continue;
+
+        // Check if more than 1 hour has passed since scheduled time
+        final timeDifference = now.difference(taskStart);
+
+        print('⏰ Medication task ${doc.id}:');
+        print('   Scheduled: $taskStart');
+        print('   Current: $now');
+        print('   Difference: ${timeDifference.inMinutes} minutes');
+
+        if (timeDifference.inHours >= 1) {
+          print(
+            '🚨 Task ${doc.id} is overdue by ${timeDifference.inMinutes} minutes - deleting',
+          );
+
+          // Delete the medical task (it will be handled by medication_takes and activity logs)
+          await doc.reference.delete();
+          print('✅ Deleted overdue medical task ${doc.id}');
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error checking missed tasks: $e');
     }
   }
 
@@ -779,78 +971,99 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(15),
               ),
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Text(
-                      '🎉 Happy Birthday! 🎂',
-                      style: const TextStyle(
-                        color: Color(0xFF00588E),
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Poppins',
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    names.length == 1
-                        ? "Today is ${names[0]}'s birthday! 🎈🥳"
-                        : names.length == 2
-                        ? "Today is ${names[0]} and ${names[1]}'s birthday! 🎈🥳"
-                        : "Today is ${names.sublist(0, names.length - 1).join(', ')} and ${names.last}'s birthday! 🎈🥳",
-                    style: const TextStyle(fontSize: 16, fontFamily: 'Poppins'),
-                    textAlign: TextAlign.justify,
-                  ),
-                  const SizedBox(height: 30),
-                  const Text(
-                    'Greet them with a warm hug and love.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontFamily: 'Poppins',
-                      fontStyle: FontStyle.italic,
-                    ),
-                    textAlign: TextAlign.justify,
-                  ),
-                  const SizedBox(height: 20),
-                  const Text('🎂🍰🎈🎉🎊', style: TextStyle(fontSize: 24)),
-                ],
-              ),
-              actions: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool(acknowledgedKey, true);
-                      _confettiController.stop();
-                      Navigator.of(context).pop();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00588E),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(25),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text(
-                      'Acknowledge 🎉',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
+              contentPadding: EdgeInsets.zero,
+              content: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(15),
+                  image: DecorationImage(
+                    image: AssetImage('assets/images/birthdaybg.png'),
+                    fit: BoxFit.cover,
                   ),
                 ),
-              ],
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 60), // Add spacing at top
+                      // Title
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const SizedBox(width: 10),
+                          Flexible(
+                            child: Text(
+                              '🎉 Happy Birthday! 🎂',
+                              style: const TextStyle(
+                                color: Color(0xFF00588E),
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'Poppins',
+                                fontSize: 22,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      // Content
+                      Text(
+                        names.length == 1
+                            ? "Today is ${names[0]}'s birthday! 🎈🥳"
+                            : names.length == 2
+                            ? "Today is ${names[0]} and ${names[1]}'s birthday! 🎈🥳"
+                            : "Today is ${names.sublist(0, names.length - 1).join(', ')} and ${names.last}'s birthday! 🎈🥳",
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontFamily: 'Poppins',
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.justify,
+                      ),
+                      const SizedBox(height: 30),
+                      const Text(
+                        'Greet them with a warm hug and love.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontFamily: 'Poppins',
+                          fontStyle: FontStyle.italic,
+                        ),
+                        textAlign: TextAlign.justify,
+                      ),
+                      const SizedBox(height: 20),
+                      const Text('🎂🍰🎈🎉🎊', style: TextStyle(fontSize: 24)),
+                      const SizedBox(height: 20),
+                      // Button
+                      Container(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setBool(acknowledgedKey, true);
+                            _confettiController.stop();
+                            Navigator.of(context).pop();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00588E),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(25),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          child: const Text(
+                            'Acknowledge 🎉',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
             Positioned.fill(
               child: ConfettiWidget(
@@ -1012,10 +1225,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
               if (existing.docs.isNotEmpty) continue;
 
               // create task
-              final taskTitle =
-                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
+              final taskTitle = 'Medication';
               final taskDesc =
-                  'Medication scheduled for $elderlyName at $scheduled';
+                  '$medName ${dosage.isNotEmpty ? '- $dosage' : ''} for $elderlyName';
 
               final taskDocRef = await _firestore
                   .collection('medical_tasks')
@@ -1027,7 +1239,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                     'task_frequency': repeatInterval == 'Daily'
                         ? 'Every Assigned Days'
                         : 'Once',
-                    'task_status': 'Pending',
+                    'task_status':
+                        'pending', // Ensure lowercase for consistency
                     'days': taskDays,
                     // metadata to avoid duplicates and allow tracing
                     'task_source': 'medication',
@@ -1621,7 +1834,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           const SizedBox(height: 10),
           // Tasks list
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 2,
+              vertical: 8,
+            ), // Reduced horizontal padding for wider cards
             child: StreamBuilder<QuerySnapshot>(
               stream: _firestore
                   .collection('medical_tasks')
@@ -1806,14 +2022,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             );
                           }
 
-                          // All medical tasks use the same blue color
-                          Color bgColor = const Color.fromARGB(
-                            255,
-                            153,
-                            209,
-                            255,
-                          );
-
                           // Check if task is for tomorrow
                           String displayTime = formattedTime;
                           String? tomorrowMark;
@@ -1830,7 +2038,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             title,
                             description,
                             displayTime,
-                            bgColor,
                             taskId: taskId,
                             tomorrowMark: tomorrowMark,
                           );
@@ -2371,7 +2578,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                     'task_category': taskCategory,
                                     'task_start': taskStart,
                                     'task_frequency': taskFrequency,
-                                    'task_status': 'Pending',
+                                    'task_status': 'pending',
                                     'days': days,
                                   });
                               debugPrint(
@@ -2514,8 +2721,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
             return AlertDialog(
               backgroundColor: Colors.white,
-              titlePadding: const EdgeInsets.fromLTRB(8, 8, 24, 20),
-              contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+              titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 20),
+              contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               title: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -2539,6 +2746,14 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       fontSize: 26,
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Divider(
+                      color: Color.fromARGB(255, 204, 203, 203),
+                      thickness: 2,
+                    ),
+                  ),
                 ],
               ),
               content: SizedBox(
@@ -2551,7 +2766,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Date: ${DateFormat('MMM. dd, yyyy').format(selectedDate)}',
+                          'Date: ${DateFormat('MMM. d, yyyy').format(selectedDate)}',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -2573,6 +2788,16 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                               lastDate: DateTime.now().add(
                                 const Duration(days: 30),
                               ),
+                              builder: (context, child) {
+                                return Theme(
+                                  data: ThemeData.light().copyWith(
+                                    colorScheme: const ColorScheme.light(
+                                      primary: Color(0xFF00588E),
+                                    ),
+                                  ),
+                                  child: child!,
+                                );
+                              },
                             );
                             if (picked != null) {
                               setState(() {
@@ -2584,7 +2809,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 5),
                     Expanded(
                       child: filteredTasks.isEmpty
                           ? const Center(
@@ -2613,9 +2838,9 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                 // All tasks use the same blue color like in Medical Tasks
                                 Color bgColor = const Color.fromARGB(
                                   255,
-                                  153,
-                                  209,
-                                  255,
+                                  177,
+                                  217,
+                                  250,
                                 );
 
                                 return Container(
@@ -2623,14 +2848,40 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                   padding: const EdgeInsets.all(10),
                                   decoration: BoxDecoration(
                                     color: bgColor,
-                                    borderRadius: BorderRadius.circular(8),
+                                    borderRadius: BorderRadius.circular(16),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.grey.withOpacity(0.3),
+                                        spreadRadius: 1,
+                                        blurRadius: 2,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
                                   ),
                                   child: ListTile(
-                                    title: Text(
-                                      title,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                    title: Row(
+                                      children: [
+                                        Icon(
+                                          title.toLowerCase() == 'medication'
+                                              ? Icons.medication
+                                              : Icons.assignment,
+                                          color:
+                                              title.toLowerCase() ==
+                                                  'medication'
+                                              ? Colors.green
+                                              : Color(0xFF00588E),
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            title,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                     subtitle: Text(
                                       '$description\nTime: $formattedTime',
@@ -2734,9 +2985,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
             children: [
               // Icon + Header
               Row(
-                mainAxisAlignment: MainAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: const [
-                  SizedBox(width: 8),
                   Text(
                     "Task Reminder",
                     textAlign: TextAlign.center,
@@ -2766,7 +3016,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             'Task Title:',
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
-                              fontSize: 18,
+                              fontSize: 16,
                               color: Color(0xFF00588E),
                             ),
                           ),
@@ -2775,7 +3025,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             child: Text(
                               title,
                               style: const TextStyle(
-                                fontSize: 18,
+                                fontSize: 16,
                                 color: Colors.black87,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -2790,7 +3040,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                           Text(
                             'Time:',
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 16,
                               color: Color(0xFF00588E),
                               fontWeight: FontWeight.bold,
                             ),
@@ -2799,7 +3049,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                           Text(
                             time,
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 16,
                               color: Colors.black87,
                             ),
                           ),
@@ -2970,276 +3220,404 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   Widget _medicalTaskCard(
     String title,
     String description,
-    String time,
-    Color bgColor, {
+    String time, {
     String? taskId,
     String? tomorrowMark,
   }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (tomorrowMark != null)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF00588E).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  tomorrowMark,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF00588E),
+    return Dismissible(
+      key: Key(taskId ?? UniqueKey().toString()),
+      direction: DismissDirection.horizontal,
+      confirmDismiss: (direction) async {
+        // Show delete confirmation dialog
+        return await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                ),
-              ),
-            ),
-
-          const SizedBox(height: 8),
-          // Header row with icon and title
-          Row(
-            children: [
-              const Icon(
-                Icons.medical_services,
-                size: 24,
-                color: Color(0xFF00588E),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.black87,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // Description section
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.7),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              description,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.black87,
-                height: 1.4,
-              ),
-              softWrap: true,
-              maxLines: 4,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Bottom row with time and action button
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF00588E).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'Time: $time',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    color: Color(0xFF00588E),
-                  ),
-                ),
-              ),
-              if (taskId != null)
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.red, size: 30),
-                  onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      barrierDismissible: false,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: Colors.white,
-                        titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                        title: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            IconButton(
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 48,
-                                minHeight: 48,
-                              ),
-                              iconSize: 28,
-                              icon: const Icon(
-                                Icons.close,
-                                color: Color(0xFF00588E),
-                              ),
-                              onPressed: () => Navigator.of(context).pop(false),
-                              tooltip: 'Close',
-                            ),
-                            const Expanded(child: SizedBox()),
-                            const SizedBox(width: 16),
-                          ],
+                  backgroundColor: Colors.white,
+                  titlePadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  title: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
                         ),
-                        contentPadding: const EdgeInsets.only(
-                          left: 16,
-                          top: 0,
-                          right: 16,
-                          bottom: 16,
+                        iconSize: 28,
+                        icon: const Icon(Icons.close, color: Color(0xFF00588E)),
+                        onPressed: () => Navigator.of(context).pop(false),
+                        tooltip: 'Close',
+                      ),
+                      const Expanded(child: SizedBox()),
+                      const SizedBox(width: 16),
+                    ],
+                  ),
+                  contentPadding: const EdgeInsets.only(
+                    left: 16,
+                    top: 0,
+                    right: 16,
+                    bottom: 16,
+                  ),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Text(
+                            "Delete Task",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF00588E),
+                              fontSize: 26,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      const Divider(
+                        color: Color.fromARGB(255, 204, 203, 203),
+                        thickness: 2,
+                      ),
+                      const SizedBox(height: 12),
+                      // Confirmation question
+                      const Text(
+                        'Are you sure you want to delete this task?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.black87,
                         ),
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: const [
-                                SizedBox(width: 10),
-                                Text(
-                                  "Delete Task",
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF00588E),
-                                    fontSize: 25,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            const Divider(
-                              color: Color.fromARGB(255, 204, 203, 203),
-                              thickness: 2,
-                            ),
-                            const SizedBox(height: 12),
-                            const Center(
-                              child: Text(
-                                'Are you sure you want to delete this task?',
-                                style: TextStyle(fontSize: 16),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                      ),
+                      const SizedBox(height: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
                                 children: [
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF00588E),
-                                      foregroundColor: Colors.white,
-                                    ),
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(true),
-                                    child: const Text(
-                                      'Delete',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
+                                  Text(
+                                    'Task Title:',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Color(0xFF00588E),
                                     ),
                                   ),
-                                  const SizedBox(width: 16),
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
-                                      foregroundColor: Colors.white,
-                                    ),
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(false),
-                                    child: const Text(
-                                      'Cancel',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      title,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        color: Colors.black87,
+                                        fontWeight: FontWeight.w500,
                                       ),
+                                      softWrap: true,
                                     ),
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Text(
+                                    'Time:',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Color(0xFF00588E),
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    time,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 15),
+                          Text(
+                            'Activity:',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Color(0xFF00588E),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.lightBlue[100],
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              description,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: Colors.black,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      // Buttons
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Delete (Left)
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                            ),
+                            onPressed: () => Navigator.of(context).pop(true),
+                            child: const Text(
+                              'Delete',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Cancel (Right)
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00588E),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                            ),
+                            onPressed: () => Navigator.of(context).pop(false),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ) ??
+            false;
+      },
+      onDismissed: (direction) async {
+        // Delete the task from Firestore
+        if (taskId != null) {
+          try {
+            await _firestore.collection('medical_tasks').doc(taskId).delete();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Task deleted successfully'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error deleting task: $e'),
+                  backgroundColor: Colors.red,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+          }
+        }
+      },
+      background: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 20),
+        child: const Icon(Icons.delete, color: Colors.white, size: 32),
+      ),
+      secondaryBackground: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        child: const Icon(Icons.delete, color: Colors.white, size: 32),
+      ),
+      child: Card(
+        color: Color(0xFFB7DDF5), // Same color as Current Work Schedule
+        margin: const EdgeInsets.symmetric(
+          horizontal: 2, // Minimal horizontal margin for maximum width
+          vertical: 8,
+        ), // Reduced horizontal margin for wider cards
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Tomorrow mark badge (if applicable)
+              if (tomorrowMark != null) ...[
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color:
+                          Colors.white, // White background for tomorrow badge
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Color(0xFF00588E), width: 2),
+                    ),
+                    child: Text(
+                      tomorrowMark,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF00588E),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // Title row with icon
+              Row(
+                children: [
+                  const Icon(
+                    Icons.medical_services,
+                    color: Color(0xFF00588E),
+                    size: 24,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF00588E),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Description with medication icon
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.medication, color: Colors.green, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      description,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Time container (matching medication_upcoming style)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.orange),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.schedule,
+                          color: Colors.orange,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Scheduled Time',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              time,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588E),
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                    );
-                    if (confirm == true) {
-                      try {
-                        // Attempt to read the task doc to see if it has medication metadata
-                        final doc = await FirebaseFirestore.instance
-                            .collection('medical_tasks')
-                            .doc(taskId)
-                            .get();
-                        final data = doc.data();
-                        if (data != null) {
-                          // If this task was generated from a medication, cancel the deterministic notification id too
-                          final medId = data['medication_id'] as String?;
-                          final takeIndex = data['take_index'];
-                          if (medId != null && takeIndex != null) {
-                            try {
-                              NotificationService.cancelNotification(
-                                ('${medId}_$takeIndex').hashCode,
-                              );
-                            } catch (e) {
-                              debugPrint(
-                                'Error cancelling deterministic notification for $medId:$takeIndex -> $e',
-                              );
-                            }
-                          }
-                        }
-
-                        await FirebaseFirestore.instance
-                            .collection('medical_tasks')
-                            .doc(taskId)
-                            .delete();
-                      } catch (e) {
-                        debugPrint('Error deleting task $taskId: $e');
-                      }
-
-                      // Always attempt to cancel the doc-based notification id as well
-                      try {
-                        NotificationService.cancelNotification(taskId.hashCode);
-                      } catch (e) {
-                        debugPrint(
-                          'Error cancelling notification for $taskId: $e',
-                        );
-                      }
-                    }
-                  },
+                      ],
+                    ),
+                  ],
                 ),
+              ),
             ],
           ),
-        ],
+        ),
       ),
-    );
+    ); // End of Dismissible and _medicalTaskCard
   }
 
   // ---------------------- BIRTHDAY SECTION ----------------------
@@ -3336,7 +3714,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                         ),
                       ),
                     );
-                  }).toList(),
+                  }),
                 ],
               ),
             ),

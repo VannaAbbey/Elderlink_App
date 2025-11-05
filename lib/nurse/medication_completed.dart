@@ -232,11 +232,140 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                               takeData?['completed_by_name'] as String? ??
                               'Unknown';
 
+                          if (takeSnapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            // Show loading state while fetching completion data
+                            return Card(
+                              margin: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              color: const Color(0xFFE6F3FA),
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Elderly Name
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.person,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            log['elderly_name'] ?? 'Unknown',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF00588E),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    SizedBox(height: 12),
+
+                                    // Medication Name and Dosage
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.medication,
+                                          color: Colors.green,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '${log['medication_name']} - ${log['dosage']}',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    SizedBox(height: 12),
+
+                                    // Loading indicator for completion data
+                                    Container(
+                                      padding: EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.green),
+                                        borderRadius: BorderRadius.circular(8),
+                                        color: Colors.white,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.check_circle,
+                                            color: Colors.green,
+                                            size: 24,
+                                          ),
+                                          SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '$takeOrdinal Take - COMPLETED',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 16,
+                                                    color: Colors.green,
+                                                  ),
+                                                ),
+                                                SizedBox(height: 4),
+                                                Text(
+                                                  'Scheduled Time: ${_formatTimeTo12Hour(log['scheduled_time'] ?? 'Not specified')}',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.grey[700],
+                                                  ),
+                                                ),
+                                                SizedBox(height: 4),
+                                                Text(
+                                                  'Completed: ${DateFormat('MMM dd, yyyy hh:mm a').format(completedAt)}',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.green[700],
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+
+                                    // Created timestamp (smaller and at bottom)
+                                    if (log['timestamp'] != null)
+                                      Padding(
+                                        padding: EdgeInsets.only(top: 12),
+                                        child: Text(
+                                          'Logged: ${DateFormat('MMM dd, yyyy hh:mm a').format((log['timestamp'] as Timestamp).toDate())}',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey[500],
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
+
                           return Card(
                             margin: EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 8,
                             ),
+                            color: const Color(0xFFE6F3FA),
                             child: Padding(
                               padding: EdgeInsets.all(16),
                               child: Column(
@@ -289,11 +418,9 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                   Container(
                                     padding: EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: Colors.green.withOpacity(0.3),
-                                      ),
+                                      border: Border.all(color: Colors.green),
                                       borderRadius: BorderRadius.circular(8),
-                                      color: Colors.green.withOpacity(0.1),
+                                      color: Colors.white,
                                     ),
                                     child: Row(
                                       children: [
@@ -331,14 +458,6 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                                                   fontSize: 14,
                                                   color: Colors.green[700],
                                                   fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                              SizedBox(height: 4),
-                                              Text(
-                                                'Completed by: $completedByName',
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: Colors.grey[700],
                                                 ),
                                               ),
                                             ],

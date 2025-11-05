@@ -19,7 +19,8 @@ class VitalMonitoringScreen extends StatefulWidget {
   State<VitalMonitoringScreen> createState() => _VitalMonitoringScreenState();
 }
 
-class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
+class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
+    with SingleTickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   final String _search = '';
@@ -29,6 +30,10 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
 
   // 🔹 Improved: Scroll controller for horizontal tab scroll
   final ScrollController _tabScrollController = ScrollController();
+
+  // 🔹 Vital tabs state management
+  late TabController _vitalTabController;
+  int _selectedVitalTabIndex = 0;
 
   // 🔹 Improved: Auto-scroll to center selected tab with dynamic tab width calculation
   void _scrollToCenter(int index, List<Map<String, dynamic>> houses) {
@@ -94,11 +99,20 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   @override
   void initState() {
     super.initState();
+    _vitalTabController = TabController(length: 3, vsync: this);
+    _vitalTabController.addListener(() {
+      if (!_vitalTabController.indexIsChanging) {
+        setState(() {
+          _selectedVitalTabIndex = _vitalTabController.index;
+        });
+      }
+    });
     _loadNurseData();
   }
 
   @override
   void dispose() {
+    _vitalTabController.dispose();
     _tabScrollController.dispose();
     super.dispose();
   }
@@ -182,49 +196,75 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
   }
 
   // Build the Upcoming tab with red circle count
-  Widget _buildUpcomingTabWithCount(Map<String, dynamic> house) {
+  Widget _buildUpcomingTabWithCount(Map<String, dynamic> house, bool selected) {
     return FutureBuilder<bool>(
       future: _isNurseAssignedToCurrentShift(),
       builder: (context, shiftSnapshot) {
         final isAssignedToShift =
             shiftSnapshot.data ?? true; // Default to true if loading
 
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Upcoming'),
-            const SizedBox(width: 4),
-            StreamBuilder<QuerySnapshot>(
-              stream: _getUpcomingVitalsCountStream(house['house_id']),
-              builder: (context, snapshot) {
-                int count = 0;
-                if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-                  count = snapshot.data!.docs.length;
-                }
+        return StreamBuilder<QuerySnapshot>(
+          stream: _getUpcomingVitalsCountStream(house['house_id']),
+          builder: (context, snapshot) {
+            int count = 0;
+            if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+              count = snapshot.data!.docs.length;
+            }
 
-                // Don't show red circle if nurse is not assigned to current shift
-                if (count == 0 || !isAssignedToShift) {
-                  return const SizedBox.shrink();
-                }
-
-                return Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Text(
-                    count.toString(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    // Main text
+                    Text(
+                      'Upcoming',
+                      style: TextStyle(
+                        color: selected
+                            ? Colors.white
+                            : const Color(0xFF00588e),
+                        fontWeight: selected
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                        fontSize: 14,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                );
-              },
-            ),
-          ],
+                    // Red circle badge on top-right
+                    if (count > 0 && isAssignedToShift)
+                      Positioned(
+                        top: -2,
+                        right: -23,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 18,
+                            minHeight: 18,
+                          ),
+                          child: Center(
+                            child: Text(
+                              count.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -463,7 +503,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                                                           12,
                                                         ),
                                                     child: Image.asset(
-                                                      'assets/images/${house['house_name']?.toString().replaceAll('St. ', '').replaceAll(' ', '')}_Logo.png',
+                                                      'assets/houses_img/${house['house_name']}.png',
                                                       width: 24,
                                                       height: 24,
                                                       errorBuilder:
@@ -503,50 +543,126 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen> {
                             Expanded(
                               child: TabBarView(
                                 children: houses.map((house) {
-                                  return DefaultTabController(
-                                    length: 3,
-                                    child: Column(
-                                      children: [
-                                        TabBar(
-                                          labelColor: const Color(0xFF00588E),
-                                          unselectedLabelColor: Colors.grey,
-                                          indicatorColor: const Color(
-                                            0xFF00588E,
-                                          ),
-                                          tabs: [
-                                            Tab(
-                                              child: _buildUpcomingTabWithCount(
-                                                house,
+                                  return Column(
+                                    children: [
+                                      // Vitals Status Tabs - Match medication management layout
+                                      Container(
+                                        width: double.infinity,
+                                        color: const Color(0xFFE6F3FA),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 8,
+                                          horizontal: 16,
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceEvenly,
+                                          children: List.generate(3, (index) {
+                                            final bool selected =
+                                                _selectedVitalTabIndex == index;
+                                            final List<String> tabLabels = [
+                                              'Upcoming',
+                                              'Completed',
+                                              'Missed',
+                                            ];
+                                            return Expanded(
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 4.0,
+                                                    ),
+                                                child: GestureDetector(
+                                                  onTap: () {
+                                                    setState(() {
+                                                      _selectedVitalTabIndex =
+                                                          index;
+                                                    });
+                                                    _vitalTabController
+                                                        .animateTo(
+                                                          index,
+                                                          duration:
+                                                              Duration.zero,
+                                                        );
+                                                  },
+                                                  child: Container(
+                                                    constraints: BoxConstraints(
+                                                      minWidth: 120,
+                                                    ),
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 8,
+                                                          vertical: 8,
+                                                        ),
+                                                    decoration: selected
+                                                        ? BoxDecoration(
+                                                            color: const Color(
+                                                              0xFF00588e,
+                                                            ),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  20,
+                                                                ),
+                                                          )
+                                                        : null,
+                                                    child: index == 0
+                                                        ? _buildUpcomingTabWithCount(
+                                                            house,
+                                                            selected,
+                                                          )
+                                                        : Text(
+                                                            tabLabels[index],
+                                                            textAlign: TextAlign
+                                                                .center,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                            style: TextStyle(
+                                                              color: selected
+                                                                  ? Colors.white
+                                                                  : const Color(
+                                                                      0xFF00588e,
+                                                                    ),
+                                                              fontWeight:
+                                                                  selected
+                                                                  ? FontWeight
+                                                                        .bold
+                                                                  : FontWeight
+                                                                        .normal,
+                                                              fontSize: 14,
+                                                            ),
+                                                          ),
+                                                  ),
+                                                ),
                                               ),
+                                            );
+                                          }),
+                                        ),
+                                      ),
+                                      // Vitals Content
+                                      Expanded(
+                                        child: TabBarView(
+                                          controller: _vitalTabController,
+                                          physics: const PageScrollPhysics(),
+                                          children: [
+                                            Builder(
+                                              builder: (context) {
+                                                return UpcomingVitalsTab(
+                                                  houseId: house['house_id'],
+                                                  nurseName: nurseName,
+                                                );
+                                              },
                                             ),
-                                            Tab(text: 'Completed'),
-                                            Tab(text: 'Missed'),
+                                            CompletedVitalsTab(
+                                              houseId: house['house_id'],
+                                              nurseName: nurseName,
+                                            ),
+                                            MissedVitalsTab(
+                                              houseId: house['house_id'],
+                                              nurseName: nurseName,
+                                            ),
                                           ],
                                         ),
-                                        Expanded(
-                                          child: TabBarView(
-                                            children: [
-                                              Builder(
-                                                builder: (context) {
-                                                  return UpcomingVitalsTab(
-                                                    houseId: house['house_id'],
-                                                    nurseName: nurseName,
-                                                  );
-                                                },
-                                              ),
-                                              CompletedVitalsTab(
-                                                houseId: house['house_id'],
-                                                nurseName: nurseName,
-                                              ),
-                                              MissedVitalsTab(
-                                                houseId: house['house_id'],
-                                                nurseName: nurseName,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   );
                                 }).toList(),
                               ),

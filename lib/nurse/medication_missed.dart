@@ -76,7 +76,9 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
       for (var doc in query.docs) {
         final data = doc.data();
         final assigned = List<String>.from(data['days_assigned'] ?? []);
-        for (var d in assigned) days.add(d);
+        for (var d in assigned) {
+          days.add(d);
+        }
       }
       return days.toList();
     } catch (e) {
@@ -310,6 +312,7 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
                                 horizontal: 16,
                                 vertical: 8,
                               ),
+                              color: const Color(0xFFE6F3FA),
                               child: Padding(
                                 padding: EdgeInsets.all(16),
                                 child: Column(
@@ -343,7 +346,7 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
                                       children: [
                                         Icon(
                                           Icons.medication,
-                                          color: Colors.orange,
+                                          color: Colors.green,
                                         ),
                                         SizedBox(width: 8),
                                         Expanded(
@@ -367,7 +370,7 @@ class _MissedMedicationsTabState extends State<MissedMedicationsTab> {
                                           color: Colors.red.withOpacity(0.3),
                                         ),
                                         borderRadius: BorderRadius.circular(8),
-                                        color: Colors.red.withOpacity(0.1),
+                                        color: Colors.white,
                                       ),
                                       child: Row(
                                         children: [
