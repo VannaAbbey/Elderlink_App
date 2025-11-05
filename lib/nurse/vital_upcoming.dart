@@ -945,7 +945,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                 ),
               ),
               Text(
-                DateFormat('MMM dd, yyyy').format(_selectedDate),
+                DateFormat('MMM. d, yyyy').format(_selectedDate),
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w500,

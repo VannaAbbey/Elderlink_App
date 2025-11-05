@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ElderlyProfile extends StatefulWidget {
   final String elderlyId;
@@ -1038,6 +1039,333 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
     return DateFormat('MMMM d, yyyy').format(date);
   }
 
+  String _getElderlyName(Map<String, dynamic> elderlyData) {
+    // Try different possible field combinations for name
+    if (elderlyData['name'] != null &&
+        elderlyData['name'].toString().trim().isNotEmpty) {
+      return elderlyData['name'].toString().trim();
+    }
+
+    // Try fname + lname combination
+    final fname = elderlyData['elderly_fname']?.toString() ?? '';
+    final lname = elderlyData['elderly_lname']?.toString() ?? '';
+    final fullName = '$fname $lname'.trim();
+
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
+    return 'Name not specified';
+  }
+
+  String _formatDate(dynamic date) {
+    if (date == null) return 'Not specified';
+
+    try {
+      DateTime dateTime;
+      if (date is String) {
+        dateTime = DateTime.parse(date);
+      } else if (date is DateTime) {
+        dateTime = date;
+      } else if (date is Timestamp) {
+        dateTime = date.toDate();
+      } else {
+        return 'Not specified';
+      }
+
+      final months = [
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
+      ];
+
+      final monthName = months[dateTime.month - 1];
+      return '$monthName ${dateTime.day}, ${dateTime.year}';
+    } catch (e) {
+      return 'Not specified';
+    }
+  }
+
+  List<Widget> _buildInformationCards(
+    Map<String, dynamic> elderly,
+    String displayMobility,
+    String displayDiet,
+    String displayHealth,
+    String displayLifeStatus,
+    DateTime? deathDateToShow,
+    String causeToShow,
+    String houseName,
+    bool isAlive,
+  ) {
+    List<Widget> cards = [];
+
+    // Common fields for both alive and deceased
+    cards.addAll([
+      _buildInfoCard(
+        icon: Icons.person,
+        title: 'Full Name',
+        content: _getElderlyName(elderly),
+        isEditable: false,
+        onEdit: null,
+      ),
+      const SizedBox(height: 16),
+
+      _buildInfoCard(
+        icon: Icons.cake,
+        title: 'Birthday',
+        content: (elderly['elderly_bday'] ?? elderly['birthdate']) != null
+            ? _formatDate(elderly['elderly_bday'] ?? elderly['birthdate'])
+            : 'Not specified',
+        isEditable: false,
+        onEdit: null,
+      ),
+      const SizedBox(height: 16),
+
+      _buildInfoCard(
+        icon: Icons.wc,
+        title: 'Gender',
+        content:
+            elderly['elderly_sex'] ??
+            elderly['sex'] ??
+            elderly['gender'] ??
+            'Not specified',
+        isEditable: false,
+        onEdit: null,
+      ),
+      const SizedBox(height: 16),
+    ]);
+
+    if (isAlive) {
+      // Additional fields for alive elderly
+      cards.addAll([
+        _buildInfoCard(
+          icon: Icons.event,
+          title: 'Age',
+          content: elderly['elderly_age']?.toString() ?? 'Not specified',
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.home,
+          title: 'House Allocation',
+          content: houseName,
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.accessible,
+          title: 'Mobility Status',
+          content: displayMobility,
+          isEditable: true,
+          onEdit: _isNurseScheduled
+              ? () {
+                  showDropdownOverlay(
+                    'Edit Mobility Status',
+                    'elderly_mobilityStatus',
+                    [
+                      'Independent',
+                      'Assisted',
+                      'Wheelchair-bound',
+                      'Bedridden',
+                      'Needs Supervision',
+                    ],
+                    displayMobility,
+                    displayLifeStatus,
+                  );
+                }
+              : null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.restaurant,
+          title: 'Dietary Notes',
+          content: displayDiet.isEmpty ? 'Not specified' : displayDiet,
+          isEditable: true,
+          onEdit: _isNurseScheduled ? () => showDietOverlay(displayDiet) : null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.health_and_safety,
+          title: 'Health Condition',
+          content: displayHealth.isEmpty ? 'Not specified' : displayHealth,
+          isEditable: true,
+          onEdit: _isNurseScheduled
+              ? () => showHealthOverlay(displayHealth)
+              : null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.favorite,
+          title: 'Life Status',
+          content: displayLifeStatus,
+          isEditable: true,
+          onEdit: _isNurseScheduled
+              ? () {
+                  showDropdownOverlay(
+                    'Edit Life Status',
+                    'life_status',
+                    ['Alive', 'Deceased'],
+                    displayMobility,
+                    displayLifeStatus,
+                  );
+                }
+              : null,
+        ),
+      ]);
+    } else {
+      // Additional fields for deceased elderly
+      cards.addAll([
+        _buildInfoCard(
+          icon: Icons.home_outlined,
+          title: 'Former House Allocation',
+          content: houseName,
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.health_and_safety,
+          title: 'Health Condition',
+          content: displayHealth.isEmpty ? 'Not specified' : displayHealth,
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.warning,
+          title: 'Cause of Death',
+          content: causeToShow.isNotEmpty ? causeToShow : 'Not specified',
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.calendar_today,
+          title: 'Date of Passing',
+          content: deathDateToShow != null
+              ? _formatDate(deathDateToShow)
+              : 'Not specified',
+          isEditable: false,
+          onEdit: null,
+        ),
+        const SizedBox(height: 16),
+
+        _buildInfoCard(
+          icon: Icons.favorite,
+          title: 'Life Status',
+          content: displayLifeStatus,
+          isEditable: false,
+          onEdit: null,
+        ),
+      ]);
+    }
+
+    return cards;
+  }
+
+  Widget _buildInfoCard({
+    required IconData icon,
+    required String title,
+    required String content,
+    required bool isEditable,
+    required VoidCallback? onEdit,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFFD8F4FF),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(
+          color: const Color(0xFF00588e).withOpacity(0.1),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF00588e).withOpacity(0.1),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(icon, color: const Color(0xFF00588e), size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF00588e).withOpacity(0.7),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  content,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF00588e),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isEditable && onEdit != null)
+            IconButton(
+              icon: const Icon(Icons.edit, color: Color(0xFF00588e)),
+              onPressed: onEdit,
+              tooltip: 'Edit',
+            )
+          else if (isEditable)
+            IconButton(
+              icon: const Icon(Icons.edit, color: Colors.grey),
+              onPressed: null,
+              tooltip: 'Not scheduled today',
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot>(
@@ -1071,7 +1399,6 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
         final displayLifeStatus = pendingLifeStatus ?? lifeStatus;
         final displayHealth = pendingHealthCondition ?? healthCondition;
         final displayDiet = pendingDietNotes ?? dietNotes;
-        final sex = elderly['elderly_sex'] ?? 'Female';
 
         // Fetch house name if house_id exists
         final houseId = elderly['house_id']?.toString() ?? '';
@@ -1093,365 +1420,230 @@ class _ElderlyProfileState extends State<ElderlyProfile> {
           }
         }
 
-        // Fetch house name (this might need to be async, but for now sync)
-        // String houseName = '-';
-        // Note: House name fetching removed for simplicity
-
-        const double fieldFontSize = 17;
-
         final deathDateToShow = pendingDeathDate ?? dateOfDeath;
         final causeToShow = pendingCause ?? causeController.text;
 
-        return Scaffold(
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            foregroundColor: const Color(0xFF00588E),
-            title: const Text(
-              'Elderly Profile',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            centerTitle: true, // <-- Add this line to center the title
-            elevation: 1,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ),
-          body: Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              image: DecorationImage(
-                image: AssetImage('assets/images/background1.png'),
-                fit: BoxFit.cover,
-              ),
-            ),
-            child: SafeArea(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        // 🔵 Profile Picture Circle
-                        Container(
-                          width: 180,
-                          height: 180,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Color(0xFF00588E),
-                          ),
-                          child: ClipOval(
-                            child:
-                                elderly['elderly_profilePic'] != null &&
-                                    elderly['elderly_profilePic']
-                                        .toString()
-                                        .isNotEmpty
-                                ? Image.network(
-                                    elderly['elderly_profilePic'],
-                                    fit: BoxFit.cover,
-                                    loadingBuilder:
-                                        (context, child, loadingProgress) {
-                                          if (loadingProgress == null) {
-                                            return child;
-                                          }
-                                          return Container(
-                                            color: const Color(
-                                              0xFF00588E,
-                                            ).withOpacity(0.3),
-                                            child: const Center(
-                                              child: CircularProgressIndicator(
-                                                valueColor:
-                                                    AlwaysStoppedAnimation<
-                                                      Color
-                                                    >(Color(0xFF00588E)),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return Image.asset(
-                                        'assets/images/people_icon.png',
-                                        fit: BoxFit.cover,
-                                      );
-                                    },
-                                  )
-                                : Image.asset(
-                                    'assets/images/people_icon.png',
-                                    fit: BoxFit.cover,
-                                  ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
+        final profilePic = elderly['elderly_profilePic'] as String?;
+        final isAlive =
+            displayLifeStatus == 'Alive' || displayLifeStatus == 'alive';
 
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(
-                              0.2,
-                            ), // shadow color
-                            blurRadius: 3, // soft edges
-                            spreadRadius: 2, // spread out
-                            offset: const Offset(0, 0),
+        return Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Stack(
+            children: [
+              // Background
+              Positioned.fill(
+                child: Image.asset(
+                  'assets/images/background1.png',
+                  fit: BoxFit.cover,
+                ),
+              ),
+              // Content
+              SafeArea(
+                child: Column(
+                  children: [
+                    // Custom App Bar
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: Color(0xFF00588e),
+                              size: 28,
+                            ),
+                            onPressed: () => Navigator.of(context).pop(),
                           ),
+                          const Expanded(
+                            child: Text(
+                              'Elderly Information',
+                              style: TextStyle(
+                                color: Color(0xFF00588e),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          const SizedBox(width: 48), // Balance the back button
                         ],
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            '${sex == 'Female' ? 'Lola' : 'Lolo'} ${elderly['elderly_fname'] ?? ''}',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 30,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF00588e),
+                    ),
+                    // Main Content
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            // Profile Picture
+                            Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.2),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 5),
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(80),
+                                child:
+                                    profilePic != null && profilePic.isNotEmpty
+                                    ? CachedNetworkImage(
+                                        imageUrl: profilePic,
+                                        width: 160,
+                                        height: 160,
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) =>
+                                            Container(
+                                              width: 160,
+                                              height: 160,
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey[300],
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: Colors.grey,
+                                                size: 80,
+                                              ),
+                                            ),
+                                        errorWidget: (context, url, error) =>
+                                            Container(
+                                              width: 160,
+                                              height: 160,
+                                              decoration: const BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: Colors.white,
+                                              ),
+                                              child: ClipOval(
+                                                child: Image.asset(
+                                                  'assets/images/people_icon.png',
+                                                  width: 160,
+                                                  height: 160,
+                                                  fit: BoxFit.cover,
+                                                ),
+                                              ),
+                                            ),
+                                      )
+                                    : Container(
+                                        width: 160,
+                                        height: 160,
+                                        decoration: const BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.white,
+                                        ),
+                                        child: ClipOval(
+                                          child: Image.asset(
+                                            'assets/images/people_icon.png',
+                                            width: 160,
+                                            height: 160,
+                                            fit: BoxFit.cover,
+                                          ),
+                                        ),
+                                      ),
+                              ),
                             ),
-                          ),
-                          const Divider(
-                            color: Color.fromARGB(255, 204, 203, 203),
-                            thickness: 1,
-                          ),
-                          const SizedBox(height: 20),
-                          buildField(
-                            'Full Name',
-                            '${elderly['elderly_fname'] ?? ''} ${elderly['elderly_lname'] ?? ''}',
-                            fieldFontSize,
-                          ),
-                          const SizedBox(height: 20),
-                          buildField(
-                            'Birthday',
-                            formatBirthday(elderly['elderly_bday']),
-                            fieldFontSize,
-                          ),
-                          const SizedBox(height: 20),
-                          buildField(
-                            'Age',
-                            '${elderly['elderly_age'] ?? '-'}',
-                            fieldFontSize,
-                          ),
-                          const SizedBox(height: 20),
-                          buildField('Sex', sex, fieldFontSize),
-                          const SizedBox(height: 20),
-                          buildField(
-                            'House Location',
-                            houseName,
-                            fieldFontSize,
-                          ),
-                          const SizedBox(height: 16),
-                          buildEditableRow(
-                            'Mobility Status',
-                            displayMobility,
-                            displayLifeStatus == 'Deceased'
-                                ? null
-                                : () {
-                                    showDropdownOverlay(
-                                      'Edit Mobility Status',
-                                      'elderly_mobilityStatus',
-                                      [
-                                        'Independent',
-                                        'Assisted',
-                                        'Wheelchair-bound',
-                                        'Bedridden',
-                                        'Needs Supervision',
-                                      ],
-                                      displayMobility,
-                                      displayLifeStatus,
-                                    );
-                                  },
-                            fieldFontSize,
-                          ),
-                          SizedBox(
-                            height: displayLifeStatus == 'Deceased'
-                                ? 20.0
-                                : 10.0,
-                          ),
-                          buildEditableRow(
-                            'Dietary Notes',
-                            displayDiet,
-                            displayLifeStatus == 'Deceased'
-                                ? null
-                                : () => showDietOverlay(displayDiet),
-                            fieldFontSize,
-                          ),
-                          SizedBox(
-                            height: displayLifeStatus == 'Deceased'
-                                ? 20.0
-                                : 10.0,
-                          ),
-                          buildEditableRow(
-                            'Health Condition',
-                            displayHealth,
-                            displayLifeStatus == 'Deceased'
-                                ? null
-                                : () => showHealthOverlay(displayHealth),
-                            fieldFontSize,
-                          ),
-                          SizedBox(
-                            height: displayLifeStatus == 'Deceased'
-                                ? 20.0
-                                : 10.0,
-                          ),
-                          buildEditableRow(
-                            'Life Status',
-                            displayLifeStatus,
-                            displayLifeStatus == 'Deceased'
-                                ? null
-                                : () {
-                                    showDropdownOverlay(
-                                      'Edit Life Status',
-                                      'life_status',
-                                      ['Alive', 'Deceased'],
-                                      displayMobility,
-                                      displayLifeStatus,
-                                    );
-                                  },
-                            fieldFontSize,
-                          ),
-                          if (displayLifeStatus == 'Deceased' &&
-                              deathDateToShow != null &&
-                              causeToShow.isNotEmpty) ...[
-                            const SizedBox(height: 20),
-                            buildField(
-                              'Date of Death',
-                              DateFormat(
-                                'MMMM d, yyyy',
-                              ).format(deathDateToShow),
-                              fieldFontSize,
+                            const SizedBox(height: 24),
+
+                            // Name
+                            Text(
+                              _getElderlyName(elderly),
+                              style: const TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00588e),
+                              ),
+                              textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 25),
-                            buildField(
-                              'Cause of Death',
+                            const SizedBox(height: 32),
+
+                            // Information Cards
+                            ..._buildInformationCards(
+                              elderly,
+                              displayMobility,
+                              displayDiet,
+                              displayHealth,
+                              displayLifeStatus,
+                              deathDateToShow,
                               causeToShow,
-                              fieldFontSize,
+                              houseName,
+                              isAlive,
+                            ),
+
+                            // Submit Button
+                            const SizedBox(height: 24),
+                            FutureBuilder<bool>(
+                              future: _isNurseScheduledForToday(),
+                              builder: (context, snapshot) {
+                                final isScheduled = snapshot.data ?? false;
+                                final hasEdits =
+                                    pendingMobilityStatus != null ||
+                                    pendingLifeStatus != null ||
+                                    pendingHealthCondition != null ||
+                                    pendingDietNotes != null;
+                                final canSubmit = isScheduled && hasEdits;
+                                if (!isAlive) {
+                                  return const SizedBox.shrink();
+                                }
+                                return SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: canSubmit
+                                          ? const Color(0xFF00588E)
+                                          : Colors.grey,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 16,
+                                        horizontal: 32,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                      elevation: canSubmit ? 4 : 0,
+                                    ),
+                                    onPressed: canSubmit
+                                        ? () => showSubmitConfirmation(
+                                            elderly,
+                                            lifeStatus,
+                                            houseName,
+                                          )
+                                        : (isScheduled
+                                              ? null
+                                              : () =>
+                                                    _showNotScheduledDialog()),
+                                    child: const Text(
+                                      "Submit to Supervisor",
+                                      style: TextStyle(
+                                        fontFamily: 'Poppins',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 16,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ],
-
-                          const SizedBox(height: 20),
-
-                          // ✅ Button INSIDE container with schedule validation
-                          FutureBuilder<bool>(
-                            future: _isNurseScheduledForToday(),
-                            builder: (context, snapshot) {
-                              final isScheduled = snapshot.data ?? false;
-                              final hasEdits =
-                                  pendingMobilityStatus != null ||
-                                  pendingLifeStatus != null ||
-                                  pendingHealthCondition != null ||
-                                  pendingDietNotes != null;
-                              final canSubmit = isScheduled && hasEdits;
-                              if (displayLifeStatus == 'Deceased') {
-                                return const SizedBox.shrink();
-                              }
-                              return ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: canSubmit
-                                      ? const Color(0xFF00588E)
-                                      : Colors.grey,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 14,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(30),
-                                  ),
-                                  // Use the Poppins family and the Bold (700) weight which
-                                  // is actually included in pubspec.yaml. w900 may fall back
-                                  // to a lighter weight if that exact weight isn't available.
-                                  textStyle: const TextStyle(
-                                    fontFamily: 'Poppins',
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 18,
-                                    letterSpacing: 0.25,
-                                  ),
-                                ),
-                                onPressed: canSubmit
-                                    ? () => showSubmitConfirmation(
-                                        elderly,
-                                        lifeStatus,
-                                        houseName,
-                                      )
-                                    : (isScheduled
-                                          ? null
-                                          : () => _showNotScheduledDialog()),
-                                child: const Text(
-                                  "Submit to Supervisor",
-                                  style: TextStyle(
-                                    fontFamily: 'Poppins',
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
+            ],
           ),
         );
       },
-    );
-  }
-
-  Widget buildField(String label, String value, double fontSize) {
-    return RichText(
-      text: TextSpan(
-        children: [
-          TextSpan(
-            text: label, // ✅ only the label
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF00588E),
-              fontSize: fontSize,
-            ),
-          ),
-          TextSpan(
-            text: ': ', // ✅ separator not bold
-            style: TextStyle(color: Colors.black, fontSize: fontSize),
-          ),
-          TextSpan(
-            text: value, // ✅ plain value
-            style: TextStyle(color: Colors.black, fontSize: fontSize),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildEditableRow(
-    String label,
-    String value,
-    VoidCallback? onEdit,
-    double fontSize,
-  ) {
-    return Row(
-      children: [
-        Expanded(child: buildField(label, value, fontSize)),
-        if (onEdit != null && _isNurseScheduled)
-          IconButton(
-            icon: const Icon(Icons.edit, color: Color(0xFF00588E)),
-            onPressed: onEdit,
-          )
-        else if (onEdit != null)
-          IconButton(
-            icon: const Icon(Icons.edit, color: Colors.grey),
-            onPressed: null,
-          ),
-      ],
     );
   }
 

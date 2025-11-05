@@ -1657,10 +1657,17 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         // Include takes that are either:
         // 1. Pending and within current shift (normal upcoming medications)
         //    OR pending and belong to a recently-created medication (show immediately)
-        // 2. Completed or missed for medications assigned to this nurse (show history)
+        // 2. Missed from previous shift (should be picked up by current shift nurse)
+        // 3. Completed or missed for medications assigned to this nurse (show history if needed)
         bool shouldInclude = false;
 
         final bool isRecentById = _recentlyCreatedMedIds.contains(medId);
+        final bool isFromPreviousShift =
+            takeData['from_previous_shift'] == true;
+        final String? missedByNurseId =
+            takeData['missed_by_nurse_id'] as String?;
+        final String? missedByNurseName =
+            takeData['missed_by_nurse_name'] as String?;
 
         if (status == 'pending') {
           // For pending takes:
@@ -1700,8 +1707,22 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           } else {
             shouldInclude = false; // past pending takes are considered missed
           }
+        } else if (status == 'missed' && isFromPreviousShift) {
+          // Include missed medications from previous shift as pending tasks for current shift
+          // These will be shown with a special label indicating they're from a previous shift
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+
+          // Only include if selected date is today (current shift can handle today's missed meds)
+          if (_selectedDate.isAtSameMomentAs(today)) {
+            shouldInclude = true;
+            // Mark this take data so we can display it differently in the UI
+            takeData['display_as_from_previous_shift'] = true;
+            takeData['previous_shift_nurse_name'] =
+                missedByNurseName ?? 'Unknown';
+          }
         } else if (status == 'completed' || status == 'missed') {
-          // Do not include completed or missed takes in upcoming medications
+          // Do not include completed or regular missed takes in upcoming medications
           shouldInclude = false;
         }
 
@@ -2991,6 +3012,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       final currentTime = DateTime.now();
       final currentShift = _getCurrentShift();
+      final currentHour = currentTime.hour;
       final today = DateTime(
         currentTime.year,
         currentTime.month,
@@ -3001,6 +3023,28 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         '🔍 _checkForMissedMedications: Checking at ${DateFormat('HH:mm:ss').format(currentTime)}',
       );
       print('🔍 Current shift: $currentShift, House: ${widget.houseId}');
+
+      // Determine if we're at the end of any shift
+      // 1st shift ends at 14:00 (2:00 PM)
+      // 2nd shift ends at 22:00 (10:00 PM)
+      // 3rd shift ends at 6:00 (6:00 AM)
+      bool isEndOfShift = false;
+      String endingShift = '';
+
+      if (currentHour == 14 || currentHour == 13 && currentTime.minute >= 55) {
+        isEndOfShift = true;
+        endingShift = '1st';
+      } else if (currentHour == 22 ||
+          currentHour == 21 && currentTime.minute >= 55) {
+        isEndOfShift = true;
+        endingShift = '2nd';
+      } else if (currentHour == 6 ||
+          currentHour == 5 && currentTime.minute >= 55) {
+        isEndOfShift = true;
+        endingShift = '3rd';
+      }
+
+      print('🔍 Is end of shift: $isEndOfShift, Ending shift: $endingShift');
 
       // Query medication_takes directly for pending medications
       final pendingTakesQuery = await _firestore
@@ -3037,6 +3081,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final dosage = medData['dosage'] as String? ?? '';
         final repeatInterval = medData['repeat_interval'] as String? ?? '';
         final shift = medData['shift'] as String?;
+        final createdNurseId = medData['created_nurse_id'] as String?;
 
         // Skip if not in current house
         if (houseId != widget.houseId) continue;
@@ -3058,28 +3103,73 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           scheduledMinute,
         );
 
+        // Check if medication should be marked as missed
+        bool shouldMarkAsMissed = false;
+        String missedReason = '';
+
         // Check if more than 1 hour has passed since scheduled time
         final timeDifference = currentTime.difference(scheduledDateTime);
+
+        // Check if this medication belongs to a shift that has ended
+        bool belongsToEndedShift = false;
+        if (isEndOfShift && shift == endingShift) {
+          belongsToEndedShift = true;
+        }
 
         print('⏰ Medication: $medicationName, Take $takeNumber');
         print('   Scheduled: $scheduledDateTime');
         print('   Current: $currentTime');
+        print('   Shift: $shift');
         print(
           '   Difference: ${timeDifference.inMinutes} minutes (${timeDifference.inHours} hours)',
         );
-        print('   Should mark as missed: ${timeDifference.inHours >= 1}');
+        print('   Belongs to ended shift: $belongsToEndedShift');
 
+        // Mark as missed if:
+        // 1. More than 1 hour has passed, OR
+        // 2. The shift has ended and this medication was scheduled for that shift
         if (timeDifference.inHours >= 1) {
+          shouldMarkAsMissed = true;
+          missedReason = 'Automatically marked as missed after 1 hour';
+        } else if (belongsToEndedShift &&
+            scheduledDateTime.isBefore(currentTime)) {
+          shouldMarkAsMissed = true;
+          missedReason = 'Marked as missed at end of shift';
+        }
+
+        if (shouldMarkAsMissed) {
           print(
-            '🚨 Marking take $takeNumber as missed for medication $medicationName (overdue by ${timeDifference.inMinutes} minutes)',
+            '🚨 Marking take $takeNumber as missed for medication $medicationName',
           );
+          print('   Reason: $missedReason');
 
           try {
+            // Get the nurse who was assigned to this medication's shift
+            String? assignedNurseId = createdNurseId;
+            String? assignedNurseName;
+
+            if (assignedNurseId != null) {
+              final nurseDoc = await _firestore
+                  .collection('users')
+                  .doc(assignedNurseId)
+                  .get();
+
+              if (nurseDoc.exists) {
+                final nurseData = nurseDoc.data() as Map<String, dynamic>;
+                assignedNurseName =
+                    '${nurseData['user_fname'] ?? ''} ${nurseData['user_lname'] ?? ''}'
+                        .trim();
+              }
+            }
+
             // Update medication_takes status to missed
             await takeDoc.reference.update({
               'status': 'missed',
               'missed_at': Timestamp.fromDate(currentTime),
-              'missed_reason': 'Automatically marked as missed after 1 hour',
+              'missed_reason': missedReason,
+              'missed_by_nurse_id': assignedNurseId,
+              'missed_by_nurse_name': assignedNurseName ?? 'Unknown',
+              'from_previous_shift': belongsToEndedShift,
               'updated_at': Timestamp.fromDate(currentTime),
             });
 
@@ -3089,7 +3179,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                 action: 'take_missed',
                 medicationId: medicationId!,
                 elderlyId: elderlyId!,
-                nurseId: nurseId,
+                nurseId: assignedNurseId ?? nurseId,
                 houseId: houseId!,
                 shift: shift ?? currentShift,
                 medicationName: medicationName,
@@ -5790,7 +5880,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                 ),
               ),
               Text(
-                DateFormat('MMM dd, yyyy').format(_selectedDate),
+                DateFormat('MMM. d, yyyy').format(_selectedDate),
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
@@ -5896,39 +5986,52 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               if (_isLoading)
                 const Center(child: CircularProgressIndicator())
               else
-                // Medications List
-                _upcomingMedications.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                // Medications List with RefreshIndicator
+                RefreshIndicator(
+                  onRefresh: () async {
+                    await _loadUpcomingMedications(forceRefresh: true);
+                  },
+                  child: _upcomingMedications.isEmpty
+                      ? ListView(
+                          // Wrap empty state in ListView to enable pull-to-refresh
                           children: [
-                            SizedBox(height: 24),
-                            Icon(
-                              Icons.medication,
-                              size: 64,
-                              color: Colors.grey,
-                            ),
-                            SizedBox(height: 16),
-                            Text(
-                              'No upcoming medications',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.grey,
+                            SizedBox(
+                              height: MediaQuery.of(context).size.height * 0.6,
+                              child: Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(height: 24),
+                                    Icon(
+                                      Icons.medication,
+                                      size: 64,
+                                      color: Colors.grey,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'No upcoming medications',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: EdgeInsets.only(bottom: 80),
-                        itemCount: _getTotalTakeCount(),
-                        itemBuilder: (context, index) {
-                          final takeInfo = _getTakeInfoByIndex(index);
-                          if (takeInfo == null) return SizedBox.shrink();
+                        )
+                      : ListView.builder(
+                          padding: EdgeInsets.only(bottom: 80),
+                          itemCount: _getTotalTakeCount(),
+                          itemBuilder: (context, index) {
+                            final takeInfo = _getTakeInfoByIndex(index);
+                            if (takeInfo == null) return SizedBox.shrink();
 
-                          return _buildIndividualTakeContainer(takeInfo);
-                        },
-                      ),
+                            return _buildIndividualTakeContainer(takeInfo);
+                          },
+                        ),
+                ),
               if (!_isLoading)
                 Positioned(
                   bottom: 16,

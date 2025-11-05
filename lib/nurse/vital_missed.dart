@@ -135,235 +135,256 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
                   final missedVitals = snapshot.data ?? [];
 
                   if (missedVitals.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                    return RefreshIndicator(
+                      onRefresh: () async {
+                        setState(() {});
+                      },
+                      child: ListView(
                         children: [
-                          SizedBox(height: 24),
-                          Icon(
-                            Icons.check_circle_outline,
-                            size: 64,
-                            color: Colors.grey,
-                          ),
-                          SizedBox(height: 16),
-                          Text(
-                            'No missed vitals today',
-                            style: TextStyle(fontSize: 18, color: Colors.grey),
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Missed assignments from previous shifts will appear in your upcoming vitals',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey[600],
+                          SizedBox(
+                            height: MediaQuery.of(context).size.height - 200,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.check_circle_outline,
+                                    size: 64,
+                                    color: Colors.grey,
+                                  ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    'No missed vitals today',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'Missed assignments from previous shifts will appear in your upcoming vitals',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
                             ),
-                            textAlign: TextAlign.center,
                           ),
                         ],
                       ),
                     );
                   }
 
-                  return ListView.builder(
-                    padding: EdgeInsets.only(bottom: 80),
-                    itemCount: missedVitals.length,
-                    itemBuilder: (context, index) {
-                      final elderlyInfo = missedVitals[index];
-                      final lastVital =
-                          elderlyInfo['last_vital'] as Map<String, dynamic>?;
+                  return RefreshIndicator(
+                    onRefresh: () async {
+                      setState(() {});
+                    },
+                    child: ListView.builder(
+                      padding: EdgeInsets.only(bottom: 80),
+                      itemCount: missedVitals.length,
+                      itemBuilder: (context, index) {
+                        final elderlyInfo = missedVitals[index];
+                        final lastVital =
+                            elderlyInfo['last_vital'] as Map<String, dynamic>?;
 
-                      return Card(
-                        margin: EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Elderly Name
-                              Row(
-                                children: [
-                                  CircleAvatar(
-                                    backgroundColor: const Color(0xFF00588E),
-                                    child:
-                                        elderlyInfo['elderly_profilePic']
-                                                ?.isNotEmpty ==
-                                            true
-                                        ? ClipOval(
-                                            child: Image.network(
-                                              elderlyInfo['elderly_profilePic'],
-                                              fit: BoxFit.cover,
-                                            ),
-                                          )
-                                        : Icon(
-                                            Icons.person,
-                                            color: Colors.white,
-                                          ),
-                                  ),
-                                  SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      elderlyInfo['elderly_name'] ?? 'Unknown',
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFF00588E),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 12),
-
-                              // Missed Status
-                              Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: Colors.red.withOpacity(0.3),
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                  color: Colors.red.withOpacity(0.1),
-                                ),
-                                child: Row(
+                        return Card(
+                          margin: EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Elderly Name
+                                Row(
                                   children: [
-                                    Icon(
-                                      Icons.cancel,
-                                      color: Colors.red,
-                                      size: 24,
+                                    CircleAvatar(
+                                      backgroundColor: const Color(0xFF00588E),
+                                      child:
+                                          elderlyInfo['elderly_profilePic']
+                                                  ?.isNotEmpty ==
+                                              true
+                                          ? ClipOval(
+                                              child: Image.network(
+                                                elderlyInfo['elderly_profilePic'],
+                                                fit: BoxFit.cover,
+                                              ),
+                                            )
+                                          : Icon(
+                                              Icons.person,
+                                              color: Colors.white,
+                                            ),
                                     ),
                                     SizedBox(width: 12),
                                     Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'VITALS MISSED',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 16,
-                                              color: Colors.red,
-                                            ),
-                                          ),
-                                          SizedBox(height: 4),
-                                          Text(
-                                            'No vitals recorded today',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey[700],
-                                            ),
-                                          ),
-                                          Text(
-                                            'Assigned to: ${elderlyInfo['assigned_nurse_id'] ?? 'Unknown'}',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey[700],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Column(
-                                      children: [
-                                        ElevatedButton(
-                                          onPressed: () =>
-                                              _markAsCompleted(elderlyInfo),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.red,
-                                            foregroundColor: Colors.white,
-                                            padding: EdgeInsets.symmetric(
-                                              horizontal: 12,
-                                              vertical: 8,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            'Update Now',
-                                            style: TextStyle(fontSize: 12),
-                                          ),
+                                      child: Text(
+                                        elderlyInfo['elderly_name'] ??
+                                            'Unknown',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFF00588E),
                                         ),
-                                      ],
+                                      ),
                                     ),
                                   ],
                                 ),
-                              ),
-
-                              // Last vital info if available
-                              if (lastVital != null) ...[
                                 SizedBox(height: 12),
-                                Text(
-                                  'Last recorded vitals:',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.grey[700],
-                                  ),
-                                ),
-                                SizedBox(height: 8),
+
+                                // Missed Status
                                 Container(
                                   padding: EdgeInsets.all(12),
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                      color: Colors.grey.withOpacity(0.3),
+                                      color: Colors.red.withOpacity(0.3),
                                     ),
                                     borderRadius: BorderRadius.circular(8),
-                                    color: Colors.grey.withOpacity(0.1),
+                                    color: Colors.red.withOpacity(0.1),
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                  child: Row(
                                     children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
-                                            ),
-                                          ),
-                                          Expanded(
-                                            child: Text(
-                                              'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
-                                            ),
-                                          ),
-                                        ],
+                                      Icon(
+                                        Icons.cancel,
+                                        color: Colors.red,
+                                        size: 24,
                                       ),
-                                      SizedBox(height: 4),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
+                                      SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'VITALS MISSED',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 16,
+                                                color: Colors.red,
+                                              ),
                                             ),
-                                          ),
-                                          Expanded(
-                                            child: Text(
-                                              'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
+                                            SizedBox(height: 4),
+                                            Text(
+                                              'No vitals recorded today',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                              ),
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                      SizedBox(height: 4),
-                                      Text(
-                                        'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
-                                      ),
-                                      if (lastVital['vital_record_at'] != null)
-                                        Text(
-                                          'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[600],
-                                          ),
+                                            Text(
+                                              'Assigned to: ${elderlyInfo['assigned_nurse_id'] ?? 'Unknown'}',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.grey[700],
+                                              ),
+                                            ),
+                                          ],
                                         ),
+                                      ),
+                                      Column(
+                                        children: [
+                                          ElevatedButton(
+                                            onPressed: () =>
+                                                _markAsCompleted(elderlyInfo),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.red,
+                                              foregroundColor: Colors.white,
+                                              padding: EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 8,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              'Update Now',
+                                              style: TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ],
                                   ),
                                 ),
+
+                                // Last vital info if available
+                                if (lastVital != null) ...[
+                                  SizedBox(height: 12),
+                                  Text(
+                                    'Last recorded vitals:',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Container(
+                                    padding: EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: Colors.grey.withOpacity(0.3),
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      color: Colors.grey.withOpacity(0.1),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
+                                              ),
+                                            ),
+                                            Expanded(
+                                              child: Text(
+                                                'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 4),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
+                                              ),
+                                            ),
+                                            Expanded(
+                                              child: Text(
+                                                'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
+                                        ),
+                                        if (lastVital['vital_record_at'] !=
+                                            null)
+                                          Text(
+                                            'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   );
                 },
               ),
