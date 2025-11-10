@@ -14,6 +14,9 @@ import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
 import '../services/cg_services/house_service.dart';
 import 'emergency_handler.dart';
+import '../services/attendance_check_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:confetti/confetti.dart';
 
 void main() {
   runApp(
@@ -32,6 +35,11 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
+  bool _hasCheckedAttendance = false; // Track if attendance check was performed
+  List<Map<String, dynamic>> _todaysBirthdays = []; // Store today's birthdays
+  late ConfettiController _confettiController;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  
   // Get assigned house for caregiver
   Future<Map<String, dynamic>?> getAssignedHouse() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -331,11 +339,475 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   @override
   void initState() {
     super.initState();
+    _confettiController = ConfettiController(duration: const Duration(seconds: 3));
+    
     Future.microtask(() {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       authProvider.refreshUserData();
     });
+    
+    // Check and show attendance dialog if needed
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForBirthday(); // Check for birthdays on app start
+      _checkAndShowAttendance();
+    });
   }
+  
+  @override
+  void dispose() {
+    _confettiController.dispose();
+    super.dispose();
+  }
+  
+  /// Check if caregiver should mark attendance and show dialog
+  Future<void> _checkAndShowAttendance() async {
+    // Skip if already checked this session
+    if (_hasCheckedAttendance) return;
+
+    try {
+      print('🔍 CAREGIVER: Checking attendance conditions...');
+
+      // Check if user is scheduled to work today
+      final isScheduled = await AttendanceCheckService.isScheduledToday();
+      print('📅 CAREGIVER: Is scheduled today: $isScheduled');
+
+      if (!isScheduled) {
+        print('⏭️ CAREGIVER: Not scheduled today, skipping attendance check');
+        return;
+      }
+
+      // Check if at shift start time
+      final isAtShiftStart = await AttendanceCheckService.isAtShiftStart();
+      print('⏰ CAREGIVER: Is at shift start: $isAtShiftStart');
+
+      if (!isAtShiftStart) {
+        print('⏭️ CAREGIVER: Not at shift start time, skipping attendance check');
+        return;
+      }
+
+      // Check if already marked attendance today
+      final hasMarked = await AttendanceCheckService.hasMarkedAttendanceToday();
+      print('✅ CAREGIVER: Already marked attendance: $hasMarked');
+
+      if (hasMarked) {
+        print('⏭️ CAREGIVER: Already marked attendance today, skipping');
+        _hasCheckedAttendance = true;
+        return;
+      }
+
+      // All conditions met - show attendance dialog
+      print('🎯 CAREGIVER: All conditions met! Showing attendance dialog...');
+
+      if (mounted) {
+        await AttendanceCheckService.showAttendanceDialog(
+          context,
+          onDismissed: () {
+            if (mounted) {
+              setState(() {
+                _hasCheckedAttendance = true;
+              });
+            }
+          },
+        );
+      }
+    } catch (e) {
+      print('❌ CAREGIVER: Error checking attendance: $e');
+    }
+  }
+
+  // ---------------------- BIRTHDAY FUNCTIONS ----------------------
+  
+  /// Get current shift based on time
+  String _getCurrentShift() {
+    final hour = DateTime.now().hour;
+    if (hour >= 6 && hour < 14) return '1st';
+    if (hour >= 14 && hour < 22) return '2nd';
+    return '3rd';
+  }
+
+  /// Get caregiver ID from auth
+  Future<String?> _getCaregiverIdFromAuth() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    return authProvider.currentUser?.uid;
+  }
+
+  /// Check for birthdays of assigned elderly
+  Future<void> _checkForBirthday() async {
+    try {
+      // 🧪 TEST MODE: Uncomment lines below to test UI with fake birthday data
+      // setState(() => _todaysBirthdays = [
+      //   {'id': 'test1', 'name': 'Lolo Test Juan', 'birthday': DateTime.now()},
+      //   {'id': 'test2', 'name': 'Lola Test Maria', 'birthday': DateTime.now()},
+      // ]);
+      // final names = _todaysBirthdays.map((b) => b['name'] as String).toList();
+      // await _showBirthdayDialog(names, 'birthday_test_${DateTime.now().day}', isManualTap: false);
+      // return; // Comment this line to run actual birthday check
+      // 🧪 END TEST MODE
+      
+      final caregiverId = await _getCaregiverIdFromAuth();
+      if (caregiverId == null) {
+        debugPrint('Birthday check: No caregiver ID found');
+        return;
+      }
+      debugPrint('Birthday check: Caregiver ID = $caregiverId');
+
+      final currentShift = _getCurrentShift();
+      debugPrint('Birthday check: Current shift = $currentShift');
+
+      // Get elderly_assignments for this caregiver (use elderly_assignments, not house_shift_assignments)
+      // First try with all filters
+      var assignQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      debugPrint(
+        'Birthday check: Found ${assignQuery.docs.length} assignment docs with full filters',
+      );
+
+      // If no results, try without shift filter
+      if (assignQuery.docs.isEmpty) {
+        debugPrint('Birthday check: Trying without shift filter...');
+        assignQuery = await _firestore
+            .collection('elderly_assignments')
+            .where('user_id', isEqualTo: caregiverId)
+            .where('user_type', isEqualTo: 'caregiver')
+            .where('is_current', isEqualTo: true)
+            .get();
+        debugPrint(
+          'Birthday check: Found ${assignQuery.docs.length} assignment docs without shift filter',
+        );
+      }
+
+      // If still no results, try with just user_id and user_type
+      if (assignQuery.docs.isEmpty) {
+        debugPrint('Birthday check: Trying with minimal filters...');
+        assignQuery = await _firestore
+            .collection('elderly_assignments')
+            .where('user_id', isEqualTo: caregiverId)
+            .where('user_type', isEqualTo: 'caregiver')
+            .get();
+        debugPrint(
+          'Birthday check: Found ${assignQuery.docs.length} assignment docs with minimal filters',
+        );
+      }
+
+      if (assignQuery.docs.isEmpty) {
+        debugPrint('Birthday check: No assignments found for caregiver');
+        setState(() => _todaysBirthdays = []);
+        return;
+      }
+
+      // Collect all elderly IDs from assignments
+      final Set<String> elderlyIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        debugPrint('Birthday check: Assignment ${doc.id} full data: $data');
+        debugPrint('Birthday check: Available keys: ${data.keys.toList()}');
+        
+        // Try different possible field names for elderly IDs
+        List<String> ids = [];
+        
+        if (data['elderly_ids'] != null) {
+          ids = List<String>.from(data['elderly_ids']);
+          debugPrint('Birthday check: Found elderly_ids (array): $ids');
+        } else if (data['elderlyIds'] != null) {
+          ids = List<String>.from(data['elderlyIds']);
+          debugPrint('Birthday check: Found elderlyIds (array): $ids');
+        } else if (data['elderly_id'] != null) {
+          ids = [data['elderly_id'] as String];
+          debugPrint('Birthday check: Found elderly_id (single): $ids');
+        } else {
+          debugPrint('Birthday check: ⚠️ No elderly ID field found in this assignment!');
+        }
+        
+        elderlyIds.addAll(ids);
+        debugPrint('Birthday check: Assignment ${doc.id} contributed ${ids.length} elderly IDs');
+      }
+
+      debugPrint('Birthday check: Total elderly IDs: $elderlyIds');
+
+      if (elderlyIds.isEmpty) {
+        debugPrint('Birthday check: No elderly assigned to caregiver');
+        setState(() => _todaysBirthdays = []);
+        return;
+      }
+
+      // Query elderly for birthdays in chunks of 10
+      final List<Map<String, dynamic>> birthdays = [];
+      final elderlyList = elderlyIds.toList();
+      for (var i = 0; i < elderlyList.length; i += 10) {
+        final end = (i + 10 < elderlyList.length) ? i + 10 : elderlyList.length;
+        final chunk = elderlyList.sublist(i, end);
+
+        final elderlyQuery = await _firestore
+            .collection('elderly')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+
+        debugPrint(
+          'Birthday check: Chunk ${i ~/ 10 + 1} - Found ${elderlyQuery.docs.length} elderly docs',
+        );
+
+        for (final doc in elderlyQuery.docs) {
+          final data = doc.data();
+          final birthday = data['elderly_bday'] ?? data['birthdate'];
+          debugPrint(
+            'Birthday check: Elderly ${doc.id} - ${data['elderly_fname']} ${data['elderly_lname']}, birthday: $birthday',
+          );
+
+          if (_isBirthdayToday(birthday)) {
+            final gender = data['elderly_sex'] ?? 'male';
+            debugPrint('Birthday check: Elderly ${doc.id} gender: $gender');
+            final prefix = gender.toLowerCase().startsWith('f') ? 'Lola' : 'Lolo';
+            final fullName = '$prefix ${data['elderly_fname']} ${data['elderly_lname']}';
+            birthdays.add({
+              'id': doc.id,
+              'name': fullName,
+              'birthday': birthday,
+            });
+            debugPrint('Birthday check: Today is $fullName\'s birthday!');
+          } else {
+            debugPrint(
+              'Birthday check: Not birthday today for ${data['elderly_fname']} ${data['elderly_lname']}',
+            );
+          }
+        }
+      }
+
+      setState(() => _todaysBirthdays = birthdays);
+      if (birthdays.isNotEmpty) {
+        final names = birthdays.map((b) => b['name'] as String).toList();
+        final today = DateTime.now().toIso8601String().split('T')[0];
+        final acknowledgedKey = 'birthday_acknowledged_all_$today';
+        await _showBirthdayDialog(names, acknowledgedKey, isManualTap: false);
+      }
+    } catch (e) {
+      debugPrint('Error checking for birthday: $e');
+      setState(() => _todaysBirthdays = []);
+    }
+  }
+
+  /// Check if a birthday is today
+  bool _isBirthdayToday(dynamic birthday) {
+    if (birthday == null) {
+      debugPrint('Birthday check: Birthday is null');
+      return false;
+    }
+
+    DateTime birthDate;
+    if (birthday is Timestamp) {
+      birthDate = birthday.toDate();
+    } else if (birthday is DateTime) {
+      birthDate = birthday;
+    } else {
+      debugPrint(
+        'Birthday check: Birthday is not Timestamp or DateTime: $birthday (type: ${birthday.runtimeType})',
+      );
+      return false;
+    }
+
+    final now = DateTime.now();
+    final isToday = birthDate.month == now.month && birthDate.day == now.day;
+    debugPrint(
+      'Birthday check: Birth date: ${birthDate.month}/${birthDate.day}, Today: ${now.month}/${now.day}, Is today: $isToday',
+    );
+    return isToday;
+  }
+
+  /// Show birthday dialog with confetti
+  Future<void> _showBirthdayDialog(
+    List<String> names,
+    String acknowledgedKey, {
+    bool isManualTap = false,
+  }) async {
+    // Check if already acknowledged (only for auto-show, not manual tap)
+    if (!isManualTap) {
+      final prefs = await SharedPreferences.getInstance();
+      final alreadyAcknowledged = prefs.getBool(acknowledgedKey) ?? false;
+      if (alreadyAcknowledged) {
+        debugPrint('Birthday already acknowledged for today');
+        return;
+      }
+    }
+
+    _confettiController.play();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Stack(
+          children: [
+            // Confetti overlay
+            Align(
+              alignment: Alignment.topCenter,
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirectionality: BlastDirectionality.explosive,
+                particleDrag: 0.05,
+                emissionFrequency: 0.05,
+                numberOfParticles: 50,
+                gravity: 0.1,
+                shouldLoop: false,
+                colors: const [
+                  Colors.red,
+                  Colors.blue,
+                  Colors.green,
+                  Colors.yellow,
+                  Colors.pink,
+                  Colors.purple,
+                  Colors.orange,
+                ],
+              ),
+            ),
+            // Birthday dialog
+            AlertDialog(
+              backgroundColor: Colors.transparent,
+              contentPadding: EdgeInsets.zero,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 100),
+              content: Container(
+                constraints: const BoxConstraints(maxWidth: 380, minHeight: 300),
+                decoration: BoxDecoration(
+                  image: const DecorationImage(
+                    image: AssetImage('assets/images/birthdaybg.png'),
+                    fit: BoxFit.cover,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 100), // Space for background image top decoration
+                      // Main content
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                          // Title with emojis
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Text(
+                                '🎉 ',
+                                style: TextStyle(fontSize: 28),
+                              ),
+                              Flexible(
+                                child: Text(
+                                  'Happy Birthday!',
+                                  style: TextStyle(
+                                    color: Color(0xFF0066A1),
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'Poppins',
+                                    fontSize: 26,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                ' 🎂',
+                                style: TextStyle(fontSize: 28),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 24),
+                          // Birthday message
+                          Text(
+                            names.length == 1
+                                ? "Today is ${names[0]}'s birthday! 🎈🥳"
+                                : names.length == 2
+                                    ? "Today is ${names[0]} and ${names[1]}'s birthday! 🎈🥳"
+                                    : "Today is ${names.sublist(0, names.length - 1).join(', ')} and ${names.last}'s birthday! 🎈🥳",
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontFamily: 'Poppins',
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                              height: 1.4,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 20),
+                          // Warm message
+                          const Text(
+                            'Greet them with a warm hug and love.',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontFamily: 'Poppins',
+                              fontStyle: FontStyle.italic,
+                              color: Colors.black54,
+                              height: 1.3,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 28),
+                          // Emoji decorations
+                          Wrap(
+                            spacing: 12,
+                            alignment: WrapAlignment.center,
+                            children: const [
+                              Text('🎂', style: TextStyle(fontSize: 28)),
+                              Text('🍰', style: TextStyle(fontSize: 28)),
+                              Text('🎈', style: TextStyle(fontSize: 28)),
+                              Text('🥳', style: TextStyle(fontSize: 28)),
+                              Text('🎊', style: TextStyle(fontSize: 28)),
+                            ],
+                          ),
+                          const SizedBox(height: 32),
+                          // Acknowledge button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0066A1),
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 40,
+                                  vertical: 16,
+                                ),
+                                elevation: 3,
+                              ),
+                              onPressed: () async {
+                                // Mark as acknowledged
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool(acknowledgedKey, true);
+                                if (context.mounted) {
+                                  Navigator.of(context).pop();
+                                }
+                              },
+                              child: const Text(
+                                'Acknowledge 🎉',
+                                style: TextStyle(
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Poppins',
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                ), // End SingleChildScrollView
+              ), // End Container (content)
+            ), // End AlertDialog
+          ],
+        );
+      },
+    );
+  }
+
+  // ---------------------- END BIRTHDAY FUNCTIONS ----------------------
 
   // Helper to get upcoming tasks from AddTaskScreen logic with elderly profile pictures
   Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
@@ -448,6 +920,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     // Trigger a rebuild by calling setState
     // This will cause all StreamBuilders and FutureBuilders to re-fetch data
     setState(() {});
+    // Refresh birthdays
+    await _checkForBirthday();
     // Add a small delay to ensure smooth refresh animation
     await Future.delayed(const Duration(milliseconds: 500));
   }
@@ -635,6 +1109,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                             ),
                           ),
                           const SizedBox(height: 20),
+
+                          // ✅ BIRTHDAY SECTION
+                          _birthdaySection(),
 
                           // ✅ MODIFIED: Light blue background for "Upcoming Tasks"
                           Container(
@@ -1580,6 +2057,112 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       ),
     );
   }
+
+  // ---------------------- BIRTHDAY SECTION WIDGET ----------------------
+  Widget _birthdaySection() {
+    if (_todaysBirthdays.isEmpty) {
+      return const SizedBox.shrink(); // Don't show section if no birthdays
+    }
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFE4E1), // Light pink background for birthday
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: const [
+                  Icon(
+                    Icons.cake,
+                    color: Color(0xFFFF6B35), // Orange color for birthday
+                    size: 45,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    "Today's Birthdays",
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFFF6B35),
+                      fontFamily: 'Poppins',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: () {
+                  final names = _todaysBirthdays
+                      .map((b) => b['name'] as String)
+                      .toList();
+                  final today = DateTime.now().toIso8601String().split('T')[0];
+                  final acknowledgedKey = 'birthday_acknowledged_all_$today';
+                  _showBirthdayDialog(names, acknowledgedKey, isManualTap: true);
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.8),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '🎂 Happy Birthday! 🎉',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFFF6B35),
+                                fontFamily: 'Poppins',
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.celebration,
+                            color: Color(0xFFFF6B35),
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ..._todaysBirthdays.map((birthday) {
+                        final name = birthday['name'] as String;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            name,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              fontFamily: 'Poppins',
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+  // ---------------------- END BIRTHDAY SECTION WIDGET ----------------------
 
   Widget _taskCard(
     String name,

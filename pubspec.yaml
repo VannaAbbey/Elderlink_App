@@ -61,6 +61,10 @@ dependencies:
   flutter_ringtone_player: ^4.0.0+3
   timezone: ^0.9.4
   workmanager: ^0.6.0
+  
+  # Birthday and preferences packages
+  shared_preferences: ^2.2.2
+  confetti: ^0.7.0
 
 dev_dependencies:
   flutter_test:
@@ -103,6 +107,7 @@ flutter:
     - assets/images/shiftIcon.png
     - assets/images/background1.png
     - assets/images/people_icon.png
+    - assets/images/birthdaybg.png
     - assets/houses_img/
 
   fonts:
