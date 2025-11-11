@@ -556,172 +556,124 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     }
   }
 
-  String _formatTimestamp(dynamic timestamp) {
-    if (timestamp == null) return 'Unknown time';
-
-    try {
-      DateTime dateTime;
-      if (timestamp is Timestamp) {
-        dateTime = timestamp.toDate();
-      } else if (timestamp is DateTime) {
-        dateTime = timestamp;
-      } else {
-        return 'Invalid time';
-      }
-
-      final now = DateTime.now();
-      final difference = now.difference(dateTime);
-
-      if (difference.inMinutes < 1) {
-        return 'Just now';
-      } else if (difference.inHours < 1) {
-        return '${difference.inMinutes}m ago';
-      } else if (difference.inDays < 1) {
-        return '${difference.inHours}h ago';
-      } else if (difference.inDays < 7) {
-        return '${difference.inDays}d ago';
-      } else {
-        return DateFormat('MMM d, yyyy • HH:mm').format(dateTime);
-      }
-    } catch (e) {
-      return 'Invalid time';
-    }
-  }
-
-  // 🔧 NEW: Build message spans with bold action words
-  List<TextSpan> _buildMessageSpans(String message) {
-    // Common action words to make bold
-    final actionWords = [
-      'created',
-      'completed',
-      'marked as MISSED',
-      'marked',
-      'MISSED',
-      'edited',
-      'deleted',
-      'added',
-      'changed',
-      'verified',
-      'updated',
-    ];
-
-    List<TextSpan> spans = [];
-    String remainingMessage = message;
-
-    // Try to find and bold the first action word
-    for (String action in actionWords) {
-      final actionIndex = remainingMessage.toLowerCase().indexOf(
-        action.toLowerCase(),
-      );
-      if (actionIndex != -1) {
-        // Add text before the action word
-        if (actionIndex > 0) {
-          spans.add(TextSpan(text: remainingMessage.substring(0, actionIndex)));
-        }
-
-        // Add the bold action word
-        final actionEndIndex = actionIndex + action.length;
-        spans.add(
-          TextSpan(
-            text: remainingMessage.substring(actionIndex, actionEndIndex),
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
-          ),
-        );
-
-        // Add remaining text
-        if (actionEndIndex < remainingMessage.length) {
-          spans.add(TextSpan(text: remainingMessage.substring(actionEndIndex)));
-        }
-
-        return spans; // Return after finding the first action word
-      }
-    }
-
-    // If no action word found, return the whole message as normal text
-    return [TextSpan(text: message)];
-  }
-
   Widget _buildMedicationActivityCard(Map<String, dynamic> activity) {
     final action = activity['action'] as String;
     final actionColor = _getMedicationActionColor(action);
     final actionIcon = _getMedicationActionIcon(action);
     final message = _formatMedicationActivityMessage(activity);
-    final timestamp = _formatTimestamp(activity['timestamp']);
+    final dateFormat = DateFormat('MMM dd, yyyy');
+    final timeFormat = DateFormat('h:mm a');
+    final activityTimestamp = (activity['timestamp'] as Timestamp).toDate();
 
     return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       elevation: 2,
-      color: Color(0xFFE6F3FA),
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Action Icon
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: actionColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(actionIcon, color: actionColor, size: 20),
-            ),
-            SizedBox(width: 12),
-
-            // Activity Details
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      color: const Color(0xFFF5F5F5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        onTap: () {},
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top Row: Badge and Timestamp
+              Row(
                 children: [
-                  // Activity Message
-                  RichText(
-                    text: TextSpan(
-                      children: _buildMessageSpans(message),
-                      style: TextStyle(fontSize: 16, color: Colors.black87),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: actionColor,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(actionIcon, color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          _getMedicationActionLabel(action),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  SizedBox(height: 8),
-
-                  // Timestamp
+                  const Spacer(),
                   Text(
-                    timestamp,
+                    '${dateFormat.format(activityTimestamp)} at ${timeFormat.format(activityTimestamp)}',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-
-                  // Medication name (if available)
-                  if (activity['medication_name'] != null &&
-                      activity['medication_name'].toString().isNotEmpty)
-                    Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: actionColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: actionColor.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        child: Text(
-                          activity['medication_name'],
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: actionColor,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ),
                 ],
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+
+              // Activity Message
+              Text(
+                message,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+
+              // Medication name (if available)
+              if (activity['medication_name'] != null &&
+                  activity['medication_name'].toString().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: actionColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: actionColor.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    'Medication: ${activity['medication_name']}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: actionColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  // Helper method to get action label
+  String _getMedicationActionLabel(String action) {
+    switch (action) {
+      case 'create':
+        return 'Created';
+      case 'take_completed':
+        return 'Administered';
+      case 'miss_take':
+        return 'Missed';
+      case 'update':
+        return 'Updated';
+      case 'delete':
+        return 'Deleted';
+      default:
+        return action.toUpperCase();
+    }
   }
 
   // 🔧 NEW: Build vital activity card
@@ -730,151 +682,194 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
     final actionColor = _getVitalActionColor(actionType);
     final actionIcon = _getVitalActionIcon(actionType);
     final message = _formatVitalActivityMessage(activity);
-    final timestamp = _formatTimestamp(activity['timestamp']);
+    final dateFormat = DateFormat('MMM dd, yyyy');
+    final timeFormat = DateFormat('h:mm a');
+    final activityTimestamp = (activity['timestamp'] as Timestamp).toDate();
     final newValues = activity['new_values'] as Map<String, dynamic>? ?? {};
 
     return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       elevation: 2,
-      color: Color(0xFFE6F3FA),
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Action Icon
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: actionColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(actionIcon, color: actionColor, size: 20),
-            ),
-            SizedBox(width: 12),
-
-            // Activity Details
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      color: const Color(0xFFF5F5F5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        onTap: () {},
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Top Row: Badge and Timestamp
+              Row(
                 children: [
-                  // Activity Message
-                  RichText(
-                    text: TextSpan(
-                      children: _buildMessageSpans(message),
-                      style: TextStyle(fontSize: 16, color: Colors.black87),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
                     ),
-                  ),
-                  SizedBox(height: 8),
-
-                  // Timestamp and Shift
-                  Row(
-                    children: [
-                      Text(
-                        timestamp,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                      ),
-                      if (activity['shift'] != null) ...[
-                        SizedBox(width: 8),
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '${activity['shift']} shift',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blue[700],
-                              fontWeight: FontWeight.w500,
-                            ),
+                    decoration: BoxDecoration(
+                      color: actionColor,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(actionIcon, color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          _getVitalActionLabel(actionType),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
-                    ],
+                    ),
                   ),
-
-                  // Vital Signs Details (if available)
-                  if (newValues.isNotEmpty) ...[
-                    SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        if (newValues['blood_pressure'] != null)
-                          _buildVitalChip(
-                            'BP',
-                            newValues['blood_pressure'].toString(),
-                            Colors.red,
-                          ),
-                        if (newValues['pulse_rate'] != null)
-                          _buildVitalChip(
-                            'Pulse',
-                            '${newValues['pulse_rate']} bpm',
-                            Colors.blue,
-                          ),
-                        if (newValues['oxygen_saturation'] != null)
-                          _buildVitalChip(
-                            'O2',
-                            '${newValues['oxygen_saturation']}%',
-                            Colors.green,
-                          ),
-                        if (newValues['temperature'] != null)
-                          _buildVitalChip(
-                            'Temp',
-                            '${newValues['temperature']}°C',
-                            Colors.orange,
-                          ),
-                        if (newValues['respiratory_rate'] != null)
-                          _buildVitalChip(
-                            'RR',
-                            '${newValues['respiratory_rate']}',
-                            Colors.purple,
-                          ),
-                      ],
-                    ),
-                  ],
-
-                  // Remarks (if available)
-                  if (activity['remarks'] != null &&
-                      activity['remarks'].toString().isNotEmpty) ...[
-                    SizedBox(height: 8),
-                    Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.note, size: 14, color: Colors.grey[600]),
-                          SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              activity['remarks'].toString(),
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[700],
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                  const Spacer(),
+                  Text(
+                    '${dateFormat.format(activityTimestamp)} at ${timeFormat.format(activityTimestamp)}',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
                 ],
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+
+              // Activity Message
+              Text(
+                message,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+
+              // Shift Badge (if available)
+              if (activity['shift'] != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.blue.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    '${activity['shift']} shift',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+
+              // Vital Signs Details (if available)
+              if (newValues.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (newValues['blood_pressure'] != null)
+                      _buildVitalChip(
+                        'BP',
+                        newValues['blood_pressure'].toString(),
+                        Colors.red,
+                      ),
+                    if (newValues['pulse_rate'] != null)
+                      _buildVitalChip(
+                        'Pulse',
+                        '${newValues['pulse_rate']} bpm',
+                        Colors.blue,
+                      ),
+                    if (newValues['oxygen_saturation'] != null)
+                      _buildVitalChip(
+                        'O2',
+                        '${newValues['oxygen_saturation']}%',
+                        Colors.green,
+                      ),
+                    if (newValues['temperature'] != null)
+                      _buildVitalChip(
+                        'Temp',
+                        '${newValues['temperature']}°C',
+                        Colors.orange,
+                      ),
+                    if (newValues['respiratory_rate'] != null)
+                      _buildVitalChip(
+                        'RR',
+                        '${newValues['respiratory_rate']}',
+                        Colors.purple,
+                      ),
+                  ],
+                ),
+              ],
+
+              // Remarks (if available)
+              if (activity['remarks'] != null &&
+                  activity['remarks'].toString().isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.note, size: 16, color: Colors.grey[600]),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          activity['remarks'].toString(),
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[700],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  // Helper method to get vital action label
+  String _getVitalActionLabel(String actionType) {
+    switch (actionType.toLowerCase()) {
+      case 'vital_recorded':
+        return 'Recorded';
+      case 'vital_completed':
+      case 'vitals_completed':
+        return 'Completed';
+      case 'vital_verified':
+        return 'Verified';
+      case 'vital_updated':
+        return 'Updated';
+      case 'vital_deleted':
+        return 'Deleted';
+      case 'vital_missed':
+      case 'missed':
+        return 'Missed';
+      default:
+        return 'Recorded';
+    }
   }
 
   // 🔧 NEW: Build vital sign chips

@@ -16,6 +16,7 @@ class AuthService {
   // Get current user
   User? get currentUser => _auth.currentUser;
 
+
   // Check platform availability for social sign-in
   Future<bool> _isPlatformSupported(String provider) async {
     try {
@@ -85,15 +86,10 @@ class AuthService {
 
       // Parse birthday string to Timestamp
       Timestamp? birthdayTimestamp;
-      if (userData['birthday'] != null &&
-          userData['birthday'].toString().isNotEmpty) {
+      if (userData['birthday'] != null && userData['birthday'].toString().isNotEmpty) {
         try {
           DateTime birthdayDate = DateTime.parse(userData['birthday']);
-          birthdayDate = DateTime(
-            birthdayDate.year,
-            birthdayDate.month,
-            birthdayDate.day,
-          );
+          birthdayDate = DateTime(birthdayDate.year, birthdayDate.month, birthdayDate.day);
           birthdayTimestamp = Timestamp.fromDate(birthdayDate);
         } catch (e) {
           print('Error parsing birthday: $e');
@@ -119,7 +115,6 @@ class AuthService {
       throw Exception('Registration error: $e');
     }
   }
-
   // Sign out
   Future<void> signOut() async {
     try {
@@ -144,10 +139,7 @@ class AuthService {
   // Get user data from Firestore
   Future<Map<String, dynamic>?> getUserData(String uid) async {
     try {
-      DocumentSnapshot doc = await _firestore
-          .collection('users')
-          .doc(uid)
-          .get();
+      DocumentSnapshot doc = await _firestore.collection('users').doc(uid).get();
       return doc.data() as Map<String, dynamic>?;
     } catch (e) {
       throw Exception('Error getting user data: $e');
@@ -181,8 +173,7 @@ class AuthService {
       }
 
       // Obtain the auth details from the request
-      final GoogleSignInAuthentication googleAuth =
-          await googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
 
       // Create a new credential
       final credential = GoogleAuthProvider.credential(
@@ -191,10 +182,8 @@ class AuthService {
       );
 
       // Sign in to Firebase with the Google credential
-      final UserCredential userCredential = await _auth.signInWithCredential(
-        credential,
-      );
-
+      final UserCredential userCredential = await _auth.signInWithCredential(credential);
+      
       // Create or update user document in Firestore
       if (userCredential.user != null) {
         await _createSocialUserDocument(userCredential.user!, 'google');
@@ -227,26 +216,16 @@ class AuthService {
         if (loginResult.status == LoginStatus.cancelled) {
           return null; // User cancelled
         }
-        // Check if this is a configuration error (placeholder app ID)
-        if (loginResult.message?.contains('Error validating application') ==
-                true ||
-            loginResult.message?.contains('system error') == true) {
-          throw Exception(
-            'Facebook login is not configured. Please contact support.',
-          );
-        }
         throw Exception('Facebook login failed: ${loginResult.message}');
       }
 
       // Create a credential from the access token
-      final OAuthCredential facebookAuthCredential =
+      final OAuthCredential facebookAuthCredential = 
           FacebookAuthProvider.credential(loginResult.accessToken!.tokenString);
 
       // Sign in to Firebase with the Facebook credential
-      final UserCredential userCredential = await _auth.signInWithCredential(
-        facebookAuthCredential,
-      );
-
+      final UserCredential userCredential = await _auth.signInWithCredential(facebookAuthCredential);
+      
       // Create or update user document in Firestore
       if (userCredential.user != null) {
         await _createSocialUserDocument(userCredential.user!, 'facebook');
@@ -254,24 +233,10 @@ class AuthService {
 
       return userCredential;
     } on PlatformException catch (e) {
-      // Handle Facebook SDK configuration errors gracefully
-      if (e.message?.contains('Error validating application') == true ||
-          e.message?.contains('system error') == true) {
-        throw Exception(
-          'Facebook login is not properly configured. Please use email/password login instead.',
-        );
-      }
       throw Exception('Facebook Sign-In platform error: ${e.message}');
     } on FirebaseAuthException catch (e) {
       throw _handleAuthException(e);
     } catch (e) {
-      // Handle any other Facebook-related errors
-      if (e.toString().contains('Error validating application') ||
-          e.toString().contains('system error')) {
-        throw Exception(
-          'Facebook login configuration error. Please use email/password login.',
-        );
-      }
       throw Exception('Error signing in with Facebook: $e');
     }
   }
@@ -298,19 +263,18 @@ class AuthService {
       );
 
       // Create an OAuthCredential from the credential returned by Apple
-      final oauthCredential = OAuthProvider(
-        "apple.com",
-      ).credential(idToken: appleCredential.identityToken, rawNonce: rawNonce);
-
-      // Sign in the user with Firebase
-      final UserCredential userCredential = await _auth.signInWithCredential(
-        oauthCredential,
+      final oauthCredential = OAuthProvider("apple.com").credential(
+        idToken: appleCredential.identityToken,
+        rawNonce: rawNonce,
       );
 
+      // Sign in the user with Firebase
+      final UserCredential userCredential = await _auth.signInWithCredential(oauthCredential);
+      
       // Create or update user document in Firestore with Apple-specific data
       if (userCredential.user != null) {
         await _createSocialUserDocument(
-          userCredential.user!,
+          userCredential.user!, 
           'apple',
           appleCredential: appleCredential,
         );
@@ -333,19 +297,19 @@ class AuthService {
 
   // Helper method to create user document for social sign-ins
   Future<void> _createSocialUserDocument(
-    User user,
+    User user, 
     String provider, {
     AuthorizationCredentialAppleID? appleCredential,
   }) async {
     try {
       // Check if user document already exists
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
-
+      
       if (!userDoc.exists) {
         // Extract name information
         String firstName = '';
         String lastName = '';
-
+        
         if (provider == 'apple' && appleCredential != null) {
           firstName = appleCredential.givenName ?? '';
           lastName = appleCredential.familyName ?? '';
@@ -363,8 +327,7 @@ class AuthService {
           'user_fname': firstName,
           'user_lname': lastName,
           'user_bday': null, // Null for social sign-ins (no birthday provided)
-          'user_contactNum':
-              null, // Null for social sign-ins (no phone provided)
+          'user_contactNum': null, // Null for social sign-ins (no phone provided)
           'user_type': 'caregiver', // Default role for social sign-ins
           'user_activationStatus': true, // Boolean: true for active
           'user_profilePic': '', // Empty for now, to be added later
@@ -379,13 +342,9 @@ class AuthService {
 
   // Generate a cryptographically secure random nonce
   String _generateNonce([int length = 32]) {
-    const charset =
-        '0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._';
+    const charset = '0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._';
     final random = Random.secure();
-    return List.generate(
-      length,
-      (_) => charset[random.nextInt(charset.length)],
-    ).join();
+    return List.generate(length, (_) => charset[random.nextInt(charset.length)]).join();
   }
 
   // Generate SHA256 hash of input string

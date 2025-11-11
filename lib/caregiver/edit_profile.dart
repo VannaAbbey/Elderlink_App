@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+
 class EditProfile extends StatefulWidget {
   const EditProfile({super.key});
 
@@ -26,15 +27,11 @@ class _EditProfileState extends State<EditProfile> {
 
   @override
   void initState() {
-    _loadProfilePic();
+  _loadProfilePic();
     super.initState();
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    _fullNameController = TextEditingController(
-      text: _getFullName(authProvider),
-    );
-    _birthdayController = TextEditingController(
-      text: _getBirthday(authProvider),
-    );
+    _fullNameController = TextEditingController(text: _getFullName(authProvider));
+    _birthdayController = TextEditingController(text: _getBirthday(authProvider));
     _emailController = TextEditingController(text: authProvider.userEmail);
     _phoneController = TextEditingController(text: authProvider.userContactNum);
   }
@@ -55,10 +52,7 @@ class _EditProfileState extends State<EditProfile> {
       // UID not available yet, skip loading
       return;
     }
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .get();
+    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     setState(() {
       _profilePicUrl = doc.data()?['user_profilePic'] as String?;
     });
@@ -69,33 +63,23 @@ class _EditProfileState extends State<EditProfile> {
     final uid = authProvider.currentUser?.uid ?? '';
     if (uid.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('User ID not available. Please try again later.'),
-          backgroundColor: Color(0xFF00588e),
-        ),
+        const SnackBar(content: Text('User ID not available. Please try again later.'), backgroundColor: Color(0xFF00588e)),
       );
       return;
     }
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
-      final storageRef = FirebaseStorage.instance.ref().child(
-        'user_profilePic/$uid.jpg',
-      );
+      final storageRef = FirebaseStorage.instance.ref().child('user_profilePic/$uid.jpg');
       await storageRef.putData(await pickedFile.readAsBytes());
       final downloadUrl = await storageRef.getDownloadURL();
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
-        'user_profilePic': downloadUrl,
-      });
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({'user_profilePic': downloadUrl});
       setState(() {
         _profilePicUrl = downloadUrl;
       });
       // Refresh user data so sidebar avatar updates
       await authProvider.refreshUserData();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Profile picture updated!'),
-          backgroundColor: Color(0xFF00588e),
-        ),
+        const SnackBar(content: Text('Profile picture updated!'), backgroundColor: Color(0xFF00588e)),
       );
     }
   }
@@ -112,7 +96,7 @@ class _EditProfileState extends State<EditProfile> {
       // Firestore stores as Timestamp, convert to formatted string
       final bday = userData['user_bday'];
       DateTime? dateTime;
-
+      
       if (bday is String) {
         try {
           dateTime = DateTime.parse(bday);
@@ -129,7 +113,7 @@ class _EditProfileState extends State<EditProfile> {
           return '';
         }
       }
-
+      
       if (dateTime != null) {
         return _formatDateToReadable(dateTime);
       }
@@ -140,20 +124,10 @@ class _EditProfileState extends State<EditProfile> {
   String _formatDateToReadable(DateTime date) {
     // Format as "Month Day, Year" (e.g., "August 6, 2003")
     const months = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
     ];
-
+    
     final monthName = months[date.month - 1];
     return '$monthName ${date.day}, ${date.year}';
   }
@@ -161,48 +135,37 @@ class _EditProfileState extends State<EditProfile> {
   DateTime? _parseReadableDate(String dateString) {
     // Parse "Month Day, Year" format back to DateTime
     if (dateString.isEmpty) return null;
-
+    
     try {
       const months = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December',
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
       ];
-
+      
       // Split by comma to separate "Month Day" and "Year"
       final parts = dateString.split(', ');
-      if (parts.length != 2) {
-        return DateTime.tryParse(dateString); // Fallback for other formats
-      }
-
+      if (parts.length != 2) return DateTime.tryParse(dateString); // Fallback for other formats
+      
       final yearStr = parts[1];
       final monthDayPart = parts[0].split(' ');
       if (monthDayPart.length != 2) return DateTime.tryParse(dateString);
-
+      
       final monthName = monthDayPart[0];
       final dayStr = monthDayPart[1];
-
+      
       final monthIndex = months.indexOf(monthName);
       if (monthIndex == -1) return DateTime.tryParse(dateString);
-
+      
       final year = int.tryParse(yearStr);
       final day = int.tryParse(dayStr);
       if (year == null || day == null) return DateTime.tryParse(dateString);
-
+      
       return DateTime(year, monthIndex + 1, day);
     } catch (e) {
       return DateTime.tryParse(dateString); // Fallback
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -217,13 +180,7 @@ class _EditProfileState extends State<EditProfile> {
           icon: const Icon(Icons.arrow_back, color: Color(0xFF00588e)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text(
-          'Profile',
-          style: TextStyle(
-            color: Color(0xFF00588e),
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        title: const Text('Profile', style: TextStyle(color: Color(0xFF00588e), fontWeight: FontWeight.bold)),
         centerTitle: true,
       ),
       body: Stack(
@@ -244,14 +201,9 @@ class _EditProfileState extends State<EditProfile> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const CircularProgressIndicator(
-                          color: Color(0xFF00588e),
-                        ),
+                        const CircularProgressIndicator(color: Color(0xFF00588e)),
                         const SizedBox(height: 16),
-                        const Text(
-                          'Loading profile...',
-                          style: TextStyle(color: Color(0xFF00588e)),
-                        ),
+                        const Text('Loading profile...', style: TextStyle(color: Color(0xFF00588e))),
                       ],
                     ),
                   );
@@ -263,9 +215,7 @@ class _EditProfileState extends State<EditProfile> {
                       width: constraints.maxWidth,
                       child: SingleChildScrollView(
                         child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: constraints.maxHeight,
-                          ),
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
                           child: IntrinsicHeight(
                             child: Column(
                               children: [
@@ -276,36 +226,16 @@ class _EditProfileState extends State<EditProfile> {
                                       radius: 100,
                                       backgroundColor: Colors.grey[200],
                                       child: ClipOval(
-                                        child:
-                                            (_profilePicUrl != null &&
-                                                _profilePicUrl!.isNotEmpty)
-                                            ? CachedNetworkImage(
-                                                imageUrl: _profilePicUrl!,
-                                                width: 200,
-                                                height: 200,
-                                                fit: BoxFit.cover,
-                                                placeholder: (context, url) =>
-                                                    const CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                                errorWidget:
-                                                    (
-                                                      context,
-                                                      url,
-                                                      error,
-                                                    ) => Image.asset(
-                                                      'assets/images/people_icon.png',
-                                                      width: 200,
-                                                      height: 200,
-                                                      fit: BoxFit.cover,
-                                                    ),
-                                              )
-                                            : Image.asset(
-                                                'assets/images/people_icon.png',
-                                                width: 200,
-                                                height: 200,
-                                                fit: BoxFit.cover,
-                                              ),
+                                        child: (_profilePicUrl != null && _profilePicUrl!.isNotEmpty)
+                                          ? CachedNetworkImage(
+                                              imageUrl: _profilePicUrl!,
+                                              width: 200,
+                                              height: 200,
+                                              fit: BoxFit.cover,
+                                              placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
+                                              errorWidget: (context, url, error) => Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
+                                            )
+                                          : Image.asset('assets/images/people_icon.png', width: 200, height: 200, fit: BoxFit.cover),
                                       ),
                                     ),
                                     Positioned(
@@ -317,18 +247,10 @@ class _EditProfileState extends State<EditProfile> {
                                           decoration: BoxDecoration(
                                             color: Colors.white,
                                             shape: BoxShape.circle,
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.black26,
-                                                blurRadius: 4,
-                                              ),
-                                            ],
+                                            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
                                           ),
                                           padding: const EdgeInsets.all(8),
-                                          child: const Icon(
-                                            Icons.camera_alt,
-                                            color: Color(0xFF00588e),
-                                          ),
+                                          child: const Icon(Icons.camera_alt, color: Color(0xFF00588e)),
                                         ),
                                       ),
                                     ),
@@ -337,13 +259,8 @@ class _EditProfileState extends State<EditProfile> {
                                 const SizedBox(height: 30),
                                 Expanded(
                                   child: Container(
-                                    margin: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
-                                      horizontal: 12,
-                                    ),
+                                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
                                     decoration: BoxDecoration(
                                       color: Colors.white,
                                       borderRadius: BorderRadius.circular(16),
@@ -356,8 +273,7 @@ class _EditProfileState extends State<EditProfile> {
                                       ],
                                     ),
                                     child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Center(
                                           child: Text(
@@ -408,463 +324,198 @@ class _EditProfileState extends State<EditProfile> {
                                                   icon: Icon(Icons.edit),
                                                   label: Text('Edit Profile'),
                                                   style: ElevatedButton.styleFrom(
-                                                    backgroundColor: Color(
-                                                      0xFF00588e,
-                                                    ),
-                                                    foregroundColor:
-                                                        Colors.white,
+                                                    backgroundColor: Color(0xFF00588e),
+                                                    foregroundColor: Colors.white,
                                                     shape: RoundedRectangleBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            8,
-                                                          ),
+                                                      borderRadius: BorderRadius.circular(8),
                                                     ),
                                                   ),
                                                   onPressed: () {
-                                                    final authProvider =
-                                                        Provider.of<
-                                                          AuthProvider
-                                                        >(
-                                                          context,
-                                                          listen: false,
-                                                        );
-                                                    final bottomSheetFirstNameController =
-                                                        TextEditingController(
-                                                          text: authProvider
-                                                              .userFirstName,
-                                                        );
-                                                    final bottomSheetLastNameController =
-                                                        TextEditingController(
-                                                          text: authProvider
-                                                              .userLastName,
-                                                        );
-                                                    final bottomSheetBirthdayController =
-                                                        TextEditingController(
-                                                          text:
-                                                              _birthdayController
-                                                                  .text,
-                                                        );
-                                                    final bottomSheetEmailController =
-                                                        TextEditingController(
-                                                          text: _emailController
-                                                              .text,
-                                                        );
-                                                    final bottomSheetPhoneController =
-                                                        TextEditingController(
-                                                          text: _phoneController
-                                                              .text,
-                                                        );
-                                                    final bottomSheetFormKey =
-                                                        GlobalKey<FormState>();
+                                                    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+                                                    final bottomSheetFirstNameController = TextEditingController(text: authProvider.userFirstName);
+                                                    final bottomSheetLastNameController = TextEditingController(text: authProvider.userLastName);
+                                                    final bottomSheetBirthdayController = TextEditingController(text: _birthdayController.text);
+                                                    final bottomSheetEmailController = TextEditingController(text: _emailController.text);
+                                                    final bottomSheetPhoneController = TextEditingController(text: _phoneController.text);
+                                                    final bottomSheetFormKey = GlobalKey<FormState>();
                                                     showModalBottomSheet(
                                                       context: context,
                                                       isScrollControlled: true,
                                                       shape: const RoundedRectangleBorder(
-                                                        borderRadius:
-                                                            BorderRadius.vertical(
-                                                              top:
-                                                                  Radius.circular(
-                                                                    24,
-                                                                  ),
-                                                            ),
+                                                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                                                       ),
                                                       builder: (context) {
                                                         return Padding(
                                                           padding: EdgeInsets.only(
-                                                            bottom:
-                                                                MediaQuery.of(
-                                                                      context,
-                                                                    )
-                                                                    .viewInsets
-                                                                    .bottom,
+                                                            bottom: MediaQuery.of(context).viewInsets.bottom,
                                                             left: 16,
                                                             right: 16,
                                                             top: 24,
                                                           ),
                                                           child: Form(
-                                                            key:
-                                                                bottomSheetFormKey,
+                                                            key: bottomSheetFormKey,
                                                             child: Column(
-                                                              mainAxisSize:
-                                                                  MainAxisSize
-                                                                      .min,
+                                                              mainAxisSize: MainAxisSize.min,
                                                               children: [
-                                                                const Text(
-                                                                  'Edit Profile',
-                                                                  style: TextStyle(
-                                                                    fontSize:
-                                                                        20,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .bold,
-                                                                  ),
-                                                                ),
-                                                                const SizedBox(
-                                                                  height: 30,
-                                                                ),
+                                                                const Text('Edit Profile', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                                                                const SizedBox(height: 30),
                                                                 Row(
                                                                   children: [
                                                                     Expanded(
                                                                       child: Column(
-                                                                        crossAxisAlignment:
-                                                                            CrossAxisAlignment.start,
+                                                                        crossAxisAlignment: CrossAxisAlignment.start,
                                                                         children: [
-                                                                          const Text(
-                                                                            'First Name',
-                                                                            style: TextStyle(
-                                                                              fontSize: 15,
-                                                                              fontWeight: FontWeight.bold,
-                                                                              color: Color(
-                                                                                0xFF00588e,
-                                                                              ),
-                                                                            ),
-                                                                          ),
-                                                                          const SizedBox(
-                                                                            height:
-                                                                                6,
-                                                                          ),
+                                                                          const Text('First Name', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF00588e))),
+                                                                          const SizedBox(height: 6),
                                                                           TextFormField(
-                                                                            controller:
-                                                                                bottomSheetFirstNameController,
+                                                                            controller: bottomSheetFirstNameController,
                                                                             decoration: const InputDecoration(
                                                                               border: OutlineInputBorder(
-                                                                                borderRadius: BorderRadius.all(
-                                                                                  Radius.circular(
-                                                                                    15,
-                                                                                  ),
-                                                                                ),
+                                                                                borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                               ),
-                                                                              contentPadding: EdgeInsets.symmetric(
-                                                                                horizontal: 12,
-                                                                                vertical: 10,
-                                                                              ),
+                                                                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                             ),
-                                                                            validator:
-                                                                                (
-                                                                                  val,
-                                                                                ) =>
-                                                                                    val ==
-                                                                                            null ||
-                                                                                        val.isEmpty
-                                                                                    ? 'Required'
-                                                                                    : null,
+                                                                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                           ),
                                                                         ],
                                                                       ),
                                                                     ),
-                                                                    const SizedBox(
-                                                                      width: 16,
-                                                                    ),
+                                                                    const SizedBox(width: 16),
                                                                     Expanded(
                                                                       child: Column(
-                                                                        crossAxisAlignment:
-                                                                            CrossAxisAlignment.start,
+                                                                        crossAxisAlignment: CrossAxisAlignment.start,
                                                                         children: [
-                                                                          const Text(
-                                                                            'Last Name',
-                                                                            style: TextStyle(
-                                                                              fontSize: 15,
-                                                                              fontWeight: FontWeight.bold,
-                                                                              color: Color(
-                                                                                0xFF00588e,
-                                                                              ),
-                                                                            ),
-                                                                          ),
-                                                                          const SizedBox(
-                                                                            height:
-                                                                                6,
-                                                                          ),
+                                                                          const Text('Last Name', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF00588e))),
+                                                                          const SizedBox(height: 6),
                                                                           TextFormField(
-                                                                            controller:
-                                                                                bottomSheetLastNameController,
+                                                                            controller: bottomSheetLastNameController,
                                                                             decoration: const InputDecoration(
                                                                               border: OutlineInputBorder(
-                                                                                borderRadius: BorderRadius.all(
-                                                                                  Radius.circular(
-                                                                                    15,
-                                                                                  ),
-                                                                                ),
+                                                                                borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                               ),
-                                                                              contentPadding: EdgeInsets.symmetric(
-                                                                                horizontal: 12,
-                                                                                vertical: 10,
-                                                                              ),
+                                                                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                             ),
-                                                                            validator:
-                                                                                (
-                                                                                  val,
-                                                                                ) =>
-                                                                                    val ==
-                                                                                            null ||
-                                                                                        val.isEmpty
-                                                                                    ? 'Required'
-                                                                                    : null,
+                                                                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                           ),
                                                                         ],
                                                                       ),
                                                                     ),
                                                                   ],
                                                                 ),
-                                                                const SizedBox(
-                                                                  height: 18,
-                                                                ),
+                                                                const SizedBox(height: 18),
                                                                 Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
+                                                                  crossAxisAlignment: CrossAxisAlignment.start,
                                                                   children: [
-                                                                    const Text(
-                                                                      'Birthday',
-                                                                      style: TextStyle(
-                                                                        fontSize:
-                                                                            15,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                        color: Color(
-                                                                          0xFF00588e,
-                                                                        ),
-                                                                      ),
-                                                                    ),
-                                                                    const SizedBox(
-                                                                      height: 6,
-                                                                    ),
+                                                                    const Text('Birthday', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF00588e))),
+                                                                    const SizedBox(height: 6),
                                                                     GestureDetector(
                                                                       onTap: () async {
-                                                                        DateTime?
-                                                                        pickedDate = await showDatePicker(
-                                                                          context:
-                                                                              context,
-                                                                          initialDate:
-                                                                              _parseReadableDate(
-                                                                                bottomSheetBirthdayController.text,
-                                                                              ) ??
-                                                                              DateTime(
-                                                                                2000,
-                                                                                1,
-                                                                                1,
-                                                                              ),
-                                                                          firstDate: DateTime(
-                                                                            1900,
-                                                                          ),
-                                                                          lastDate:
-                                                                              DateTime.now(),
+                                                                        DateTime? pickedDate = await showDatePicker(
+                                                                          context: context,
+                                                                          initialDate: _parseReadableDate(bottomSheetBirthdayController.text) ?? DateTime(2000, 1, 1),
+                                                                          firstDate: DateTime(1900),
+                                                                          lastDate: DateTime.now(),
                                                                         );
-                                                                        if (pickedDate !=
-                                                                            null) {
-                                                                          bottomSheetBirthdayController
-                                                                              .text = _formatDateToReadable(
-                                                                            pickedDate,
-                                                                          );
+                                                                        if (pickedDate != null) {
+                                                                          bottomSheetBirthdayController.text = _formatDateToReadable(pickedDate);
                                                                         }
                                                                       },
                                                                       child: AbsorbPointer(
                                                                         child: TextFormField(
-                                                                          controller:
-                                                                              bottomSheetBirthdayController,
+                                                                          controller: bottomSheetBirthdayController,
                                                                           decoration: const InputDecoration(
                                                                             border: OutlineInputBorder(
-                                                                              borderRadius: BorderRadius.all(
-                                                                                Radius.circular(
-                                                                                  15,
-                                                                                ),
-                                                                              ),
+                                                                              borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                             ),
-                                                                            contentPadding: EdgeInsets.symmetric(
-                                                                              horizontal: 12,
-                                                                              vertical: 10,
-                                                                            ),
+                                                                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                           ),
-                                                                          validator: (val) =>
-                                                                              val ==
-                                                                                      null ||
-                                                                                  val.isEmpty
-                                                                              ? 'Required'
-                                                                              : null,
+                                                                          validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                         ),
                                                                       ),
                                                                     ),
                                                                   ],
                                                                 ),
-                                                                const SizedBox(
-                                                                  height: 18,
-                                                                ),
+                                                                const SizedBox(height: 18),
                                                                 Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
+                                                                  crossAxisAlignment: CrossAxisAlignment.start,
                                                                   children: [
-                                                                    const Text(
-                                                                      'Email',
-                                                                      style: TextStyle(
-                                                                        fontSize:
-                                                                            15,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                        color: Color(
-                                                                          0xFF00588e,
-                                                                        ),
-                                                                      ),
-                                                                    ),
-                                                                    const SizedBox(
-                                                                      height: 6,
-                                                                    ),
+                                                                    const Text('Email', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF00588e))),
+                                                                    const SizedBox(height: 6),
                                                                     TextFormField(
-                                                                      controller:
-                                                                          bottomSheetEmailController,
-                                                                      enabled:
-                                                                          false,
+                                                                      controller: bottomSheetEmailController,
+                                                                      enabled: false,
                                                                       decoration: const InputDecoration(
                                                                         border: OutlineInputBorder(
-                                                                          borderRadius: BorderRadius.all(
-                                                                            Radius.circular(
-                                                                              15,
-                                                                            ),
-                                                                          ),
+                                                                          borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                         ),
-                                                                        contentPadding: EdgeInsets.symmetric(
-                                                                          horizontal:
-                                                                              12,
-                                                                          vertical:
-                                                                              10,
-                                                                        ),
+                                                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                       ),
                                                                     ),
                                                                   ],
                                                                 ),
-                                                                const SizedBox(
-                                                                  height: 15,
-                                                                ),
+                                                                const SizedBox(height: 15),
                                                                 Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
+                                                                  crossAxisAlignment: CrossAxisAlignment.start,
                                                                   children: [
-                                                                    const Text(
-                                                                      'Phone Number',
-                                                                      style: TextStyle(
-                                                                        fontSize:
-                                                                            15,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                        color: Color(
-                                                                          0xFF00588e,
-                                                                        ),
-                                                                      ),
-                                                                    ),
-                                                                    const SizedBox(
-                                                                      height: 5,
-                                                                    ),
+                                                                    const Text('Phone Number', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF00588e))),
+                                                                    const SizedBox(height: 5),
                                                                     TextFormField(
-                                                                      controller:
-                                                                          bottomSheetPhoneController,
+                                                                      controller: bottomSheetPhoneController,
                                                                       decoration: const InputDecoration(
                                                                         border: OutlineInputBorder(
-                                                                          borderRadius: BorderRadius.all(
-                                                                            Radius.circular(
-                                                                              15,
-                                                                            ),
-                                                                          ),
+                                                                          borderRadius: BorderRadius.all(Radius.circular(15)),
                                                                         ),
-                                                                        contentPadding: EdgeInsets.symmetric(
-                                                                          horizontal:
-                                                                              12,
-                                                                          vertical:
-                                                                              10,
-                                                                        ),
+                                                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                                                       ),
-                                                                      validator: (val) =>
-                                                                          val == null ||
-                                                                              val.isEmpty
-                                                                          ? 'Required'
-                                                                          : null,
+                                                                      validator: (val) => val == null || val.isEmpty ? 'Required' : null,
                                                                     ),
                                                                   ],
                                                                 ),
-                                                                const SizedBox(
-                                                                  height: 24,
-                                                                ),
+                                                                const SizedBox(height: 24),
                                                                 Row(
-                                                                  mainAxisAlignment:
-                                                                      MainAxisAlignment
-                                                                          .end,
+                                                                  mainAxisAlignment: MainAxisAlignment.end,
                                                                   children: [
                                                                     TextButton(
-                                                                      onPressed: () =>
-                                                                          Navigator.of(
-                                                                            context,
-                                                                          ).pop(),
-                                                                      child: const Text(
-                                                                        'Cancel',
-                                                                        style: TextStyle(
-                                                                          color: Color(
-                                                                            0xFF00588e,
-                                                                          ),
-                                                                        ),
-                                                                      ),
+                                                                      onPressed: () => Navigator.of(context).pop(),
+                                                                      child: const Text('Cancel', style: TextStyle(color: Color(0xFF00588e))),
                                                                     ),
                                                                     ElevatedButton(
                                                                       onPressed: () async {
-                                                                        if (bottomSheetFormKey
-                                                                            .currentState!
-                                                                            .validate()) {
+                                                                        if (bottomSheetFormKey.currentState!.validate()) {
                                                                           setState(() {
-                                                                            _fullNameController.text =
-                                                                                "${bottomSheetFirstNameController.text} ${bottomSheetLastNameController.text}";
-                                                                            _birthdayController.text =
-                                                                                bottomSheetBirthdayController.text;
-                                                                            _emailController.text =
-                                                                                bottomSheetEmailController.text;
-                                                                            _phoneController.text =
-                                                                                bottomSheetPhoneController.text;
+                                                                            _fullNameController.text = "${bottomSheetFirstNameController.text} ${bottomSheetLastNameController.text}";
+                                                                            _birthdayController.text = bottomSheetBirthdayController.text;
+                                                                            _emailController.text = bottomSheetEmailController.text;
+                                                                            _phoneController.text = bottomSheetPhoneController.text;
                                                                           });
                                                                           // Save using split names
                                                                           await authProvider.updateUserProfile({
-                                                                            'user_fname':
-                                                                                bottomSheetFirstNameController.text,
-                                                                            'user_lname':
-                                                                                bottomSheetLastNameController.text,
-                                                                            'user_bday':
-                                                                                bottomSheetBirthdayController.text,
-                                                                            'user_email':
-                                                                                bottomSheetEmailController.text,
-                                                                            'user_contactNum':
-                                                                                bottomSheetPhoneController.text,
+                                                                            'user_fname': bottomSheetFirstNameController.text,
+                                                                            'user_lname': bottomSheetLastNameController.text,
+                                                                            'user_bday': bottomSheetBirthdayController.text,
+                                                                            'user_email': bottomSheetEmailController.text,
+                                                                            'user_contactNum': bottomSheetPhoneController.text,
                                                                           });
-                                                                          ScaffoldMessenger.of(
-                                                                            context,
-                                                                          ).showSnackBar(
+                                                                          ScaffoldMessenger.of(context).showSnackBar(
                                                                             const SnackBar(
-                                                                              content: Text(
-                                                                                'Profile updated!',
-                                                                              ),
-                                                                              backgroundColor: Color(
-                                                                                0xFF00588e,
-                                                                              ),
+                                                                              content: Text('Profile updated!'),
+                                                                              backgroundColor: Color(0xFF00588e),
                                                                             ),
                                                                           );
-                                                                          Navigator.of(
-                                                                            context,
-                                                                          ).pop();
+                                                                          Navigator.of(context).pop();
                                                                         }
                                                                       },
-                                                                      child: const Text(
-                                                                        'Save Changes',
-                                                                        style: TextStyle(
-                                                                          fontSize:
-                                                                              16,
-                                                                          fontWeight:
-                                                                              FontWeight.bold,
-                                                                          color: Color(
-                                                                            0xFF00588e,
-                                                                          ),
-                                                                        ),
+                                                                      child: const Text('Save Changes',
+                                                                      style: TextStyle(
+                                                                        fontSize: 16, 
+                                                                        fontWeight: 
+                                                                        FontWeight.bold, 
+                                                                        color: Color(0xFF00588e)),
                                                                       ),
                                                                     ),
                                                                   ],
                                                                 ),
-                                                                const SizedBox(
-                                                                  height: 10,
-                                                                ),
+                                                                const SizedBox(height: 10),
                                                               ],
                                                             ),
                                                           ),
@@ -897,6 +548,7 @@ class _EditProfileState extends State<EditProfile> {
     );
   }
 
+
   Widget _profileField({
     required IconData icon,
     required String label,
@@ -916,8 +568,7 @@ class _EditProfileState extends State<EditProfile> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
+                Text(label,
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
@@ -926,7 +577,10 @@ class _EditProfileState extends State<EditProfile> {
                 const SizedBox(height: 2),
                 Text(
                   displayText,
-                  style: const TextStyle(fontSize: 15, color: Colors.black),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: Colors.black,
+                  ),
                 ),
               ],
             ),
@@ -950,13 +604,9 @@ class _EditProfileState extends State<EditProfile> {
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 ),
-                validator: (val) =>
-                    val == null || val.isEmpty ? 'Required' : null,
+                validator: (val) => val == null || val.isEmpty ? 'Required' : null,
               ),
             ),
           ],

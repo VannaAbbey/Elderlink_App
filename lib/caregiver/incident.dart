@@ -1664,28 +1664,35 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               '';
 
                                                                           // 3️⃣ Find nurses scheduled today & currently on shift
+                                                                          final today = DateTime.now();
                                                                           final todayDay =
                                                                               DateFormat(
                                                                                 'EEEE',
-                                                                              ).format(
-                                                                                DateTime.now(),
-                                                                              );
+                                                                              ).format(today);
                                                                           final nowTime =
                                                                               DateFormat(
                                                                                 'HH:mm',
-                                                                              ).format(
-                                                                                DateTime.now(),
-                                                                              );
+                                                                              ).format(today);
+
+                                                                          print('🔍 === INCIDENT REPORT: Finding on-duty nurses ===');
+                                                                          print('Current time: $nowTime');
+                                                                          print('Current day: $todayDay');
 
                                                                           final nurseQuery = await _firestore
                                                                               .collection(
-                                                                                'nurse_shift_assign',
+                                                                                'house_shift_assignments',
+                                                                              )
+                                                                              .where(
+                                                                                'user_type',
+                                                                                isEqualTo: 'nurse',
                                                                               )
                                                                               .where(
                                                                                 'is_current',
                                                                                 isEqualTo: true,
                                                                               )
                                                                               .get();
+
+                                                                          print('📋 Total nurse assignments found: ${nurseQuery.docs.length}');
 
                                                                           List<
                                                                             String
@@ -1707,22 +1714,46 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             final endTime =
                                                                                 doc['end_time'] ??
                                                                                 "23:59";
-                                                                            if (daysAssigned.contains(
-                                                                              todayDay,
-                                                                            )) {
+                                                                            final nurseId =
+                                                                                doc['user_id']; // Changed from nurse_id to user_id
+                                                                            
+                                                                            print('\n--- Checking Nurse: $nurseId ---');
+                                                                            print('   Time: $startTime - $endTime');
+                                                                            print('   Assigned Days: $daysAssigned');
+                                                                            
+                                                                            // Parse shift times to determine if overnight
+                                                                            final start =
+                                                                                DateFormat(
+                                                                                  'HH:mm',
+                                                                                ).parse(
+                                                                                  startTime,
+                                                                                );
+                                                                            final end =
+                                                                                DateFormat(
+                                                                                  'HH:mm',
+                                                                                ).parse(
+                                                                                  endTime,
+                                                                                );
+                                                                            
+                                                                            final isOvernightShift = end.isBefore(start);
+                                                                            
+                                                                            // For overnight shifts, determine which day to check
+                                                                            String dayToCheck;
+                                                                            if (isOvernightShift && today.hour >= 0 && today.hour < end.hour) {
+                                                                              // Current time is in the "end period" of an overnight shift
+                                                                              final previousDay = today.subtract(const Duration(days: 1));
+                                                                              dayToCheck = DateFormat('EEEE').format(previousDay);
+                                                                              print('   Day to check: $dayToCheck (previous day - in end period of overnight)');
+                                                                            } else {
+                                                                              dayToCheck = todayDay;
+                                                                              print('   Day to check: $dayToCheck (current day)');
+                                                                            }
+                                                                            
+                                                                            final isDayAssigned = daysAssigned.contains(dayToCheck);
+                                                                            print('   Day assigned: $isDayAssigned');
+                                                                            
+                                                                            if (isDayAssigned) {
                                                                               // check if now is within shift
-                                                                              final start =
-                                                                                  DateFormat(
-                                                                                    'HH:mm',
-                                                                                  ).parse(
-                                                                                    startTime,
-                                                                                  );
-                                                                              final end =
-                                                                                  DateFormat(
-                                                                                    'HH:mm',
-                                                                                  ).parse(
-                                                                                    endTime,
-                                                                                  );
                                                                               final nowParsed =
                                                                                   DateFormat(
                                                                                     'HH:mm',
@@ -1732,9 +1763,7 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                               bool
                                                                               inShift = false;
 
-                                                                              if (end.isBefore(
-                                                                                start,
-                                                                              )) {
+                                                                              if (isOvernightShift) {
                                                                                 // overnight shift
                                                                                 inShift =
                                                                                     nowParsed.isAfter(
@@ -1752,14 +1781,25 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                                       end,
                                                                                     );
                                                                               }
+                                                                              
+                                                                              print('   In shift: $inShift');
 
                                                                               if (inShift) {
                                                                                 nurseIdsToSend.add(
-                                                                                  doc['nurse_id'],
+                                                                                  nurseId,
                                                                                 );
+                                                                                print('   ✅ ADDED: Nurse is on duty');
+                                                                              } else {
+                                                                                print('   ❌ SKIPPED: Not currently in shift time');
                                                                               }
+                                                                            } else {
+                                                                              print('   ❌ SKIPPED: Not assigned for $dayToCheck');
                                                                             }
                                                                           }
+                                                                          
+                                                                          print('\n🎯 Total on-duty nurses found: ${nurseIdsToSend.length}');
+                                                                          print('Nurse IDs: $nurseIdsToSend');
+                                                                          print('=== END INCIDENT REPORT NURSE SEARCH ===\n');
 
                                                                           // 4️⃣ Save incident report for each nurse
                                                                           // 4️⃣ Save incident report once, with all nurses in an array

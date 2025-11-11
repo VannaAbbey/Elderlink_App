@@ -10,19 +10,15 @@ class AliveProfilesGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     print('DEBUG AliveProfilesGrid: Received ${profiles.length} profiles');
-
+    
     // Debug: Print details of each profile to check is_temporary_assignment flag
     for (int i = 0; i < profiles.length; i++) {
       final profile = profiles[i];
-      print(
-        'DEBUG AliveProfilesGrid: Profile $i - Name: ${profile['name']}, is_temporary_assignment: ${profile['is_temporary_assignment']}',
-      );
+      print('DEBUG AliveProfilesGrid: Profile $i - Name: ${profile['name']}, is_temporary_assignment: ${profile['is_temporary_assignment']}');
     }
-
-    print(
-      'DEBUG AliveProfilesGrid: About to show grid with ${profiles.length} items',
-    );
-
+    
+    print('DEBUG AliveProfilesGrid: About to show grid with ${profiles.length} items');
+    
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
@@ -35,7 +31,7 @@ class AliveProfilesGrid extends StatelessWidget {
         final profile = profiles[index];
         final profilePic = profile['profile_pic'] as String?;
         final birthdate = profile['birthdate'];
-
+        
         // Calculate age if birthdate is available
         int? age;
         if (birthdate != null) {
@@ -48,8 +44,7 @@ class AliveProfilesGrid extends StatelessWidget {
             }
             age = DateTime.now().year - birth.year;
             if (DateTime.now().month < birth.month ||
-                (DateTime.now().month == birth.month &&
-                    DateTime.now().day < birth.day)) {
+                (DateTime.now().month == birth.month && DateTime.now().day < birth.day)) {
               age--;
             }
           } catch (e) {
@@ -105,13 +100,12 @@ class AliveProfilesGrid extends StatelessWidget {
                                         size: 40,
                                       ),
                                     ),
-                                    errorWidget: (context, url, error) =>
-                                        Image.asset(
-                                          'assets/images/people_icon.png',
-                                          width: 80,
-                                          height: 80,
-                                          fit: BoxFit.cover,
-                                        ),
+                                    errorWidget: (context, url, error) => Image.asset(
+                                      'assets/images/people_icon.png',
+                                      width: 80,
+                                      height: 80,
+                                      fit: BoxFit.cover,
+                                    ),
                                   )
                                 : Image.asset(
                                     'assets/images/people_icon.png',
@@ -153,9 +147,7 @@ class AliveProfilesGrid extends StatelessWidget {
                   // Debug print
                   Builder(
                     builder: (context) {
-                      print(
-                        '🟠🟠🟠 RENDERING ORANGE DOT for ${profile['name']}',
-                      );
+                      print('🟠🟠🟠 RENDERING ORANGE DOT for ${profile['name']}');
                       return const SizedBox.shrink();
                     },
                   ),
@@ -168,7 +160,10 @@ class AliveProfilesGrid extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: Colors.orange,
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5),
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 1.5,
+                        ),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.3),
@@ -200,11 +195,9 @@ class DeceasedProfilesGrid extends StatelessWidget {
     for (int i = 0; i < profiles.length; i++) {
       print('DEBUG DeceasedProfilesGrid: Profile $i - ${profiles[i]}');
     }
-
-    print(
-      'DEBUG DeceasedProfilesGrid: About to show grid with ${profiles.length} items',
-    );
-
+    
+    print('DEBUG DeceasedProfilesGrid: About to show grid with ${profiles.length} items');
+    
     if (profiles.isEmpty) {
       print('DEBUG DeceasedProfilesGrid: Showing empty state');
       return Center(
@@ -242,7 +235,7 @@ class DeceasedProfilesGrid extends StatelessWidget {
         final profile = profiles[index];
         final profilePic = profile['profile_pic'] as String?;
         final birthdate = profile['birthdate'];
-
+        
         // Calculate age if birthdate is available
         int? age;
         if (birthdate != null) {
@@ -255,8 +248,7 @@ class DeceasedProfilesGrid extends StatelessWidget {
             }
             age = DateTime.now().year - birth.year;
             if (DateTime.now().month < birth.month ||
-                (DateTime.now().month == birth.month &&
-                    DateTime.now().day < birth.day)) {
+                (DateTime.now().month == birth.month && DateTime.now().day < birth.day)) {
               age--;
             }
           } catch (e) {
@@ -313,13 +305,12 @@ class DeceasedProfilesGrid extends StatelessWidget {
                                     size: 40,
                                   ),
                                 ),
-                                errorWidget: (context, url, error) =>
-                                    Image.asset(
-                                      'assets/images/people_icon.png',
-                                      width: 80,
-                                      height: 80,
-                                      fit: BoxFit.cover,
-                                    ),
+                                errorWidget: (context, url, error) => Image.asset(
+                                  'assets/images/people_icon.png',
+                                  width: 80,
+                                  height: 80,
+                                  fit: BoxFit.cover,
+                                ),
                               )
                             : Image.asset(
                                 'assets/images/people_icon.png',
