@@ -33,9 +33,6 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
-  bool _hasCheckedAttendance =
-      false; // Track if attendance has been checked this session
-
   // Get assigned house for caregiver
   Future<Map<String, dynamic>?> getAssignedHouse() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -340,68 +337,20 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       authProvider.refreshUserData();
     });
 
-    // Check attendance after first frame
+    // Start periodic attendance check after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndShowAttendance();
+      AttendanceCheckService.startPeriodicAttendanceCheck(context, () {
+        // Callback when attendance is marked
+        print('✅ CAREGIVER: Attendance marked');
+      });
     });
   }
 
-  /// Check and show attendance dialog if conditions are met
-  Future<void> _checkAndShowAttendance() async {
-    // Skip if already checked this session
-    if (_hasCheckedAttendance) return;
-
-    try {
-      print('🔍 CAREGIVER: Checking attendance conditions...');
-
-      // Check if user is scheduled to work today
-      final isScheduled = await AttendanceCheckService.isScheduledToday();
-      print('📅 CAREGIVER: Is scheduled today: $isScheduled');
-
-      if (!isScheduled) {
-        print('⏭️ CAREGIVER: Not scheduled today, skipping attendance check');
-        return;
-      }
-
-      // Check if at shift start time
-      final isAtShiftStart = await AttendanceCheckService.isAtShiftStart();
-      print('⏰ CAREGIVER: Is at shift start: $isAtShiftStart');
-
-      if (!isAtShiftStart) {
-        print(
-          '⏭️ CAREGIVER: Not at shift start time, skipping attendance check',
-        );
-        return;
-      }
-
-      // Check if already marked attendance today
-      final hasMarked = await AttendanceCheckService.hasMarkedAttendanceToday();
-      print('✅ CAREGIVER: Already marked attendance: $hasMarked');
-
-      if (hasMarked) {
-        print('⏭️ CAREGIVER: Already marked attendance today, skipping');
-        _hasCheckedAttendance = true;
-        return;
-      }
-
-      // All conditions met - show attendance dialog
-      print('🎯 CAREGIVER: All conditions met! Showing attendance dialog...');
-
-      if (mounted) {
-        await AttendanceCheckService.showAttendanceDialog(
-          context,
-          onDismissed: () {
-            if (mounted) {
-              setState(() {
-                _hasCheckedAttendance = true;
-              });
-            }
-          },
-        );
-      }
-    } catch (e) {
-      print('❌ CAREGIVER: Error checking attendance: $e');
-    }
+  @override
+  void dispose() {
+    // Stop the periodic attendance check timer
+    AttendanceCheckService.stopPeriodicAttendanceCheck();
+    super.dispose();
   }
 
   // Helper to get upcoming tasks from AddTaskScreen logic with elderly profile pictures

@@ -45,9 +45,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
 
   late ConfettiController _confettiController;
 
-  bool _hasCheckedAttendance =
-      false; // Track if attendance has been checked this session
-
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
     'Vitals': [
@@ -191,7 +188,11 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateMedicationTasksForToday();
       _checkForBirthday(); // Check for birthday on app start
-      _checkAndShowAttendance(); // Check and show attendance dialog
+      // Start periodic attendance check (checks every minute for shift start)
+      AttendanceCheckService.startPeriodicAttendanceCheck(context, () {
+        // Callback when attendance is marked
+        print('✅ NURSE: Attendance marked');
+      });
       // Check for pending notification payload
       final pending = NotificationService.getAndClearPendingPayload();
       if (pending != null) {
@@ -264,63 +265,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       debugPrint('✅ Cleaned up $updatedCount medication tasks');
     } catch (e) {
       debugPrint('Error cleaning up old medication tasks: $e');
-    }
-  }
-
-  /// Check and show attendance dialog if conditions are met
-  Future<void> _checkAndShowAttendance() async {
-    // Skip if already checked this session
-    if (_hasCheckedAttendance) return;
-
-    try {
-      print('🔍 Checking attendance conditions...');
-
-      // Check if user is scheduled to work today
-      final isScheduled = await AttendanceCheckService.isScheduledToday();
-      print('📅 Is scheduled today: $isScheduled');
-
-      if (!isScheduled) {
-        print('⏭️ Not scheduled today, skipping attendance check');
-        return;
-      }
-
-      // Check if at shift start time
-      final isAtShiftStart = await AttendanceCheckService.isAtShiftStart();
-      print('⏰ Is at shift start: $isAtShiftStart');
-
-      if (!isAtShiftStart) {
-        print('⏭️ Not at shift start time, skipping attendance check');
-        return;
-      }
-
-      // Check if already marked attendance today
-      print('🔍 About to check if already marked...');
-      final hasMarked = await AttendanceCheckService.hasMarkedAttendanceToday();
-      print('✅ Already marked attendance: $hasMarked');
-
-      if (hasMarked) {
-        print('⏭️ Already marked attendance today, skipping');
-        _hasCheckedAttendance = true;
-        return;
-      }
-
-      // All conditions met - show attendance dialog
-      print('🎯 All conditions met! Showing attendance dialog...');
-
-      if (mounted) {
-        await AttendanceCheckService.showAttendanceDialog(
-          context,
-          onDismissed: () {
-            if (mounted) {
-              setState(() {
-                _hasCheckedAttendance = true;
-              });
-            }
-          },
-        );
-      }
-    } catch (e) {
-      print('❌ Error checking attendance: $e');
     }
   }
 
@@ -1378,6 +1322,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   @override
   void dispose() {
     _confettiController.dispose();
+    // Stop the periodic attendance check timer
+    AttendanceCheckService.stopPeriodicAttendanceCheck();
     super.dispose();
   }
 

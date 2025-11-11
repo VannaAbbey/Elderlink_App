@@ -47,6 +47,8 @@ import 'dart:async';
 class AttendanceCheckService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static Timer? _attendanceTimer;
+  static Timer?
+  _periodicCheckTimer; // Timer to periodically check for shift start
   static bool _isDialogShown = false;
   static DateTime? _dialogShowTime; // Track when dialog was first shown
 
@@ -400,12 +402,88 @@ class AttendanceCheckService {
     _cancelAutoAbsentTimer();
   }
 
+  /// Starts a periodic timer to check for shift start every minute
+  /// This ensures attendance dialog appears automatically when shift time arrives
+  /// Call this from initState of nurse/caregiver home screens
+  static void startPeriodicAttendanceCheck(
+    BuildContext context,
+    VoidCallback onAttendanceChecked,
+  ) {
+    // Cancel any existing timer
+    stopPeriodicAttendanceCheck();
+
+    print('🔄 ATTENDANCE: Starting periodic attendance check (every minute)');
+
+    // Check immediately
+    _performPeriodicAttendanceCheck(context, onAttendanceChecked);
+
+    // Then check every minute
+    _periodicCheckTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      _performPeriodicAttendanceCheck(context, onAttendanceChecked);
+    });
+  }
+
+  /// Performs the periodic attendance check
+  static Future<void> _performPeriodicAttendanceCheck(
+    BuildContext context,
+    VoidCallback onAttendanceChecked,
+  ) async {
+    try {
+      // Skip if dialog already shown
+      if (_isDialogShown) return;
+
+      // Check if user is scheduled to work today
+      final isScheduled = await isScheduledToday();
+      if (!isScheduled) return;
+
+      // Check if at shift start time
+      final atShiftStart = await isAtShiftStart();
+      if (!atShiftStart) return;
+
+      // Check if already marked attendance today
+      final hasMarked = await hasMarkedAttendanceToday();
+      if (hasMarked) {
+        // Stop checking if already marked
+        stopPeriodicAttendanceCheck();
+        return;
+      }
+
+      // All conditions met - show attendance dialog
+      print('🎯 ATTENDANCE: Conditions met! Auto-showing attendance dialog...');
+
+      if (context.mounted) {
+        await showAttendanceDialog(
+          context,
+          onDismissed: () {
+            onAttendanceChecked();
+            // Stop periodic checks after attendance is marked
+            stopPeriodicAttendanceCheck();
+          },
+        );
+      }
+    } catch (e) {
+      print('❌ ATTENDANCE: Error in periodic check: $e');
+    }
+  }
+
+  /// Stops the periodic attendance check timer
+  /// Call this from dispose of nurse/caregiver home screens
+  static void stopPeriodicAttendanceCheck() {
+    if (_periodicCheckTimer != null && _periodicCheckTimer!.isActive) {
+      _periodicCheckTimer!.cancel();
+      print('🛑 ATTENDANCE: Stopped periodic attendance check');
+    }
+    _periodicCheckTimer = null;
+  }
+
   /// Helper: Get date string in yyyy-MM-dd format
   static String _getDateString(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
 
   /// Helper: Get day name from weekday number
+  /// Currently unused but needed when schedule checking is enabled
+  // ignore: unused_element
   static String _getDayName(int weekday) {
     switch (weekday) {
       case DateTime.monday:
