@@ -1243,6 +1243,90 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
+  /// Check if nurse is marked as absent today
+  Future<bool> _checkIfNurseIsAbsentToday() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return false;
+
+      final now = DateTime.now();
+      final dateString = _getDateString(now);
+      final shift = _getCurrentShift();
+
+      // Check attendance collection for today's attendance record
+      final attendanceQuery = await _firestore
+          .collection('attendance')
+          .where('user_id', isEqualTo: currentUser.uid)
+          .where('date', isEqualTo: dateString)
+          .where('shift', isEqualTo: shift)
+          .where('is_present', isEqualTo: false)
+          .limit(1)
+          .get();
+
+      final isAbsent = attendanceQuery.docs.isNotEmpty;
+      print('🔍 MEDICATION: Nurse absent check - isAbsent: $isAbsent');
+
+      return isAbsent;
+    } catch (e) {
+      print('❌ Error checking nurse absence: $e');
+      return false;
+    }
+  }
+
+  /// Get date string in YYYY-MM-DD format
+  String _getDateString(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Show warning dialog when nurse is absent
+  void _showAbsentWarningDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Marked Absent Today',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'You are currently marked as Absent for today. You cannot add medications while absent.',
+            style: TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _loadUpcomingMedications({bool forceRefresh = false}) async {
     final currentDay = _getSelectedDay();
     final currentShift = _getCurrentShift();
@@ -1929,6 +2013,13 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
   void _showAddMedicationDialog() async {
     if (_isAddMedicationDialogOpen) return;
+
+    // Check if nurse is absent today before showing the dialog
+    final isAbsent = await _checkIfNurseIsAbsentToday();
+    if (isAbsent) {
+      _showAbsentWarningDialog();
+      return;
+    }
 
     // Check if nurse is scheduled before showing the dialog
     if (!_isNurseScheduled) {
