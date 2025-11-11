@@ -588,6 +588,8 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
   bool _showAbsentReason = false;
   String? _selectedReason;
   final TextEditingController _customReasonController = TextEditingController();
+  String? _assignedShift; // Store the user's ASSIGNED shift
+  DateTime? _shiftStartTime; // Store the actual shift start time
 
   // Common absence reasons
   final List<String> _absentReasons = [
@@ -601,27 +603,93 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
   @override
   void initState() {
     super.initState();
-    _calculateRemainingTime();
-    _startCountdown();
+    _initializeDialog();
   }
 
-  /// Calculate remaining time based on shift start time
+  /// Initialize dialog by fetching assigned shift first
+  Future<void> _initializeDialog() async {
+    await _fetchAssignedShift();
+    if (mounted) {
+      setState(() {
+        _calculateRemainingTime();
+      });
+      _startCountdown();
+    }
+  }
+
+  /// Fetch the user's ASSIGNED shift from database
+  Future<void> _fetchAssignedShift() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final assignmentSnapshot = await FirebaseFirestore.instance
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: currentUser.uid)
+          .where('is_current', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (assignmentSnapshot.docs.isNotEmpty) {
+        final assignmentData = assignmentSnapshot.docs.first.data();
+        _assignedShift = assignmentData['shift'] as String?;
+        final startTime = assignmentData['start_time'] as String?;
+
+        if (startTime != null) {
+          final timeParts = startTime.split(':');
+          final hour = int.parse(timeParts[0]);
+          final minute = int.parse(timeParts[1]);
+          final now = DateTime.now();
+
+          _shiftStartTime = DateTime(
+            now.year,
+            now.month,
+            now.day,
+            hour,
+            minute,
+          );
+
+          // For 3rd shift, if current time is before 6 AM, shift started yesterday
+          if (_assignedShift == '3rd' && now.hour < 6) {
+            _shiftStartTime = _shiftStartTime!.subtract(
+              const Duration(days: 1),
+            );
+          }
+        }
+
+        print(
+          '✅ DIALOG: Assigned shift: $_assignedShift, Start time: $_shiftStartTime',
+        );
+      } else {
+        print('⚠️ DIALOG: No assignment found, using time-based shift');
+      }
+    } catch (e) {
+      print('❌ DIALOG: Error fetching assigned shift: $e');
+    }
+  }
+
+  /// Calculate remaining time based on ASSIGNED shift start time
   void _calculateRemainingTime() {
     final now = DateTime.now();
-    final shift = AttendanceCheckService.getCurrentShift();
 
-    // Get shift start time
+    // Use assigned shift if available, otherwise fall back to time-based shift
+    final shift = _assignedShift ?? AttendanceCheckService.getCurrentShift();
+
+    // Use fetched shift start time if available
     DateTime shiftStartTime;
-    if (shift == '1st') {
-      shiftStartTime = DateTime(now.year, now.month, now.day, 6, 0); // 6:00 AM
-    } else if (shift == '2nd') {
-      shiftStartTime = DateTime(now.year, now.month, now.day, 14, 0); // 2:00 PM
+    if (_shiftStartTime != null) {
+      shiftStartTime = _shiftStartTime!;
     } else {
-      // 3rd shift (10:00 PM)
-      shiftStartTime = DateTime(now.year, now.month, now.day, 22, 0);
-      // If it's past midnight but before 6 AM, shift started yesterday
-      if (now.hour < 6) {
-        shiftStartTime = shiftStartTime.subtract(const Duration(days: 1));
+      // Fallback to time-based calculation
+      if (shift == '1st') {
+        shiftStartTime = DateTime(now.year, now.month, now.day, 6, 0);
+      } else if (shift == '2nd') {
+        shiftStartTime = DateTime(now.year, now.month, now.day, 14, 0);
+      } else {
+        shiftStartTime = DateTime(now.year, now.month, now.day, 22, 0);
+        if (now.hour < 6) {
+          shiftStartTime = shiftStartTime.subtract(const Duration(days: 1));
+        }
       }
     }
 
@@ -658,15 +726,93 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
 
   /// Starts the countdown timer display
   void _startCountdown() {
+    print(
+      '⏰ DIALOG: Starting countdown timer with $_remainingSeconds seconds remaining',
+    );
+
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_remainingSeconds > 0) {
         setState(() {
           _remainingSeconds--;
         });
+
+        // Log when approaching timeout
+        if (_remainingSeconds == 60) {
+          print('⚠️ DIALOG: 1 minute remaining');
+        } else if (_remainingSeconds == 10) {
+          print('⚠️ DIALOG: 10 seconds remaining');
+        }
       } else {
+        // Timer reached 0 - auto-mark as absent and close dialog
+        print('🔴 DIALOG: Timer reached 0 - triggering auto-close');
         timer.cancel();
+        if (mounted) {
+          _autoMarkAbsentAndClose();
+        } else {
+          print('❌ DIALOG: Widget not mounted, cannot auto-close');
+        }
       }
     });
+  }
+
+  /// Auto-mark user as absent when time runs out
+  Future<void> _autoMarkAbsentAndClose() async {
+    print('⏰ DIALOG: Timer expired - auto-marking as absent');
+
+    // Prevent multiple calls
+    if (_isLoading) {
+      print('⚠️ DIALOG: Already processing, skipping duplicate call');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await AttendanceCheckService.recordAttendance(
+        isPresent: false,
+        reason: 'Auto-marked absent - no response within 15 minutes',
+      );
+
+      print('✅ DIALOG: Successfully marked as absent');
+
+      if (mounted) {
+        // Show notification
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '⚠️ You have been marked as absent for not responding within 15 minutes',
+              style: TextStyle(fontSize: 16),
+            ),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+
+        // Close dialog
+        print('🔄 DIALOG: Closing dialog and calling callback');
+        Navigator.of(context).pop();
+        widget.onAttendanceMarked();
+        print('✅ DIALOG: Dialog closed successfully');
+      } else {
+        print('❌ DIALOG: Widget not mounted after marking absent');
+      }
+    } catch (e) {
+      print('❌ DIALOG: Error auto-marking absent: $e');
+
+      // Even on error, try to close the dialog
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onAttendanceMarked();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   /// Formats remaining time as MM:SS
@@ -775,7 +921,8 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final shift = AttendanceCheckService.getCurrentShift();
+    // Use ASSIGNED shift if available, otherwise fall back to time-based shift
+    final shift = _assignedShift ?? AttendanceCheckService.getCurrentShift();
     final shiftName = shift == "1st"
         ? "1st Shift (6:00 AM - 2:00 PM)"
         : shift == "2nd"
