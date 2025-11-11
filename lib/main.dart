@@ -20,6 +20,7 @@ import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
 import 'services/cg_services/task_reminder_service.dart';
 import 'services/cg_services/missed_task_monitor_service.dart';
+import 'services/background_attendance_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -587,6 +588,16 @@ void main() async {
       print('✅ MissedTaskMonitorService started successfully');
     } catch (e) {
       print('❌ MissedTaskMonitorService failed to start: $e');
+    }
+
+    // Initialize background attendance service
+    try {
+      print('🔧 Starting Background Attendance Service...');
+      await BackgroundAttendanceService.initialize();
+      print('✅ Background Attendance Service started successfully');
+    } catch (e) {
+      print('❌ Background Attendance Service failed to start: $e');
+      print('Note: Background tasks require Android API level 23 or higher');
     }
 
     // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)

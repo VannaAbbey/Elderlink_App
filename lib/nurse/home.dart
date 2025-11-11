@@ -18,6 +18,7 @@ import '../main.dart' as main;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
 import '../services/attendance_check_service.dart';
+import '../services/background_attendance_service.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -193,6 +194,17 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         // Callback when attendance is marked
         print('✅ NURSE: Attendance marked');
       });
+
+      // Trigger immediate background check to catch users who should be marked absent
+      // This is especially useful when app is opened after the 15-minute window
+      BackgroundAttendanceService.triggerManualCheck()
+          .then((_) {
+            print('✅ NURSE: Manual background check completed');
+          })
+          .catchError((e) {
+            print('❌ NURSE: Manual background check failed: $e');
+          });
+
       // Check for pending notification payload
       final pending = NotificationService.getAndClearPendingPayload();
       if (pending != null) {

@@ -1,19 +1,29 @@
 # Attendance Check Implementation
 
 ## Overview
-The attendance check system automatically prompts nurses and caregivers to mark their attendance when they arrive at their shift. **The system now includes automatic periodic checking**, so the attendance dialog will appear automatically at the scheduled time even if the app is already open.
+The attendance check system automatically prompts nurses and caregivers to mark their attendance when they arrive at their shift. The system includes **two-tier automatic checking**: foreground (when app is open) and **background (even when app is closed)**.
+
+### 🆕 NEW: Background Attendance System
+**Users are now automatically marked absent if they don't respond within 15 minutes of shift start, EVEN IF THEY HAVEN'T OPENED THE APP!**
+
+Example: 1st shift starts at 6:00 AM → If no response by 6:15 AM → Automatically marked ABSENT
+
+**See [BACKGROUND_ATTENDANCE_GUIDE.md](BACKGROUND_ATTENDANCE_GUIDE.md) for complete details.**
 
 ## Files
 
-### Core Service
-- **lib/services/attendance_check_service.dart** - Main attendance service with all functionality
+### Core Services
+- **lib/services/attendance_check_service.dart** - Foreground attendance service (when app is open)
+- **lib/services/background_attendance_service.dart** - ⭐ **NEW: Background service (always running)**
 
 ### Integration
 - **lib/nurse/home.dart** - Attendance integrated in nurse home screen with periodic checks
 - **lib/caregiver/home.dart** - Attendance integrated in caregiver home screen with periodic checks
+- **lib/main.dart** - Background service initialization
 
 ## Features
 
+### Foreground Features (When App is Open)
 ✅ **Auto-Display**: Dialog appears automatically at shift start (within 15-minute window)
 ✅ **Periodic Checking**: System checks every minute for shift start time - no refresh needed!
 ✅ **Background Monitoring**: Works even if app was opened before shift start time
@@ -25,40 +35,106 @@ The attendance check system automatically prompts nurses and caregivers to mark 
 ✅ **Duplicate Prevention**: Won't show again if already marked for the day
 ✅ **Smart Cleanup**: Automatically stops checking after attendance is marked
 
+### 🆕 Background Features (Always Running)
+✅ **Independent Operation**: Runs even when app is completely closed
+✅ **Automatic Absent Marking**: Marks users absent 15 minutes after shift start
+✅ **All Users Covered**: Checks ALL scheduled nurses and caregivers
+✅ **All Shifts Supported**: 1st (6AM), 2nd (2PM), 3rd (10PM) shifts
+✅ **No App Required**: User doesn't need to open the app
+✅ **System Enforcement**: Fair and automatic attendance policy
+✅ **Audit Trail**: Records show "marked_by: system_background"
+✅ **Efficient**: Runs every 15 minutes, minimal battery impact
+
+## Shift Times & Auto-Absent Times
+
+| Shift | Start Time | Auto-Absent Time | End Time |
+|-------|-----------|------------------|----------|
+| **1st Shift** | 6:00 AM | **6:15 AM** | 2:00 PM |
+| **2nd Shift** | 2:00 PM | **2:15 PM** | 10:00 PM |
+| **3rd Shift** | 10:00 PM | **10:15 PM** | 6:00 AM |
+
 ## Firestore Collections Used
 
 ### Reading
 - `house_shift_assignments` - Check if user is scheduled today
 - `attendance` - Check if already marked today
+- `users` - Get user type and name
 
 ### Writing
 - `attendance` - Record attendance (present/absent status)
 
-## How It Works
+### Attendance Record Schema
+```dart
+{
+  'user_id': 'user_123',
+  'user_type': 'nurse' or 'caregiver',
+  'date': '2025-11-11',
+  'shift': '1st' or '2nd' or '3rd',
+  'is_present': true or false,
+  'timestamp': ServerTimestamp,
+  'reason': 'User marked' or 'Auto-marked absent...',
+  'marked_by': 'user' or 'system' or 'system_background',
+  'auto_marked': true (only for background marking)
+}
+```
 
-### Initialization (On App Start)
-1. When nurse/caregiver opens the app, `startPeriodicAttendanceCheck()` is called in `initState`
-2. This starts a timer that checks attendance conditions **every minute**
-3. Timer automatically stops when attendance is marked or when screen is disposed
+## How It Works - Complete Flow
 
-### Periodic Checking (Every Minute)
-1. System checks:
-   - Is user scheduled to work today?
-   - Is it within 15 minutes of shift start?
-   - Have they already marked attendance?
-2. If all conditions are met, shows modal dialog with countdown
-3. Dialog persists until user responds or 15 minutes elapse
+### Scenario 1: User Opens App Before Shift Start
+```
+5:50 AM  User opens app
+         → Foreground service starts periodic checking (every 1 minute)
+6:00 AM  Foreground service detects shift start
+         → Shows attendance dialog
+6:01 AM  User clicks "Present"
+         → Records attendance to Firestore
+         → Foreground checking stops
+6:15 AM  Background service runs
+         → Finds existing attendance record
+         → Skips user (already marked)
+```
 
-### User Response
-1. User clicks Present or Absent button
-2. Attendance recorded to Firestore
-3. Timer cancelled and periodic checking stops
-4. Dialog won't appear again for this shift
+### Scenario 2: User Opens App During 15-Min Window
+```
+6:05 AM  User opens app (5 minutes late)
+         → Foreground service detects within shift window
+         → Shows attendance dialog immediately
+6:06 AM  User clicks "Present"
+         → Records attendance
+6:15 AM  Background service runs
+         → Finds existing record
+         → Skips user
+```
 
-### Auto-Absent (No Response)
-1. If no response after 15 minutes, automatically marks as absent
-2. Shows notification that they were marked absent
-3. Records reason: "Auto-marked absent - no response within 15 minutes"
+### Scenario 3: User Doesn't Open App (NEW!)
+```
+6:00 AM  Shift starts
+         → User hasn't opened app
+         → No foreground service running
+6:15 AM  Background service runs automatically
+         → Checks all scheduled users
+         → User has no attendance record
+         → Calculates: 6:15 AM > (6:00 AM + 15 mins) ✓
+         → **Automatically marks user as ABSENT**
+         → Records to Firestore with:
+           - is_present: false
+           - marked_by: 'system_background'
+           - reason: 'Auto-marked absent...'
+6:20 AM  User opens app
+         → Finds existing attendance record
+         → No dialog shown (already marked absent)
+```
+
+### Scenario 4: User Opens App After 15 Minutes
+```
+6:00 AM  Shift starts (app not open)
+6:15 AM  Background marks user as absent
+6:25 AM  User opens app
+         → Foreground service checks attendance
+         → Finds record (marked absent)
+         → No dialog shown
+         → User sees they are marked absent
+```
 
 ## Key Improvements
 

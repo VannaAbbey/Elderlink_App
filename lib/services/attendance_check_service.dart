@@ -518,7 +518,7 @@ class AttendanceCheckDialog extends StatefulWidget {
 
 class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
   bool _isLoading = false;
-  int _remainingSeconds = 15 * 60; // 15 minutes in seconds
+  int _remainingSeconds = 15 * 60; // Will be calculated based on actual time
   Timer? _countdownTimer;
   bool _showAbsentReason = false;
   String? _selectedReason;
@@ -536,7 +536,52 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
   @override
   void initState() {
     super.initState();
+    _calculateRemainingTime();
     _startCountdown();
+  }
+
+  /// Calculate remaining time based on shift start time
+  void _calculateRemainingTime() {
+    final now = DateTime.now();
+    final shift = AttendanceCheckService.getCurrentShift();
+
+    // Get shift start time
+    DateTime shiftStartTime;
+    if (shift == '1st') {
+      shiftStartTime = DateTime(now.year, now.month, now.day, 6, 0); // 6:00 AM
+    } else if (shift == '2nd') {
+      shiftStartTime = DateTime(now.year, now.month, now.day, 14, 0); // 2:00 PM
+    } else {
+      // 3rd shift (10:00 PM)
+      shiftStartTime = DateTime(now.year, now.month, now.day, 22, 0);
+      // If it's past midnight but before 6 AM, shift started yesterday
+      if (now.hour < 6) {
+        shiftStartTime = shiftStartTime.subtract(const Duration(days: 1));
+      }
+    }
+
+    // Calculate time elapsed since shift start
+    final elapsedTime = now.difference(shiftStartTime);
+    final elapsedSeconds = elapsedTime.inSeconds;
+
+    // Calculate remaining time (15 minutes = 900 seconds)
+    final totalSeconds = 15 * 60;
+    _remainingSeconds = totalSeconds - elapsedSeconds;
+
+    // Ensure it doesn't go negative
+    if (_remainingSeconds < 0) {
+      _remainingSeconds = 0;
+    }
+
+    print(
+      '⏰ DIALOG: Shift started at ${shiftStartTime.hour}:${shiftStartTime.minute.toString().padLeft(2, '0')}',
+    );
+    print(
+      '⏰ DIALOG: Elapsed time: ${elapsedTime.inMinutes} minutes ${elapsedTime.inSeconds % 60} seconds',
+    );
+    print(
+      '⏰ DIALOG: Remaining time: ${_remainingSeconds ~/ 60} minutes ${_remainingSeconds % 60} seconds',
+    );
   }
 
   @override
