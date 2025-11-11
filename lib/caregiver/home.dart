@@ -35,7 +35,6 @@ class CaregiverHomeScreen extends StatefulWidget {
 }
 
 class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
-  bool _hasCheckedAttendance = false; // Track if attendance check was performed
   List<Map<String, dynamic>> _todaysBirthdays = []; // Store today's birthdays
   late ConfettiController _confettiController;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -346,75 +345,26 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
       authProvider.refreshUserData();
     });
     
-    // Check and show attendance dialog if needed
+    // Check for birthdays and start periodic attendance check
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForBirthday(); // Check for birthdays on app start
-      _checkAndShowAttendance();
+      
+      // Start periodic attendance check after first frame
+      AttendanceCheckService.startPeriodicAttendanceCheck(context, () {
+        // Callback when attendance is marked
+        print('✅ CAREGIVER: Attendance marked');
+      });
     });
   }
   
   @override
   void dispose() {
     _confettiController.dispose();
+    // Stop the periodic attendance check timer
+    AttendanceCheckService.stopPeriodicAttendanceCheck();
     super.dispose();
   }
   
-  /// Check if caregiver should mark attendance and show dialog
-  Future<void> _checkAndShowAttendance() async {
-    // Skip if already checked this session
-    if (_hasCheckedAttendance) return;
-
-    try {
-      print('🔍 CAREGIVER: Checking attendance conditions...');
-
-      // Check if user is scheduled to work today
-      final isScheduled = await AttendanceCheckService.isScheduledToday();
-      print('📅 CAREGIVER: Is scheduled today: $isScheduled');
-
-      if (!isScheduled) {
-        print('⏭️ CAREGIVER: Not scheduled today, skipping attendance check');
-        return;
-      }
-
-      // Check if at shift start time
-      final isAtShiftStart = await AttendanceCheckService.isAtShiftStart();
-      print('⏰ CAREGIVER: Is at shift start: $isAtShiftStart');
-
-      if (!isAtShiftStart) {
-        print('⏭️ CAREGIVER: Not at shift start time, skipping attendance check');
-        return;
-      }
-
-      // Check if already marked attendance today
-      final hasMarked = await AttendanceCheckService.hasMarkedAttendanceToday();
-      print('✅ CAREGIVER: Already marked attendance: $hasMarked');
-
-      if (hasMarked) {
-        print('⏭️ CAREGIVER: Already marked attendance today, skipping');
-        _hasCheckedAttendance = true;
-        return;
-      }
-
-      // All conditions met - show attendance dialog
-      print('🎯 CAREGIVER: All conditions met! Showing attendance dialog...');
-
-      if (mounted) {
-        await AttendanceCheckService.showAttendanceDialog(
-          context,
-          onDismissed: () {
-            if (mounted) {
-              setState(() {
-                _hasCheckedAttendance = true;
-              });
-            }
-          },
-        );
-      }
-    } catch (e) {
-      print('❌ CAREGIVER: Error checking attendance: $e');
-    }
-  }
-
   // ---------------------- BIRTHDAY FUNCTIONS ----------------------
   
   /// Get current shift based on time

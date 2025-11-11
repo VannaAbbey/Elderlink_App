@@ -47,8 +47,11 @@ import 'dart:async';
 class AttendanceCheckService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static Timer? _attendanceTimer;
+  static Timer? _periodicCheckTimer; // Timer to periodically check for shift start
   static bool _isDialogShown = false;
   static DateTime? _dialogShowTime; // Track when dialog was first shown
+  static BuildContext? _storedContext; // Store context for later use
+  static VoidCallback? _storedCallback; // Store callback for later use
 
   /// Determines the current shift based on current time
   /// Returns: "1st", "2nd", or "3rd"
@@ -400,12 +403,109 @@ class AttendanceCheckService {
     _cancelAutoAbsentTimer();
   }
 
+  /// Starts a periodic timer to check for shift start every minute
+  /// This ensures attendance dialog appears automatically when shift time arrives
+  /// Call this from initState of nurse/caregiver home screens
+  static void startPeriodicAttendanceCheck(
+    BuildContext context,
+    VoidCallback onAttendanceChecked,
+  ) {
+    // Cancel any existing timer
+    stopPeriodicAttendanceCheck();
+
+    // Store context and callback for later use
+    _storedContext = context;
+    _storedCallback = onAttendanceChecked;
+
+    print('🔄 ATTENDANCE: Starting periodic attendance check (every 30 seconds)');
+
+    // Check immediately
+    _performPeriodicAttendanceCheck();
+
+    // Then check every 30 seconds for better responsiveness
+    _periodicCheckTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      _performPeriodicAttendanceCheck();
+    });
+  }
+
+  /// Performs the periodic attendance check
+  static Future<void> _performPeriodicAttendanceCheck() async {
+    try {
+      // Check if we have valid stored context
+      if (_storedContext == null || !_storedContext!.mounted) {
+        print('⚠️ ATTENDANCE: Context not available or not mounted, skipping check');
+        return;
+      }
+
+      final now = DateTime.now();
+      print('🔄 ATTENDANCE: Running periodic check @ $now');
+      print('🔄 ATTENDANCE: currentUser=${FirebaseAuth.instance.currentUser?.uid}');
+      
+      // Skip if dialog already shown
+      if (_isDialogShown) {
+        print('⏭️ ATTENDANCE: Dialog already shown, skipping');
+        return;
+      }
+
+      // Check if user is scheduled to work today
+      final isScheduled = await isScheduledToday();
+      print('🔄 ATTENDANCE: isScheduled=$isScheduled');
+      if (!isScheduled) return;
+
+      // Check if at shift start time
+      final atShiftStart = await isAtShiftStart();
+      print('🔄 ATTENDANCE: atShiftStart=$atShiftStart');
+      if (!atShiftStart) return;
+
+      // Check if already marked attendance today
+      final hasMarked = await hasMarkedAttendanceToday();
+      print('🔄 ATTENDANCE: hasMarked=$hasMarked');
+      if (hasMarked) {
+        // Stop checking if already marked
+        stopPeriodicAttendanceCheck();
+        return;
+      }
+
+      // All conditions met - show attendance dialog
+      print('🎯 ATTENDANCE: Conditions met! Auto-showing attendance dialog...');
+
+      if (_storedContext != null && _storedContext!.mounted) {
+        await showAttendanceDialog(
+          _storedContext!,
+          onDismissed: () {
+            if (_storedCallback != null) {
+              _storedCallback!();
+            }
+            // Stop periodic checks after attendance is marked
+            stopPeriodicAttendanceCheck();
+          },
+        );
+      }
+    } catch (e) {
+      print('❌ ATTENDANCE: Error in periodic check: $e');
+    }
+  }
+
+  /// Stops the periodic attendance check timer
+  /// Call this from dispose of nurse/caregiver home screens
+  static void stopPeriodicAttendanceCheck() {
+    if (_periodicCheckTimer != null && _periodicCheckTimer!.isActive) {
+      _periodicCheckTimer!.cancel();
+      print('🛑 ATTENDANCE: Stopped periodic attendance check');
+    }
+    _periodicCheckTimer = null;
+    _storedContext = null;
+    _storedCallback = null;
+  }
+
   /// Helper: Get date string in yyyy-MM-dd format
   static String _getDateString(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
 
   /// Helper: Get day name from weekday number
+  /// Currently unused but needed when schedule checking is enabled
+  // ignore: unused_element
   static String _getDayName(int weekday) {
     switch (weekday) {
       case DateTime.monday:
