@@ -10,26 +10,55 @@ class AbsenceService {
 
   /// Check if a caregiver/nurse is marked as absent for today
   /// Returns the absence record if found, null otherwise
+  /// Now checks against the user's CURRENTLY ASSIGNED shift to handle schedule changes
   static Future<NurseCgAbsence?> checkTodayAbsence(String userId) async {
     try {
       final today = _formatDate(DateTime.now());
       print('🔍 Checking absence for user $userId on date: $today');
 
-      final querySnapshot = await _firestore
-          .collection('nurse_cg_absence')
+      // Get the user's CURRENTLY ASSIGNED shift from house_shift_assignments
+      // This ensures that if their schedule changed, we check against the NEW shift
+      final assignmentSnapshot = await _firestore
+          .collection('house_shift_assignments')
           .where('user_id', isEqualTo: userId)
-          .where('absence_date', isEqualTo: today)
-          .where('status', isEqualTo: 'active')
+          .where('is_current', isEqualTo: true)
           .limit(1)
           .get();
 
+      String? assignedShift;
+      if (assignmentSnapshot.docs.isNotEmpty) {
+        assignedShift =
+            assignmentSnapshot.docs.first.data()['shift'] as String?;
+        print('🔍 User currently assigned to shift: $assignedShift');
+      }
+
+      // Build the query
+      var query = _firestore
+          .collection('nurse_cg_absence')
+          .where('user_id', isEqualTo: userId)
+          .where('absence_date', isEqualTo: today)
+          .where('status', isEqualTo: 'active');
+
+      // If we have an assigned shift, check absence only for that shift
+      // This allows users who were absent in one shift to work in a different shift
+      if (assignedShift != null && assignedShift.isNotEmpty) {
+        query = query.where('shift', isEqualTo: assignedShift);
+        print('🔍 Checking absence specifically for shift: $assignedShift');
+      }
+
+      final querySnapshot = await query.limit(1).get();
+
       if (querySnapshot.docs.isEmpty) {
-        print('✅ No absence record found for today');
+        print(
+          '✅ No absence record found for today${assignedShift != null ? " (shift: $assignedShift)" : ""}',
+        );
         return null;
       }
 
       final absence = NurseCgAbsence.fromFirestore(querySnapshot.docs.first);
-      print('⚠️ User is marked as ${absence.absenceType} for today');
+      print(
+        '⚠️ User is marked as ${absence.absenceType} for today (shift: ${absence.shift})',
+      );
       return absence;
     } catch (e) {
       print('❌ Error checking today\'s absence: $e');
@@ -67,6 +96,7 @@ class AbsenceService {
 
   /// Stream to listen for real-time absence status updates for today
   /// This stream automatically updates when the date changes (at midnight)
+  /// Now checks against the user's CURRENTLY ASSIGNED shift to handle schedule changes
   static Stream<NurseCgAbsence?> listenToTodayAbsence(String userId) {
     // Use a StreamController to handle date changes
     late StreamController<NurseCgAbsence?> controller;
@@ -74,63 +104,105 @@ class AbsenceService {
     Timer? midnightTimer;
     String? currentDate;
 
-    void updateListener() {
+    Future<void> updateListener() async {
       final today = _formatDate(DateTime.now());
-      
-      print('🔍 updateListener called - currentDate: $currentDate, today: $today');
-      
+
+      print(
+        '🔍 updateListener called - currentDate: $currentDate, today: $today',
+      );
+
       // Only update if date has changed
       if (currentDate == today) {
         print('⏭️ Date unchanged, skipping update');
         return;
       }
-      
+
       currentDate = today;
       print('🔄 Updating absence listener for user: $userId, date: $today');
+
+      // Get the user's CURRENTLY ASSIGNED shift
+      String? assignedShift;
+      try {
+        final assignmentSnapshot = await _firestore
+            .collection('house_shift_assignments')
+            .where('user_id', isEqualTo: userId)
+            .where('is_current', isEqualTo: true)
+            .limit(1)
+            .get();
+
+        if (assignmentSnapshot.docs.isNotEmpty) {
+          assignedShift =
+              assignmentSnapshot.docs.first.data()['shift'] as String?;
+          print('🔍 User currently assigned to shift: $assignedShift');
+        }
+      } catch (e) {
+        print('⚠️ Error fetching assigned shift: $e');
+      }
 
       // Cancel previous subscription
       subscription?.cancel();
 
-      // Create new subscription for current date
-      subscription = _firestore
+      // Build query for current date
+      var query = _firestore
           .collection('nurse_cg_absence')
           .where('user_id', isEqualTo: userId)
           .where('absence_date', isEqualTo: today)
-          .where('status', isEqualTo: 'active')
+          .where('status', isEqualTo: 'active');
+
+      // If we have an assigned shift, check absence only for that shift
+      if (assignedShift != null && assignedShift.isNotEmpty) {
+        query = query.where('shift', isEqualTo: assignedShift);
+        print(
+          '🔍 Listening for absence specifically for shift: $assignedShift',
+        );
+      }
+
+      // Create new subscription for current date (and optionally current shift)
+      subscription = query
           .limit(1)
           .snapshots()
           .listen(
-        (snapshot) {
-          print('📡 Firestore snapshot received: ${snapshot.docs.length} documents');
-          if (!controller.isClosed) {
-            if (snapshot.docs.isEmpty) {
-              print('✅ No absence for $today - emitting null');
-              controller.add(null);
-            } else {
-              final absence = NurseCgAbsence.fromFirestore(snapshot.docs.first);
-              print('⚠️ Absence found for $today: ${absence.absenceType}');
-              controller.add(absence);
-            }
-          } else {
-            print('⚠️ Controller is closed, not emitting data');
-          }
-        },
-        onError: (error) {
-          print('❌ Firestore error: $error');
-          if (!controller.isClosed) {
-            controller.addError(error);
-          }
-        },
-      );
+            (snapshot) {
+              print(
+                '📡 Firestore snapshot received: ${snapshot.docs.length} documents',
+              );
+              if (!controller.isClosed) {
+                if (snapshot.docs.isEmpty) {
+                  print(
+                    '✅ No absence for $today${assignedShift != null ? " (shift: $assignedShift)" : ""} - emitting null',
+                  );
+                  controller.add(null);
+                } else {
+                  final absence = NurseCgAbsence.fromFirestore(
+                    snapshot.docs.first,
+                  );
+                  print(
+                    '⚠️ Absence found for $today: ${absence.absenceType} (shift: ${absence.shift})',
+                  );
+                  controller.add(absence);
+                }
+              } else {
+                print('⚠️ Controller is closed, not emitting data');
+              }
+            },
+            onError: (error) {
+              print('❌ Firestore error: $error');
+              if (!controller.isClosed) {
+                controller.addError(error);
+              }
+            },
+          );
     }
 
     void scheduleNextMidnight() {
       final now = DateTime.now();
       final tomorrow = DateTime(now.year, now.month, now.day + 1);
       final timeUntilMidnight = tomorrow.difference(now);
-      
-      print('⏰ Scheduling absence check for midnight in ${timeUntilMidnight.inHours}h ${timeUntilMidnight.inMinutes % 60}m (at $tomorrow)');
-      
+
+      print(
+        '⏰ Scheduling absence check for midnight in ${timeUntilMidnight.inHours}h ${timeUntilMidnight.inMinutes % 60}m (at $tomorrow)',
+      );
+
       midnightTimer?.cancel();
       midnightTimer = Timer(timeUntilMidnight, () {
         print('🌅 Midnight reached! Current time: ${DateTime.now()}');
@@ -163,10 +235,10 @@ class AbsenceService {
         .orderBy('absence_date', descending: true)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => NurseCgAbsence.fromFirestore(doc))
-          .toList();
-    });
+          return snapshot.docs
+              .map((doc) => NurseCgAbsence.fromFirestore(doc))
+              .toList();
+        });
   }
 
   /// Get temporary assignments TO a caregiver for today
@@ -211,17 +283,21 @@ class AbsenceService {
 
     void updateListener() {
       final today = _formatDate(DateTime.now());
-      
-      print('🔍 updateListener (temp assignments) called - currentDate: $currentDate, today: $today');
-      
+
+      print(
+        '🔍 updateListener (temp assignments) called - currentDate: $currentDate, today: $today',
+      );
+
       // Only update if date has changed
       if (currentDate == today) {
         print('⏭️ Date unchanged, skipping update');
         return;
       }
-      
+
       currentDate = today;
-      print('🔄 Updating temporary assignments listener for user: $userId, date: $today');
+      print(
+        '🔄 Updating temporary assignments listener for user: $userId, date: $today',
+      );
 
       // Cancel previous subscription
       subscription?.cancel();
@@ -234,34 +310,38 @@ class AbsenceService {
           .where('status', isEqualTo: 'active')
           .snapshots()
           .listen(
-        (snapshot) {
-          print('📡 Temporary assignments snapshot received: ${snapshot.docs.length} assignments');
-          if (!controller.isClosed) {
-            final assignments = snapshot.docs
-                .map((doc) => TemporaryAssignment.fromFirestore(doc))
-                .toList();
-            print('✅ Emitting ${assignments.length} temporary assignments');
-            controller.add(assignments);
-          } else {
-            print('⚠️ Controller is closed, not emitting data');
-          }
-        },
-        onError: (error) {
-          print('❌ Firestore error (temp assignments): $error');
-          if (!controller.isClosed) {
-            controller.addError(error);
-          }
-        },
-      );
+            (snapshot) {
+              print(
+                '📡 Temporary assignments snapshot received: ${snapshot.docs.length} assignments',
+              );
+              if (!controller.isClosed) {
+                final assignments = snapshot.docs
+                    .map((doc) => TemporaryAssignment.fromFirestore(doc))
+                    .toList();
+                print('✅ Emitting ${assignments.length} temporary assignments');
+                controller.add(assignments);
+              } else {
+                print('⚠️ Controller is closed, not emitting data');
+              }
+            },
+            onError: (error) {
+              print('❌ Firestore error (temp assignments): $error');
+              if (!controller.isClosed) {
+                controller.addError(error);
+              }
+            },
+          );
     }
 
     void scheduleNextMidnight() {
       final now = DateTime.now();
       final tomorrow = DateTime(now.year, now.month, now.day + 1);
       final timeUntilMidnight = tomorrow.difference(now);
-      
-      print('⏰ Scheduling temporary assignments check for midnight in ${timeUntilMidnight.inHours}h ${timeUntilMidnight.inMinutes % 60}m (at $tomorrow)');
-      
+
+      print(
+        '⏰ Scheduling temporary assignments check for midnight in ${timeUntilMidnight.inHours}h ${timeUntilMidnight.inMinutes % 60}m (at $tomorrow)',
+      );
+
       midnightTimer?.cancel();
       midnightTimer = Timer(timeUntilMidnight, () {
         print('🌅 Midnight reached! Current time: ${DateTime.now()}');
@@ -272,7 +352,9 @@ class AbsenceService {
 
     controller = StreamController<List<TemporaryAssignment>>.broadcast(
       onListen: () {
-        print('👂 Temporary assignments stream listener attached for user: $userId');
+        print(
+          '👂 Temporary assignments stream listener attached for user: $userId',
+        );
         updateListener();
         scheduleNextMidnight();
       },
@@ -290,13 +372,13 @@ class AbsenceService {
   static Future<List<String>> getTodayTemporaryElderlyIds(String userId) async {
     try {
       final assignments = await getTodayTemporaryAssignmentsTo(userId);
-      
+
       // Flatten all elderly IDs from all assignments
       final elderlyIds = <String>{};
       for (final assignment in assignments) {
         elderlyIds.addAll(assignment.elderlyIds);
       }
-      
+
       print('✅ Found ${elderlyIds.length} temporarily assigned elderly');
       return elderlyIds.toList();
     } catch (e) {
@@ -409,7 +491,9 @@ class AbsenceService {
   ) async {
     try {
       final dateStr = _formatDate(absenceDate);
-      print('🔄 Marking tasks as incomplete for caregiver $caregiverId on $dateStr due to $absenceType');
+      print(
+        '🔄 Marking tasks as incomplete for caregiver $caregiverId on $dateStr due to $absenceType',
+      );
 
       // Normalize the absence date to start of day for comparison
       final absenceDateNormalized = DateTime(
@@ -430,7 +514,7 @@ class AbsenceService {
       for (var taskDoc in tasksSnapshot.docs) {
         final taskData = taskDoc.data();
         final taskStatus = List<String>.from(taskData['task_status'] ?? []);
-        
+
         // Skip if already marked as Incomplete
         if (taskStatus.contains('Incomplete')) {
           continue;
@@ -450,73 +534,88 @@ class AbsenceService {
         // Check if this task is scheduled for the absence date
         if (taskDateNormalized.isAtSameMomentAs(absenceDateNormalized)) {
           // Check if this is a recurring task
-          final frequency = (taskData['task_frequency'] as List<dynamic>?)?.first ?? 'Only once';
+          final frequency =
+              (taskData['task_frequency'] as List<dynamic>?)?.first ??
+              'Only once';
           final isRecurring = frequency != 'Only once';
-          
+
           if (isRecurring) {
             // For recurring tasks: progress to next occurrence instead of marking incomplete
-            print('  🔄 Progressing recurring task ${taskDoc.id} to next occurrence');
-            
+            print(
+              '  🔄 Progressing recurring task ${taskDoc.id} to next occurrence',
+            );
+
             try {
               // Calculate next occurrence dynamically (don't rely on pre-calculated next_taskdate)
-              final taskStart = (taskData['task_start'] as Timestamp?)?.toDate() ?? DateTime.now();
-              final recurringStartDate = (taskData['recurring_start_date'] as Timestamp?)?.toDate();
-              final customDays = List<String>.from(taskData['custom_days'] ?? []);
+              final taskStart =
+                  (taskData['task_start'] as Timestamp?)?.toDate() ??
+                  DateTime.now();
+              final recurringStartDate =
+                  (taskData['recurring_start_date'] as Timestamp?)?.toDate();
+              final customDays = List<String>.from(
+                taskData['custom_days'] ?? [],
+              );
               final elderlyId = taskData['elderly_id'] ?? '';
-              
+
               DateTime? calculatedNextDate;
               DateTime? newNextTaskDate;
-              
+
               // Calculate the next occurrence after the current task date
               if (recurringStartDate != null) {
                 if (frequency == 'Every Assigned Day') {
-                  final assignedDays = await _getAssignedDaysForElderlyAndCaregiverForAbsence(caregiverId, elderlyId);
-                  print('  📋 Assigned days for absence progression: $assignedDays');
-                  
+                  final assignedDays =
+                      await _getAssignedDaysForElderlyAndCaregiverForAbsence(
+                        caregiverId,
+                        elderlyId,
+                      );
+                  print(
+                    '  📋 Assigned days for absence progression: $assignedDays',
+                  );
+
                   // Calculate next assigned day after current task date
                   calculatedNextDate = _calculateNextOccurrenceForAbsence(
-                    taskDate, 
-                    recurringStartDate, 
-                    frequency, 
-                    customDays, 
-                    taskStart, 
-                    assignedDays: assignedDays
+                    taskDate,
+                    recurringStartDate,
+                    frequency,
+                    customDays,
+                    taskStart,
+                    assignedDays: assignedDays,
                   );
-                  
+
                   // Calculate the occurrence after that for next_taskdate
                   if (calculatedNextDate != null) {
                     newNextTaskDate = _calculateNextOccurrenceForAbsence(
-                      calculatedNextDate, 
-                      recurringStartDate, 
-                      frequency, 
-                      customDays, 
-                      taskStart, 
-                      assignedDays: assignedDays
+                      calculatedNextDate,
+                      recurringStartDate,
+                      frequency,
+                      customDays,
+                      taskStart,
+                      assignedDays: assignedDays,
                     );
                   }
                 } else if (frequency == 'Custom' && customDays.isNotEmpty) {
                   // Calculate next custom day after current task date
                   calculatedNextDate = await _getNextCustomDateForAbsence(
-                    elderlyId, 
-                    caregiverId, 
-                    taskStart, 
-                    taskDate.add(Duration(days: 1)), 
-                    customDays
+                    elderlyId,
+                    caregiverId,
+                    taskStart,
+                    taskDate.add(Duration(days: 1)),
+                    customDays,
                   );
-                  
+
                   // Calculate the occurrence after that for next_taskdate
                   if (calculatedNextDate != null) {
                     newNextTaskDate = await _getNextCustomDateForAbsence(
-                      elderlyId, 
-                      caregiverId, 
-                      taskStart, 
-                      calculatedNextDate.add(Duration(days: 1)), 
-                      customDays
+                      elderlyId,
+                      caregiverId,
+                      taskStart,
+                      calculatedNextDate.add(Duration(days: 1)),
+                      customDays,
                     );
                   }
                 }
               }
-              
+
               if (calculatedNextDate != null) {
                 // Progress the task to next occurrence
                 await taskDoc.reference.update({
@@ -528,12 +627,16 @@ class AbsenceService {
                   'absence_progression_date': FieldValue.serverTimestamp(),
                   'updated_at': FieldValue.serverTimestamp(),
                 });
-                
+
                 progressedCount++;
-                print('  ✅ Progressed recurring task ${taskDoc.id} from $taskDate to $calculatedNextDate (next after that: $newNextTaskDate)');
+                print(
+                  '  ✅ Progressed recurring task ${taskDoc.id} from $taskDate to $calculatedNextDate (next after that: $newNextTaskDate)',
+                );
               } else {
                 // Could not calculate next date - mark as incomplete
-                print('  ⚠️ Could not calculate next occurrence for task ${taskDoc.id}, marking incomplete');
+                print(
+                  '  ⚠️ Could not calculate next occurrence for task ${taskDoc.id}, marking incomplete',
+                );
                 await _markTaskIncomplete(taskDoc.reference, absenceType);
                 markedCount++;
               }
@@ -552,13 +655,15 @@ class AbsenceService {
         }
       }
 
-      print('✅ Successfully processed tasks: $markedCount marked incomplete, $progressedCount progressed to next occurrence for $dateStr');
+      print(
+        '✅ Successfully processed tasks: $markedCount marked incomplete, $progressedCount progressed to next occurrence for $dateStr',
+      );
     } catch (e) {
       print('❌ Error marking tasks as incomplete: $e');
       rethrow;
     }
   }
-  
+
   /// Helper method to mark a task as incomplete
   static Future<void> _markTaskIncomplete(
     DocumentReference taskRef,
@@ -567,7 +672,7 @@ class AbsenceService {
     final incReason = absenceType == 'leave'
         ? 'Caregiver is on leave'
         : 'Caregiver is absent';
-    
+
     await taskRef.update({
       'task_status': ['Incomplete'],
       'inc_reason': incReason,
@@ -575,7 +680,7 @@ class AbsenceService {
       'auto_marked_at': FieldValue.serverTimestamp(),
     });
   }
-  
+
   /// Helper method to get assigned days for a caregiver-elderly pair (for absence handling)
   static Future<List<String>> _getAssignedDaysForElderlyAndCaregiverForAbsence(
     String caregiverId,
@@ -588,53 +693,83 @@ class AbsenceService {
           .where('elderly_id', isEqualTo: elderlyId)
           .limit(1)
           .get();
-      
+
       if (assignmentSnapshot.docs.isNotEmpty) {
         final data = assignmentSnapshot.docs.first.data();
         return List<String>.from(data['assigned_days'] ?? []);
       }
-      
+
       return [];
     } catch (e) {
       print('Error getting assigned days: $e');
       return [];
     }
   }
-  
+
   /// Helper method to calculate next occurrence for recurring tasks (for absence handling)
   static DateTime? _calculateNextOccurrenceForAbsence(
     DateTime currentTaskDate,
     DateTime recurringStartDate,
     String frequency,
     List<String> customDays,
-    DateTime taskStart,
-    {List<String>? assignedDays}
-  ) {
-    if (frequency == 'Every Assigned Day' && assignedDays != null && assignedDays.isNotEmpty) {
+    DateTime taskStart, {
+    List<String>? assignedDays,
+  }) {
+    if (frequency == 'Every Assigned Day' &&
+        assignedDays != null &&
+        assignedDays.isNotEmpty) {
       DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
-      
+
       for (int i = 0; i < 14; i++) {
-        final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextDate.weekday - 1];
+        final dayOfWeek = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ][nextDate.weekday - 1];
         if (assignedDays.contains(dayOfWeek)) {
-          return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+          return DateTime(
+            nextDate.year,
+            nextDate.month,
+            nextDate.day,
+            taskStart.hour,
+            taskStart.minute,
+          );
         }
         nextDate = nextDate.add(const Duration(days: 1));
       }
     } else if (frequency == 'Custom' && customDays.isNotEmpty) {
       DateTime nextDate = currentTaskDate.add(const Duration(days: 1));
-      
+
       for (int i = 0; i < 14; i++) {
-        final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextDate.weekday - 1];
+        final dayOfWeek = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ][nextDate.weekday - 1];
         if (customDays.contains(dayOfWeek)) {
-          return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+          return DateTime(
+            nextDate.year,
+            nextDate.month,
+            nextDate.day,
+            taskStart.hour,
+            taskStart.minute,
+          );
         }
         nextDate = nextDate.add(const Duration(days: 1));
       }
     }
-    
+
     return null;
   }
-  
+
   /// Helper method to get next custom date (for absence handling)
   static Future<DateTime?> _getNextCustomDateForAbsence(
     String elderlyId,
@@ -645,31 +780,64 @@ class AbsenceService {
   ) async {
     try {
       // Get assigned days for this caregiver-elderly pair
-      final assignedDays = await _getAssignedDaysForElderlyAndCaregiverForAbsence(caregiverId, elderlyId);
-      
+      final assignedDays =
+          await _getAssignedDaysForElderlyAndCaregiverForAbsence(
+            caregiverId,
+            elderlyId,
+          );
+
       if (assignedDays.isEmpty) {
         // No assignment found, use custom days only
         DateTime nextDate = startSearchDate;
         for (int i = 0; i < 14; i++) {
-          final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextDate.weekday - 1];
+          final dayOfWeek = [
+            'Monday',
+            'Tuesday',
+            'Wednesday',
+            'Thursday',
+            'Friday',
+            'Saturday',
+            'Sunday',
+          ][nextDate.weekday - 1];
           if (customDays.contains(dayOfWeek)) {
-            return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+            return DateTime(
+              nextDate.year,
+              nextDate.month,
+              nextDate.day,
+              taskStart.hour,
+              taskStart.minute,
+            );
           }
           nextDate = nextDate.add(const Duration(days: 1));
         }
         return null;
       }
-      
+
       // Find next date that matches both custom days and assigned days
       DateTime nextDate = startSearchDate;
       for (int i = 0; i < 14; i++) {
-        final dayOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][nextDate.weekday - 1];
-        if (customDays.contains(dayOfWeek) && assignedDays.contains(dayOfWeek)) {
-          return DateTime(nextDate.year, nextDate.month, nextDate.day, taskStart.hour, taskStart.minute);
+        final dayOfWeek = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ][nextDate.weekday - 1];
+        if (customDays.contains(dayOfWeek) &&
+            assignedDays.contains(dayOfWeek)) {
+          return DateTime(
+            nextDate.year,
+            nextDate.month,
+            nextDate.day,
+            taskStart.hour,
+            taskStart.minute,
+          );
         }
         nextDate = nextDate.add(const Duration(days: 1));
       }
-      
+
       return null;
     } catch (e) {
       print('Error getting next custom date: $e');

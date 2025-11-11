@@ -233,6 +233,21 @@ class BackgroundAttendanceService {
 
           if (userId == null) continue;
 
+          // 🔧 CRITICAL FIX: Verify this assignment is STILL CURRENT
+          // Don't mark users absent if their schedule already changed!
+          final currentAssignmentCheck = await _firestore
+              .collection('house_shift_assignments')
+              .doc(assignmentDoc.id)
+              .get();
+
+          if (!currentAssignmentCheck.exists ||
+              currentAssignmentCheck.data()?['is_current'] != true) {
+            print(
+              '⏭️ BACKGROUND: Assignment for user $userId is no longer current - skipping',
+            );
+            continue; // Schedule already changed, don't mark absent
+          }
+
           // Check if user is scheduled for today
           if (!daysAssigned.contains(currentDayName)) {
             continue; // User not scheduled today

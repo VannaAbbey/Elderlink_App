@@ -1243,7 +1243,9 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     }
   }
 
-  /// Check if nurse is marked as absent today
+  /// Check if nurse is marked as absent today for their CURRENTLY ASSIGNED shift
+  /// This ensures that if a nurse's schedule changes during the day,
+  /// they get a fresh attendance opportunity for the new shift.
   Future<bool> _checkIfNurseIsAbsentToday() async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -1251,20 +1253,48 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
       final now = DateTime.now();
       final dateString = _getDateString(now);
-      final shift = _getCurrentShift();
+
+      // Get the nurse's CURRENTLY ASSIGNED shift from house_shift_assignments
+      // This is important: if their schedule changed, we check against the NEW shift
+      final houseSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: currentUser.uid)
+          .where('is_current', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (houseSnapshot.docs.isEmpty) {
+        print('🔍 MEDICATION: No current assignment found');
+        return false; // No assignment = not absent (they can add medications)
+      }
+
+      final assignmentData = houseSnapshot.docs.first.data();
+      final assignedShift = assignmentData['shift'] as String?;
+
+      if (assignedShift == null) {
+        print('🔍 MEDICATION: No shift in assignment');
+        return false;
+      }
+
+      print(
+        '🔍 MEDICATION: Checking absence for ASSIGNED shift: $assignedShift',
+      );
 
       // Check attendance collection for today's attendance record
+      // ONLY for the CURRENTLY ASSIGNED shift, not the time-based current shift
       final attendanceQuery = await _firestore
           .collection('attendance')
           .where('user_id', isEqualTo: currentUser.uid)
           .where('date', isEqualTo: dateString)
-          .where('shift', isEqualTo: shift)
+          .where('shift', isEqualTo: assignedShift)
           .where('is_present', isEqualTo: false)
           .limit(1)
           .get();
 
       final isAbsent = attendanceQuery.docs.isNotEmpty;
-      print('🔍 MEDICATION: Nurse absent check - isAbsent: $isAbsent');
+      print(
+        '🔍 MEDICATION: Nurse absent check for shift $assignedShift - isAbsent: $isAbsent',
+      );
 
       return isAbsent;
     } catch (e) {

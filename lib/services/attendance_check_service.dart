@@ -231,24 +231,64 @@ class AttendanceCheckService {
 
       final userData = userDoc.data()!;
       final userType = userData['user_type'] as String?;
-      final shift = getCurrentShift();
+
+      // 🔧 FIX: Get the user's ASSIGNED shift from house_shift_assignments
+      // instead of using time-based getCurrentShift()
+      // This ensures attendance is recorded for their ACTUAL assigned shift
+      String shift = getCurrentShift(); // Default fallback
+
+      try {
+        final assignmentSnapshot = await _firestore
+            .collection('house_shift_assignments')
+            .where('user_id', isEqualTo: currentUser.uid)
+            .where('is_current', isEqualTo: true)
+            .limit(1)
+            .get();
+
+        if (assignmentSnapshot.docs.isNotEmpty) {
+          final assignedShift =
+              assignmentSnapshot.docs.first.data()['shift'] as String?;
+          if (assignedShift != null && assignedShift.isNotEmpty) {
+            shift = assignedShift;
+            print(
+              '✅ ATTENDANCE: Using ASSIGNED shift: $shift (not time-based shift)',
+            );
+          } else {
+            print(
+              '⚠️ ATTENDANCE: No shift in assignment, using time-based: $shift',
+            );
+          }
+        } else {
+          print(
+            '⚠️ ATTENDANCE: No current assignment found, using time-based shift: $shift',
+          );
+        }
+      } catch (e) {
+        print(
+          '⚠️ ATTENDANCE: Error getting assigned shift: $e, using time-based: $shift',
+        );
+      }
 
       // Create attendance record
       final attendanceData = {
         'user_id': currentUser.uid,
         'user_type': userType ?? 'unknown',
         'date': dateString,
-        'shift': shift,
+        'shift': shift, // Now uses ASSIGNED shift
         'is_present': isPresent,
         'timestamp': FieldValue.serverTimestamp(),
         'reason': reason ?? '',
-        'marked_by': 'system', // Can be 'user' or 'system' (auto-absent)
+        'marked_by': isPresent
+            ? 'user'
+            : 'system', // User marks present, system marks absent
       };
 
       // Save to attendance collection
       await _firestore.collection('attendance').add(attendanceData);
 
-      print('✅ ATTENDANCE: Recorded - Present: $isPresent, Shift: $shift');
+      print(
+        '✅ ATTENDANCE: Recorded - Present: $isPresent, Shift: $shift, Date: $dateString',
+      );
     } catch (e) {
       print('🔴 ATTENDANCE Error recording attendance: $e');
       rethrow;
@@ -256,6 +296,7 @@ class AttendanceCheckService {
   }
 
   /// Checks if user has already marked attendance for today's shift
+  /// Now checks against ASSIGNED shift, not time-based shift
   static Future<bool> hasMarkedAttendanceToday() async {
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
@@ -263,18 +304,42 @@ class AttendanceCheckService {
 
       final now = DateTime.now();
       final dateString = _getDateString(now);
-      final shift = getCurrentShift();
+
+      // 🔧 FIX: Get the user's ASSIGNED shift from house_shift_assignments
+      String shift = getCurrentShift(); // Default fallback
+
+      try {
+        final assignmentSnapshot = await _firestore
+            .collection('house_shift_assignments')
+            .where('user_id', isEqualTo: currentUser.uid)
+            .where('is_current', isEqualTo: true)
+            .limit(1)
+            .get();
+
+        if (assignmentSnapshot.docs.isNotEmpty) {
+          final assignedShift =
+              assignmentSnapshot.docs.first.data()['shift'] as String?;
+          if (assignedShift != null && assignedShift.isNotEmpty) {
+            shift = assignedShift;
+            print('✅ ATTENDANCE CHECK: Using ASSIGNED shift: $shift');
+          }
+        }
+      } catch (e) {
+        print('⚠️ ATTENDANCE CHECK: Error getting assigned shift: $e');
+      }
 
       final attendanceQuery = await _firestore
           .collection('attendance')
           .where('user_id', isEqualTo: currentUser.uid)
           .where('date', isEqualTo: dateString)
-          .where('shift', isEqualTo: shift)
+          .where('shift', isEqualTo: shift) // Now uses ASSIGNED shift
           .limit(1)
           .get();
 
       final hasMarked = attendanceQuery.docs.isNotEmpty;
-      print('🔍 ATTENDANCE: Already marked for today: $hasMarked');
+      print(
+        '🔍 ATTENDANCE: Already marked for today (shift $shift): $hasMarked',
+      );
 
       return hasMarked;
     } catch (e) {
