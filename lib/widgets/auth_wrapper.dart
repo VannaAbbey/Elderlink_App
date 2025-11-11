@@ -102,6 +102,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
           });
         }
 
+        // Initialize leave notification listener for caregivers and nurses
+        if (userId != null &&
+            !_leaveListenerInitialized &&
+            (userRole == 'caregiver' || userRole == 'nurse')) {
+          _leaveListenerInitialized = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            print('🔔 Initializing LeaveNotificationListener for $userRole: $userId');
+            await LeaveNotificationListener().initialize();
+            print('✅ LeaveNotificationListener initialized successfully');
+          });
+        }
+
         switch (userRole) {
           case 'administrator':
             return const CaregiverHomeScreen();

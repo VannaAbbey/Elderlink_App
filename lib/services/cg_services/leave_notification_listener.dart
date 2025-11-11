@@ -148,6 +148,7 @@ class LeaveNotificationListener {
       final endDate = (data['end_date'] as Timestamp?)?.toDate();
       final reviewerId = data['reviewed_by'] as String?;
       final reviewerComments = data['reviewer_comments'] as String?;
+      final userType = data['user_type'] as String? ?? 'caregiver'; // Get user type from leave request data
       
       // Format dates
       String leaveDates = '';
@@ -203,7 +204,7 @@ class LeaveNotificationListener {
       // Create notification using the dedicated leave notification method
       await _notificationService.createLeaveNotification(
         userId: userId,
-        userType: 'caregiver',
+        userType: userType, // Use dynamic user type from leave request data
         leaveRequestId: requestId,
         type: notificationType,
         leaveDates: leaveDates,
