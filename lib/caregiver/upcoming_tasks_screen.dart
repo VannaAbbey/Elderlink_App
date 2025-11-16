@@ -10,6 +10,7 @@ import '../services/cg_services/caregiver_shift_log_service.dart';
 import '../services/cg_services/notification_service.dart';
 import '../services/cg_services/house_service.dart';
 import '../models/cg_models/notification_model.dart';
+import '../widgets/loading_overlay.dart';
 
 // Helper function to create a new task and set 'created_by' to the current caregiver's UID
 Future<void> createTaskWithCreator(Map<String, dynamic> taskData) async {
@@ -1378,6 +1379,7 @@ class UpcomingTasksScreen extends StatefulWidget {
 class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsBindingObserver {
   Timer? _refreshTimer;
   int _refreshKey = 0; // Simple key to force rebuilds
+  bool _isSavingTask = false; // Loading state for task submission
 
   @override
   void initState() {
@@ -2599,17 +2601,19 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                   return Dialog(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                                     insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-                                    child: Container(
-                                      width: 350,
-                                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: SingleChildScrollView(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                                          children: [
+                                    child: Stack(
+                                      children: [
+                                        Container(
+                                          width: 350,
+                                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                                              children: [
                                             Row(
                                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                               children: [
@@ -3908,6 +3912,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     extraFields['recurring_start_date'] = selectedRecurringStartDate;
                                                   }
                                                   if (valid) {
+                                                    // Prevent multiple submissions
+                                                    if (_isSavingTask) return;
+                                                    
                                                     // Additional safety checks - return early if any required field is null
                                                     if (saveDate == null || startTime == null || endTime == null || selectedElderly == null) {
                                                       if (context.mounted) {
@@ -3938,32 +3945,50 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                       }
                                                     }
                                                     
-                                                    final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
-                                                    final elderlyFname = elderlyData['elderly_fname'] ?? '';
+                                                    // Show loading overlay
+                                                    setState(() => _isSavingTask = true);
                                                     
-                                                    // For recurring tasks, use the selected date for task times
-                                                    final selectedDateForTimes = saveDate;
-                                                    final taskStart = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, startTime!.hour, startTime!.minute);
-                                                    final taskEnd = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, endTime!.hour, endTime!.minute);
-                                                    await _saveCareTask(
-                                                      elderlyId: selectedElderly!,
-                                                      caregiverId: caregiverId,
-                                                      elderlyFname: elderlyFname,
-                                                      taskStart: taskStart,
-                                                      taskEnd: taskEnd,
-                                                      taskFrequency: saveFrequency,
-                                                      taskDescription: activityController.text,
-                                                      taskDate: saveDate,
-                                                      extraFields: extraFields,
-                                                      caregiverAssignedDays: caregiverAssignedDays,
-                                                      customDays: selectedDaysBox,
-                                                    );
-                                                    // Save reference to ScaffoldMessenger before popping dialog
-                                                    final scaffoldMessenger = ScaffoldMessenger.of(context);
-                                                    Navigator.of(ctx).pop();
-                                                    scaffoldMessenger.showSnackBar(
-                                                      const SnackBar(content: Text('Task saved successfully!'), backgroundColor: Color(0xFF22688E)),
-                                                    );
+                                                    try {
+                                                      final elderlyData = assignedElderly.firstWhere((e) => e['elderly_id'] == selectedElderly, orElse: () => {});
+                                                      final elderlyFname = elderlyData['elderly_fname'] ?? '';
+                                                      
+                                                      // For recurring tasks, use the selected date for task times
+                                                      final selectedDateForTimes = saveDate;
+                                                      final taskStart = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, startTime!.hour, startTime!.minute);
+                                                      final taskEnd = DateTime(selectedDateForTimes.year, selectedDateForTimes.month, selectedDateForTimes.day, endTime!.hour, endTime!.minute);
+                                                      
+                                                      await _saveCareTask(
+                                                        elderlyId: selectedElderly!,
+                                                        caregiverId: caregiverId,
+                                                        elderlyFname: elderlyFname,
+                                                        taskStart: taskStart,
+                                                        taskEnd: taskEnd,
+                                                        taskFrequency: saveFrequency,
+                                                        taskDescription: activityController.text,
+                                                        taskDate: saveDate,
+                                                        extraFields: extraFields,
+                                                        caregiverAssignedDays: caregiverAssignedDays,
+                                                        customDays: selectedDaysBox,
+                                                      );
+                                                      
+                                                      // Save reference to ScaffoldMessenger before popping dialog
+                                                      final scaffoldMessenger = ScaffoldMessenger.of(context);
+                                                      Navigator.of(ctx).pop();
+                                                      scaffoldMessenger.showSnackBar(
+                                                        const SnackBar(content: Text('Task saved successfully!'), backgroundColor: Color(0xFF22688E)),
+                                                      );
+                                                    } catch (e) {
+                                                      print('Error saving task: $e');
+                                                      if (context.mounted) {
+                                                        ScaffoldMessenger.of(context).showSnackBar(
+                                                          SnackBar(content: Text('Error saving task: $e'), backgroundColor: Color(0xFFD32F2F)),
+                                                        );
+                                                      }
+                                                    } finally {
+                                                      if (mounted) {
+                                                        setState(() => _isSavingTask = false);
+                                                      }
+                                                    }
                                                   } else {
                                                     String errorMessage = 'Please fill all fields';
                                                     if (selectedFrequency == 'Custom' && selectedRecurringStartDate == null) {
@@ -3977,20 +4002,29 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                   }
                                                 },
                                                 style: ElevatedButton.styleFrom(
-                                                  backgroundColor: const Color(0xFF22688E),
+                                                  backgroundColor: _isSavingTask ? Colors.grey : const Color(0xFF22688E),
                                                   shape: RoundedRectangleBorder(
                                                     borderRadius: BorderRadius.circular(32),
                                                   ),
                                                   elevation: 4,
                                                 ),
-                                                child: const Text(
-                                                  'Save Task',
-                                                  style: TextStyle(
-                                                    fontSize: 15,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: Colors.white,
-                                                  ),
-                                                ),
+                                                child: _isSavingTask
+                                                  ? const SizedBox(
+                                                      height: 20,
+                                                      width: 20,
+                                                      child: CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                      ),
+                                                    )
+                                                  : const Text(
+                                                      'Save Task',
+                                                      style: TextStyle(
+                                                        fontSize: 15,
+                                                        fontWeight: FontWeight.w600,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
                                               ),
                                             ),
                                             const SizedBox(height: 5),
@@ -3998,6 +4032,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                         ),
                                       ),
                                     ),
+                                    // Loading overlay
+                                    if (_isSavingTask)
+                                      const LoadingOverlay(
+                                        message: 'Saving task...',
+                                      ),
+                                  ],
+                                ),
                                   );
                                 },
                               );

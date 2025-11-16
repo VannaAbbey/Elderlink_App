@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'emergency_modal.dart'; // <-- UI layout ng modal
 import '../services/cg_services/caregiver_shift_log_service.dart'; // <-- New unified logging service
 import '../providers/cg_providers/absence_provider.dart';
+import '../widgets/loading_overlay.dart';
 
 // Helper function to show absence dialog
 void _showAbsenceDialog(BuildContext context, String absenceType) {
@@ -171,10 +172,24 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   );
 
   if (result != null) {
-  // ✅ Hanapin nurses na naka-duty today at this shift
-  print('🔍 === EMERGENCY ALERT: Finding on-duty nurses ===');
-  print('Current time: ${now.hour}:${now.minute}');
-  print('Current day: $todayName');
+  // Show loading dialog
+  if (context.mounted) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext loadingContext) {
+        return const LoadingOverlay(
+          message: 'Processing emergency alert...',
+        );
+      },
+    );
+  }
+  
+  try {
+    // ✅ Hanapin nurses na naka-duty today at this shift
+    print('🔍 === EMERGENCY ALERT: Finding on-duty nurses ===');
+    print('Current time: ${now.hour}:${now.minute}');
+    print('Current day: $todayName');
   
   final nurseQuery = await FirebaseFirestore.instance
       .collection("house_shift_assignments")
@@ -268,6 +283,10 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   print('=== END EMERGENCY ALERT NURSE SEARCH ===\n');
 
   if (activeNurseIds.isEmpty) {
+    // Close loading dialog
+    if (context.mounted && Navigator.canPop(context)) {
+      Navigator.of(context).pop();
+    }
     if (context.mounted) _showError(context, "No nurse is currently on duty for this shift.");
     return;
   }
@@ -322,6 +341,11 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     } catch (e) {
       print('❌ Error fetching nurse name: $e');
     }
+  }
+
+  // Close loading dialog before showing success dialog
+  if (context.mounted && Navigator.canPop(context)) {
+    Navigator.of(context).pop();
   }
 
   // Show success dialog with nurse names
@@ -442,6 +466,17 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
         );
       },
     );
+  }
+  } catch (e) {
+    // Close loading dialog
+    if (context.mounted && Navigator.canPop(context)) {
+      Navigator.of(context).pop();
+    }
+    
+    print('Error processing emergency alert: $e');
+    if (context.mounted) {
+      _showError(context, 'Error sending emergency alert. Please try again.');
+    }
   }
 }
 

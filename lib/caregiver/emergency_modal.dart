@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/loading_overlay.dart';
 
 // Helper function to show error modal
 void _showErrorModal(BuildContext context, String message) {
@@ -56,6 +57,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
   String? selectedEmergencyType; // new emergency type variable
   String emergencyDetails = '';
   bool acknowledged = false;
+  bool _isSendingAlert = false; // Loading state for submission
 
   final List<String> houses = [
     'St. Sebastian',
@@ -109,11 +111,13 @@ Future<Map<String, dynamic>?> showEmergencyModal(
             ),
             child: StatefulBuilder(
               builder: (context, setState) {
-                return SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                return Stack(
+                  children: [
+                    SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                       // Replace your current Row with this Stack
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -346,10 +350,11 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                         width: double.infinity,
                         child: ElevatedButton(
                           onPressed:
-                              acknowledged &&
-                                  selectedHouse != null &&
-                                  selectedEmergencyType != null
-                              ? () {
+                              (_isSendingAlert || !acknowledged ||
+                                  selectedHouse == null ||
+                                  selectedEmergencyType == null)
+                              ? null
+                              : () async {
                                   // Check if "Others" is selected but text field is empty
                                   if (selectedEmergencyType == "Others (please specify below)" &&
                                       emergencyDetails.trim().isEmpty) {
@@ -357,35 +362,60 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                                     return;
                                   }
                                   
-                                  Navigator.of(context).pop({
-                                    "houseName": selectedHouse,
-                                    "emergencyType": selectedEmergencyType,
-                                    "description": emergencyDetails,
-                                    "caregiverName": caregiverName,
-                                  });
-                                }
-                              : null,
+                                  // Prevent multiple submissions
+                                  if (_isSendingAlert) return;
+                                  
+                                  setState(() => _isSendingAlert = true);
+                                  
+                                  // Small delay to show loading state
+                                  await Future.delayed(const Duration(milliseconds: 100));
+                                  
+                                  if (context.mounted) {
+                                    Navigator.of(context).pop({
+                                      "houseName": selectedHouse,
+                                      "emergencyType": selectedEmergencyType,
+                                      "description": emergencyDetails,
+                                      "caregiverName": caregiverName,
+                                    });
+                                  }
+                                },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00588e),
+                            backgroundColor: _isSendingAlert ? Colors.grey : const Color(0xFF00588e),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 15),
                             elevation: 4,
                           ),
-                          child: const Text(
-                            'Send Alert to Medical Services',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
+                          child: _isSendingAlert
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              )
+                            : const Text(
+                                'Send Alert to Medical Services',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
                         ),
                       ),
                     ],
                   ),
-                );
+                ),
+                // Loading overlay
+                if (_isSendingAlert)
+                  const LoadingOverlay(
+                    message: 'Sending emergency alert...',
+                  ),
+              ],
+            );
               },
             ),
           ),

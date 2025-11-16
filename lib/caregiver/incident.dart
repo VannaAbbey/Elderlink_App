@@ -8,6 +8,7 @@ import '../widgets/cg_widgets/notification_icon_button.dart';
 import '../services/cg_services/caregiver_shift_log_service.dart';
 import '../services/cg_services/absence_service.dart';
 import '../providers/cg_providers/absence_provider.dart';
+import '../widgets/loading_overlay.dart';
 
 // Helper function to show error modal
 void _showErrorModal(BuildContext context, String message) {
@@ -1208,44 +1209,49 @@ class _IncidentScreenState extends State<IncidentScreen> {
 
                                       showDialog(
                                         context: context,
-                                        barrierDismissible: true,
+                                        barrierDismissible: true, // Will be controlled by WillPopScope
                                         builder: (BuildContext ctx) {
                                           bool acknowledged = false;
+                                          bool isSubmitting = false; // Local loading state for this dialog
                                           return StatefulBuilder(
                                             builder: (context, dialogSetState) {
-                                              return Dialog(
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                ),
+                                              return WillPopScope(
+                                                onWillPop: () async => !isSubmitting, // Prevent back button when submitting
+                                                child: Dialog(
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(20),
+                                                  ),
                                                 insetPadding:
                                                     const EdgeInsets.symmetric(
                                                       horizontal: 24,
                                                       vertical: 40,
                                                     ),
-                                                child: Container(
-                                                  width: 380,
+                                                child: Stack(
+                                                  children: [
+                                                    Container(
+                                                      width: 380,
 
-                                                  padding:
-                                                      const EdgeInsets.fromLTRB(
-                                                        20, // left
-                                                        2, // top
-                                                        20, // right
-                                                        20, // bottom
+                                                      padding:
+                                                          const EdgeInsets.fromLTRB(
+                                                            20, // left
+                                                            2, // top
+                                                            20, // right
+                                                            20, // bottom
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.white,
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              20,
+                                                            ),
                                                       ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.white,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          20,
-                                                        ),
-                                                  ),
-                                                  child: SingleChildScrollView(
-                                                    child: Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .stretch,
-                                                      children: [
+                                                      child: SingleChildScrollView(
+                                                        child: Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .stretch,
+                                                          children: [
                                                         // Exit button row (uplifted sa taas right)
                                                         Row(
                                                           mainAxisAlignment:
@@ -1267,7 +1273,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                     0xFF00588e,
                                                                   ),
                                                                 ),
-                                                                onPressed: () =>
+                                                                onPressed: isSubmitting
+                                                                  ? null // Disable when submitting
+                                                                  : () =>
                                                                     Navigator.of(
                                                                       ctx,
                                                                     ).pop(),
@@ -1626,6 +1634,9 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                             .trim()
                                                                             .isNotEmpty)
                                                                     ? () async {
+                                                                        // Prevent multiple submissions
+                                                                        if (isSubmitting) return;
+                                                                        
                                                                         // Safety check: ensure the main widget is still mounted before proceeding
                                                                         if (!mounted) return;
 
@@ -1639,10 +1650,13 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           return;
                                                                         }
 
+                                                                        // Show loading state using dialogSetState
+                                                                        dialogSetState(() => isSubmitting = true);
+
+                                                                        try {
                                                                         final formattedDate =
                                                                             DateTime.now();
 
-                                                                        try {
                                                                           // Safety check before Firestore operations
                                                                           if (!mounted) return;
                                                                           
@@ -2003,12 +2017,17 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                           e
                                                                         ) {
                                                                           _safeShowSnackBar("Failed to submit report: $e", isError: true);
+                                                                        } finally {
+                                                                          // Reset loading state using dialogSetState
+                                                                          dialogSetState(() => isSubmitting = false);
                                                                         }
                                                                       }
                                                                     : null, // ❌ Disabled kapag kulang
                                                                 style: ElevatedButton.styleFrom(
                                                                   backgroundColor:
-                                                                      (acknowledged &&
+                                                                      isSubmitting
+                                                                      ? Colors.grey
+                                                                      : (acknowledged &&
                                                                           selectedElderlyName !=
                                                                               null &&
                                                                           selectedElderlyName!
@@ -2029,16 +2048,25 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                                         ),
                                                                   ),
                                                                 ),
-                                                                child: const Text(
-                                                                  'Submit',
-                                                                  style: TextStyle(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .bold,
-                                                                  ),
-                                                                ),
+                                                                child: isSubmitting
+                                                                  ? const SizedBox(
+                                                                      height: 20,
+                                                                      width: 20,
+                                                                      child: CircularProgressIndicator(
+                                                                        strokeWidth: 2,
+                                                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                                      ),
+                                                                    )
+                                                                  : const Text(
+                                                                      'Submit',
+                                                                      style: TextStyle(
+                                                                        color: Colors
+                                                                            .white,
+                                                                        fontWeight:
+                                                                            FontWeight
+                                                                                .bold,
+                                                                      ),
+                                                                    ),
                                                               ),
                                                             ),
                                                             ),
@@ -2083,6 +2111,14 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                                       ],
                                                     ),
                                                   ),
+                                                ),
+                                                // Loading overlay
+                                                if (isSubmitting)
+                                                  const LoadingOverlay(
+                                                    message: 'Submitting incident report...',
+                                                  ),
+                                              ],
+                                            ),
                                                 ),
                                               );
                                             },
