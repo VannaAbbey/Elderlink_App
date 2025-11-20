@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -40,6 +41,10 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   static final Map<String, DateTime> _houseVitalsCacheTime = {};
   late DateTime _selectedDate;
 
+  // Real-time listeners for schedule/assignment changes
+  StreamSubscription<QuerySnapshot>? _assignmentListener;
+  StreamSubscription<QuerySnapshot>? _shiftListener;
+
   String _getCurrentShift() {
     final currentHour = DateTime.now().hour;
     if (currentHour >= 6 && currentHour < 14) return "1st";
@@ -72,10 +77,78 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   void initState() {
     super.initState();
     _selectedDate = widget.selectedDate ?? DateTime.now();
+
+    // 🚀 CRITICAL: Check cache IMMEDIATELY before first build to prevent "Unknown" flash
+    final cacheKey = widget.houseId + (widget.nurseName ?? "");
+    if (_houseVitalsCache.containsKey(cacheKey)) {
+      print('⚡ initState: Loading from cache IMMEDIATELY for instant display!');
+      _upcomingVitals = _houseVitalsCache[cacheKey];
+      _isLoading = false; // Data already available
+    } else {
+      // 🔧 CRITICAL FIX: Initialize with empty list instead of null to prevent "Unknown" flash
+      print('⚡ initState: No cache found - initializing with empty list');
+      _upcomingVitals = [];
+    }
+
+    // Initialize real-time listeners for schedule/assignment changes
+    _initializeListeners();
     // Prewarm nurse id lookup and start loading vitals
     _prewarm();
     // Schedule notifications for existing vital tasks
     _scheduleNotificationsForExistingVitals();
+  }
+
+  /// Initialize real-time listeners for auto-updates
+  void _initializeListeners() async {
+    try {
+      final nurseId = await _getCachedNurseId();
+      if (nurseId == null) {
+        debugPrint('❌ Cannot initialize listeners: No nurse ID');
+        return;
+      }
+
+      debugPrint(
+        '🔄 Initializing vitals assignment listeners for nurse: $nurseId',
+      );
+
+      // Listen to elderly_assignments changes
+      _assignmentListener = _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .snapshots()
+          .listen((snapshot) {
+            debugPrint(
+              '🔔 Elderly assignments changed! Documents: ${snapshot.docs.length}',
+            );
+            // Clear cache and reload vitals when assignments change
+            _houseVitalsCache.clear();
+            _houseVitalsCacheTime.clear();
+            // Reload in background even if not mounted - data will be cached
+            _loadUpcomingVitals(forceRefresh: true);
+          });
+
+      // Listen to house_shift_assignments changes
+      _shiftListener = _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .snapshots()
+          .listen((snapshot) {
+            debugPrint(
+              '🔔 Shift assignments changed! Documents: ${snapshot.docs.length}',
+            );
+            // Clear cache and reload vitals when shift changes
+            _houseVitalsCache.clear();
+            _houseVitalsCacheTime.clear();
+            // Reload in background even if not mounted - data will be cached
+            _loadUpcomingVitals(forceRefresh: true);
+          });
+
+      debugPrint('✅ Vitals assignment listeners initialized successfully');
+    } catch (e) {
+      debugPrint('❌ Error initializing vitals listeners: $e');
+    }
   }
 
   /// Pre-fetch lightweight data to speed up first render
@@ -84,6 +157,156 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     _getCachedNurseId();
     // Start loading vitals (will use cached nurse id if available)
     _loadUpcomingVitals();
+    // Preload all houses in background for instant house switching
+    _preloadAllHouses();
+  }
+
+  /// Preload vitals data for all houses in the background
+  /// This makes house switching instant with no loading delays
+  void _preloadAllHouses() async {
+    try {
+      debugPrint('🚀 Starting background preload for all houses...');
+
+      final nurseId = await _getCachedNurseId();
+      if (nurseId == null) return;
+
+      final currentShift = _getCurrentShift();
+      final currentDay = _getCurrentDay();
+
+      // Get all houses the nurse is assigned to
+      final assignQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('day', isEqualTo: currentDay)
+          .get();
+
+      if (assignQuery.docs.isEmpty) return;
+
+      // Collect all unique house IDs
+      final Set<String> houseIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        final houseIdList = data['house_id'];
+        if (houseIdList is List) {
+          houseIds.addAll(List<String>.from(houseIdList));
+        } else if (houseIdList is String) {
+          houseIds.add(houseIdList);
+        }
+      }
+
+      debugPrint('📦 Found ${houseIds.length} houses to preload: $houseIds');
+
+      // Preload vitals for each house in parallel (but not current house)
+      final futures = <Future>[];
+      for (final houseId in houseIds) {
+        if (houseId == widget.houseId) continue; // Skip current house
+
+        final cacheKey = houseId + (widget.nurseName ?? "");
+
+        // Only preload if not already cached
+        if (!_houseVitalsCache.containsKey(cacheKey)) {
+          futures.add(
+            _preloadHouseData(houseId, nurseId, currentShift, currentDay),
+          );
+        }
+      }
+
+      await Future.wait(futures);
+      debugPrint('✅ Background preload completed for ${futures.length} houses');
+    } catch (e) {
+      debugPrint('❌ Error preloading houses: $e');
+    }
+  }
+
+  /// Preload data for a specific house
+  Future<void> _preloadHouseData(
+    String houseId,
+    String nurseId,
+    String shift,
+    String day,
+  ) async {
+    try {
+      final cacheKey = houseId + (widget.nurseName ?? "");
+
+      debugPrint('⚡ Preloading house: $houseId');
+
+      // Get vitals for this house (same logic as _loadUpcomingVitals)
+      final vitals = await _getUpcomingVitalsForHouse(
+        houseId,
+        nurseId,
+        shift,
+        day,
+      );
+
+      // Cache the data
+      _houseVitalsCache[cacheKey] = vitals;
+      _houseVitalsCacheTime[cacheKey] = DateTime.now();
+
+      debugPrint('✅ Preloaded ${vitals.length} vitals for house: $houseId');
+    } catch (e) {
+      debugPrint('❌ Error preloading house $houseId: $e');
+    }
+  }
+
+  /// Get upcoming vitals for a specific house (used by preloading)
+  Future<List<Map<String, dynamic>>> _getUpcomingVitalsForHouse(
+    String houseId,
+    String nurseId,
+    String shift,
+    String day,
+  ) async {
+    // Quick check: does this nurse have any assignments for this house/shift/day?
+    final quickCheck = await _firestore
+        .collection('elderly_assignments')
+        .where('user_id', isEqualTo: nurseId)
+        .where('user_type', isEqualTo: 'nurse')
+        .where('is_current', isEqualTo: true)
+        .where('shift', isEqualTo: shift)
+        .where('day', isEqualTo: day)
+        .where('house_id', arrayContains: houseId)
+        .limit(1)
+        .get();
+
+    if (quickCheck.docs.isEmpty) {
+      return [];
+    }
+
+    // Get all assignments for this house
+    final assignQuery = await _firestore
+        .collection('elderly_assignments')
+        .where('user_id', isEqualTo: nurseId)
+        .where('user_type', isEqualTo: 'nurse')
+        .where('is_current', isEqualTo: true)
+        .where('shift', isEqualTo: shift)
+        .where('day', isEqualTo: day)
+        .where('house_id', arrayContains: houseId)
+        .get();
+
+    if (assignQuery.docs.isEmpty) return [];
+
+    final assignData = assignQuery.docs.first.data();
+    final elderlyIds = List<String>.from(assignData['elderly_ids'] ?? []);
+
+    if (elderlyIds.isEmpty) return [];
+
+    // Get pending vitals for these elderly
+    final vitalsQuery = await _firestore
+        .collection('vitals')
+        .where('status', isEqualTo: 'pending')
+        .where('elderly_id', whereIn: elderlyIds.take(10).toList())
+        .get();
+
+    final List<Map<String, dynamic>> vitals = [];
+    for (final vitalDoc in vitalsQuery.docs) {
+      final vitalData = vitalDoc.data();
+      vitalData['vital_id'] = vitalDoc.id;
+      vitals.add(vitalData);
+    }
+
+    return vitals;
   }
 
   // Schedule notifications for existing vital tasks
@@ -189,6 +412,14 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   }
 
   @override
+  void dispose() {
+    // Cancel listeners to prevent memory leaks
+    _assignmentListener?.cancel();
+    _shiftListener?.cancel();
+    super.dispose();
+  }
+
+  @override
   bool get wantKeepAlive => true;
 
   void _selectDate(BuildContext context) async {
@@ -216,73 +447,37 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   }
 
   Future<void> _loadUpcomingVitals({bool forceRefresh = false}) async {
-    print('🔄 _loadUpcomingVitals called with forceRefresh=$forceRefresh');
+    print(
+      '🔄 _loadUpcomingVitals called with forceRefresh=$forceRefresh (mounted=$mounted)',
+    );
     final cacheKey = widget.houseId + (widget.nurseName ?? "");
 
-    // Always set loading to true at the start, so spinner is shown until data is ready
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
-
+    // CHECK CACHE FIRST before showing any loading state
     if (_houseVitalsCache.containsKey(cacheKey) && !forceRefresh) {
-      // Always show cached data immediately if available
+      print('✅ Using cached data for $cacheKey - INSTANT display!');
+      // Show cached data immediately if widget is mounted (NO loading state)
       if (mounted) {
         setState(() {
           _upcomingVitals = _houseVitalsCache[cacheKey]!;
           _isLoading = false;
         });
       }
-
-      // ⚠️ DISABLED: Background refresh temporarily to avoid interference
-      // ⚡ OPTIMIZATION: Smart background refresh - only refresh if cache is really stale
-      /*
-      if (_houseVitalsCacheTime.containsKey(cacheKey)) {
-        final cacheTime = _houseVitalsCacheTime[cacheKey]!;
-        final timeSinceCache = now.difference(cacheTime);
-
-        // Only refresh if cache is older than duration AND we have network connectivity indication
-        if (timeSinceCache >= cacheDuration) {
-          // Use a lighter refresh that doesn't do full cleanup operations
-          Future(() async {
-            try {
-              // Quick check if there are any changes before doing full refresh
-              final quickVitalsCheck = await _firestore
-                  .collection('vitals')
-                  .where('house_id', isEqualTo: widget.houseId)
-                  .where('assigned_date', isEqualTo: _getTodayDateString())
-                  .where('shift', isEqualTo: _getCurrentShift())
-                  .where('status', isEqualTo: 'pending')
-                  .limit(1)
-                  .get();
-
-              if (quickVitalsCheck.docs.isNotEmpty) {
-                final vitals = await _getUpcomingVitals();
-                _houseVitalsCache[cacheKey] = vitals;
-                _houseVitalsCacheTime[cacheKey] = DateTime.now();
-                if (mounted) {
-                  setState(() {
-                    _upcomingVitals = vitals;
-                  });
-                }
-              }
-            } catch (e) {
-              print('❌ Background refresh failed: $e');
-            }
-          });
-        }
-      }
-      */
       return;
     }
 
-    // No cache or force refresh - fetch fresh data
+    // Only show loading indicator if no cache exists
+    print('⚡ No cache found - fetching fresh vitals data...');
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+    // Fetch fresh data in background (works even if widget is not mounted)
     try {
       // Use cached nurse id if available to speed up a quick existence check
       final nurseId = await _getCachedNurseId();
       if (nurseId == null) {
-        // If we can't resolve nurse id yet, avoid blocking UI for long
+        // Update UI only if widget is mounted
         if (mounted) {
           setState(() {
             _upcomingVitals = [];
@@ -313,6 +508,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       final quickCheck = parallelChecks[1] as QuerySnapshot;
 
       if (!isAssignedToShift) {
+        // Update cache and UI
+        _houseVitalsCache[cacheKey] = [];
+        _houseVitalsCacheTime[cacheKey] = DateTime.now();
         if (mounted) {
           setState(() {
             _isNotAssignedToShift = true;
@@ -323,30 +521,28 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         return;
       }
 
+      List<Map<String, dynamic>> vitals;
+
       if (quickCheck.docs.isEmpty) {
-        // No assignments yet - create them and get the vitals
-        print('🔄 No assignments found - creating and fetching...');
-        final vitals = await _ensureAssignmentsExistInBackground(
+        // No assignments found in cache - fetch and ensure they exist
+        print(
+          '🔄 No cached assignments found - loading and ensuring assignments exist...',
+        );
+        vitals = await _ensureAssignmentsExistInBackground(
           nurseId,
           currentShift,
           currentDay,
           today,
         );
-
-        _houseVitalsCache[cacheKey] = vitals;
-        _houseVitalsCacheTime[cacheKey] = DateTime.now();
-        if (mounted) {
-          setState(() {
-            _upcomingVitals = vitals;
-            _isLoading = false;
-          });
-        }
-        return;
+      } else {
+        vitals = await _getUpcomingVitals();
       }
 
-      final vitals = await _getUpcomingVitals();
+      // Cache data (happens in background)
       _houseVitalsCache[cacheKey] = vitals;
       _houseVitalsCacheTime[cacheKey] = DateTime.now();
+
+      // Update UI only if widget is still mounted
       if (mounted) {
         setState(() {
           _upcomingVitals = vitals;
@@ -779,7 +975,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         final elderlyToNurse = entry.value;
         if (elderlyToNurse.isNotEmpty) {
           print(
-            '🔄 Creating assignments for shift: $shift (${elderlyToNurse.length} elderly)',
+            '🔄 Checking/ensuring assignments for shift: $shift (${elderlyToNurse.length} elderly)',
           );
           await _ensureAllAssignmentsExistForAllHouses(
             shift,
@@ -790,7 +986,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       }
 
       print(
-        '✅ Background assignment creation completed for ALL shifts and ALL houses',
+        '✅ Background assignment check/sync completed for ALL shifts and ALL houses',
       );
 
       // Now fetch the vitals for current shift only
@@ -854,6 +1050,9 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     print(
       '🏗️ UpcomingVitalsTab build() called with houseId: ${widget.houseId}',
     );
+
+    // 🔧 CRITICAL FIX: Since _upcomingVitals is now always initialized (never null),
+    // we only show loading spinner when _isLoading is true
     final upcomingVitals = _upcomingVitals ?? [];
 
     // Check if nurse is not assigned to current shift
@@ -903,9 +1102,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
             CircularProgressIndicator(),
             SizedBox(height: 16),
             Text(
-              upcomingVitals.isEmpty
-                  ? 'Creating assignments...'
-                  : 'Loading assignments...',
+              'Loading vitals...',
               style: TextStyle(fontSize: 16, color: Colors.grey),
             ),
           ],
@@ -995,6 +1192,16 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                           itemCount: pendingVitals.length,
                           itemBuilder: (context, index) {
                             final elderlyInfo = pendingVitals[index];
+
+                            // 🔧 SAFETY CHECK: Skip rendering if elderly_name is missing or "Unknown"
+                            final elderlyName =
+                                elderlyInfo['elderly_name'] as String?;
+                            if (elderlyName == null ||
+                                elderlyName.isEmpty ||
+                                elderlyName == 'Unknown') {
+                              return SizedBox.shrink(); // Skip this item completely
+                            }
+
                             final lastVital =
                                 elderlyInfo['last_vital']
                                     as Map<String, dynamic>?;
@@ -1035,8 +1242,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                                         SizedBox(width: 12),
                                         Expanded(
                                           child: Text(
-                                            elderlyInfo['elderly_name'] ??
-                                                'Unknown',
+                                            elderlyName, // Use validated elderlyName
                                             style: TextStyle(
                                               fontSize: 18,
                                               fontWeight: FontWeight.bold,
@@ -1274,7 +1480,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                   right: 16,
                   child: FloatingActionButton.extended(
                     onPressed: _showFollowUpVitalsSelection,
-                    backgroundColor: Colors.green[600],
+                    backgroundColor: Color(0xFF00588E),
                     foregroundColor: Colors.white,
                     icon: Icon(Icons.add_circle_outline),
                     label: Text(
@@ -1326,7 +1532,78 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         '📋 Found ${elderlyToProcess.length} elderly assignments for all nurses across all houses',
       );
 
-      // Process each elderly assignment
+      // 🔧 NEW: Check if schedule changed by comparing with existing vitals
+      print('🔍 Checking if nurse schedule has changed...');
+      final existingVitalsQuery = await _firestore
+          .collection('vitals')
+          .where('assigned_date', isEqualTo: today)
+          .where('shift', isEqualTo: shift)
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      // Build map of existing vitals: elderlyId -> nurseId
+      final existingVitalsMap = <String, String>{};
+      for (final doc in existingVitalsQuery.docs) {
+        final data = doc.data();
+        final elderlyId = data['elderly_id'] as String?;
+        final nurseId = data['assigned_nurse_id'] as String?;
+        if (elderlyId != null && nurseId != null) {
+          existingVitalsMap[elderlyId] = nurseId;
+        }
+      }
+
+      // Check if schedule has changed
+      bool scheduleChanged = false;
+      final vitalsToDelete = <String>[]; // Document IDs to delete
+
+      // Check for mismatches or missing assignments
+      for (final entry in elderlyToProcess.entries) {
+        final elderlyId = entry.key;
+        final newNurseId = entry.value;
+        final existingNurseId = existingVitalsMap[elderlyId];
+
+        if (existingNurseId != null && existingNurseId != newNurseId) {
+          // Nurse assignment changed for this elderly
+          scheduleChanged = true;
+          print(
+            '🔄 Schedule changed for elderly $elderlyId: $existingNurseId → $newNurseId',
+          );
+        }
+      }
+
+      // Check for vitals that should be removed (elderly no longer assigned)
+      for (final doc in existingVitalsQuery.docs) {
+        final data = doc.data();
+        final elderlyId = data['elderly_id'] as String?;
+        if (elderlyId != null && !elderlyToProcess.containsKey(elderlyId)) {
+          scheduleChanged = true;
+          vitalsToDelete.add(doc.id);
+          print(
+            '🗑️ Elderly $elderlyId no longer assigned - marking for deletion',
+          );
+        }
+      }
+
+      // If schedule changed, delete old pending vitals and create new ones
+      if (scheduleChanged || existingVitalsQuery.docs.isEmpty) {
+        print('🔄 Schedule changed or no vitals exist - resetting vitals...');
+
+        // Delete all pending vitals for this shift/day
+        final batch = _firestore.batch();
+        for (final doc in existingVitalsQuery.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
+        print('✅ Deleted ${existingVitalsQuery.docs.length} old vitals');
+      } else {
+        print('✅ No schedule changes detected - keeping existing vitals');
+        return; // No need to create new vitals
+      }
+
+      // 🔧 NEW: Create new vitals for all assigned elderly
+      print('➕ Creating new vitals for ${elderlyToProcess.length} elderly...');
+      int createdCount = 0;
+
       for (final entry in elderlyToProcess.entries) {
         final elderlyId = entry.key;
         final assignedNurseId = entry.value;
@@ -1344,8 +1621,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
         final elderlyData = elderlyDoc.data()!;
 
-        // Process ALL elderly regardless of house (no house filtering)
-        // Only skip if not alive
+        // Only process alive elderly
         if (elderlyData['elderly_status'] != 'Alive') {
           print(
             '⏭️ Skipping elderly $elderlyId - status is ${elderlyData['elderly_status']}',
@@ -1358,87 +1634,71 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                 .trim();
         final elderlyHouseId = elderlyData['house_id'];
 
-        print(
-          '📋 Checking assignments for: $elderlyName (House: $elderlyHouseId, Nurse: $assignedNurseId)',
-        );
-
-        // Check if vital assignment already exists for this elderly/nurse/shift/day
-        final existingVitalQuery = await _firestore
+        // Check if vitals were already completed today by ANY nurse (don't recreate if completed)
+        final completedTodayQuery = await _firestore
             .collection('vitals')
             .where('elderly_id', isEqualTo: elderlyId)
-            .where('assigned_nurse_id', isEqualTo: assignedNurseId)
             .where('assigned_date', isEqualTo: today)
-            .where('shift', isEqualTo: shift)
+            .where('status', isEqualTo: 'completed')
             .limit(1)
             .get();
 
-        // If no vital assignment exists for this nurse, check if vitals were already completed today by ANY nurse
-        if (existingVitalQuery.docs.isEmpty) {
-          final completedTodayQuery = await _firestore
-              .collection('vitals')
-              .where('elderly_id', isEqualTo: elderlyId)
-              .where('assigned_date', isEqualTo: today)
-              .where('status', isEqualTo: 'completed')
-              .limit(1)
-              .get();
-
-          if (completedTodayQuery.docs.isNotEmpty) {
-            print(
-              '⏭️ Skipping assignment creation for: $elderlyName - vitals already completed today by another nurse',
-            );
-            continue; // Skip creating new assignment
-          }
-
+        if (completedTodayQuery.docs.isNotEmpty) {
           print(
-            '➕ Creating vital assignment for: $elderlyName (House: $elderlyHouseId, Nurse: $assignedNurseId)',
+            '⏭️ Skipping assignment creation for: $elderlyName - vitals already completed today',
           );
+          continue; // Skip creating new assignment
+        }
 
-          await _firestore.collection('vitals').add({
-            // 🔧 ASSIGNMENT FIELDS (required)
-            'elderly_id': elderlyId,
-            'assigned_nurse_id': assignedNurseId,
-            'house_id': elderlyHouseId, // Use the elderly's actual house_id
-            'shift': shift,
-            'assigned_date': today,
-            'status': 'pending',
-            'created_at': FieldValue.serverTimestamp(),
+        print(
+          '➕ Creating vital assignment for: $elderlyName (House: $elderlyHouseId, Nurse: $assignedNurseId)',
+        );
 
-            // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
-            'blood_pressure': null,
-            'pulse_rate': null,
-            'oxygen_saturation': null,
-            'temperature': null,
-            'respiratory_rate': null,
+        await _firestore.collection('vitals').add({
+          // 🔧 ASSIGNMENT FIELDS (required)
+          'elderly_id': elderlyId,
+          'assigned_nurse_id': assignedNurseId,
+          'house_id': elderlyHouseId, // Use the elderly's actual house_id
+          'shift': shift,
+          'assigned_date': today,
+          'status': 'pending',
+          'created_at': FieldValue.serverTimestamp(),
 
-            // ✅ Single completion timestamp (null until completed)
-            'completed_at': null,
+          // 🔧 ULTRA CLEAN: Only essential vital fields (null until recorded)
+          'blood_pressure': null,
+          'pulse_rate': null,
+          'oxygen_saturation': null,
+          'temperature': null,
+          'respiratory_rate': null,
 
-            // ✅ Minimal tracking (null until updated)
-            'updated_by_nurse_id': null,
-          });
-          print('✅ Created vital assignment for: $elderlyName');
+          // ✅ Single completion timestamp (null until completed)
+          'completed_at': null,
 
-          // Schedule notification for the new vital task
-          final notificationTime = _getShiftStartTime(today, shift);
-          if (notificationTime != null &&
-              notificationTime.isAfter(DateTime.now())) {
-            final notificationId =
-                'vital_${elderlyId}_${today}_$shift'.hashCode;
-            NotificationService.cancelNotification(notificationId);
-            NotificationService.scheduleTaskNotification(
-              id: notificationId,
-              title: 'Vital Check Reminder',
-              body: 'Time to check vitals for $elderlyName',
-              dateTime: notificationTime,
-            );
-            print(
-              '✅ Scheduled notification for vital task: $elderlyName at $notificationTime',
-            );
-          }
-        } else {
-          print('ℹ️ Vital assignment already exists for: $elderlyName');
+          // ✅ Minimal tracking (null until updated)
+          'updated_by_nurse_id': null,
+        });
+        createdCount++;
+        print('✅ Created vital assignment for: $elderlyName');
+
+        // Schedule notification for the new vital task
+        final notificationTime = _getShiftStartTime(today, shift);
+        if (notificationTime != null &&
+            notificationTime.isAfter(DateTime.now())) {
+          final notificationId = 'vital_${elderlyId}_${today}_$shift'.hashCode;
+          NotificationService.cancelNotification(notificationId);
+          NotificationService.scheduleTaskNotification(
+            id: notificationId,
+            title: 'Vital Check Reminder',
+            body: 'Time to check vitals for $elderlyName',
+            dateTime: notificationTime,
+          );
+          print(
+            '✅ Scheduled notification for vital task: $elderlyName at $notificationTime',
+          );
         }
       }
+
+      print('✅ Created $createdCount new vital assignments for ALL houses');
 
       print('✅ All assignments verified and created for ALL houses');
     } catch (e) {

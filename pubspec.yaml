@@ -60,7 +60,7 @@ dependencies:
   permission_handler: ^11.3.1
   flutter_ringtone_player: ^4.0.0+3
   timezone: ^0.9.4
-  workmanager: ^0.6.0
+  workmanager: ^0.6.0  # Used by task_reminder_service for caregiver tasks
 
   # Firebase messaging
   firebase_messaging: ^16.0.1
@@ -72,20 +72,21 @@ dependencies:
   shared_preferences: ^2.2.3
   fl_chart: ^0.68.0
   google_mlkit_text_recognition: ^0.13.0
+  image: ^4.1.7  # For image preprocessing (contrast, brightness, grayscale)
 
 
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
- 
-
+  flutter_launcher_icons: ^0.13.1
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -128,6 +129,7 @@ flutter:
     - assets/sounds/alarm.mp3
     - assets/houses_img/
     - assets/images/birthdaybg.png
+    - assets/images/Elderlink_Logo.png
 
   fonts:
     - family: Poppins
@@ -136,8 +138,13 @@ flutter:
         - asset: assets/fonts/Poppins/Poppins-Bold.ttf
           weight: 700
 
-  
-
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/Elderlink_Logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/Elderlink_Logo.png"
+  min_sdk_android: 21
 
 
   # To add assets to your application, add an assets section, like this:

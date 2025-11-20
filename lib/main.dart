@@ -20,7 +20,7 @@ import 'providers/auth_provider.dart' as my_auth;
 import 'nurse/notification_service.dart';
 import 'services/cg_services/task_reminder_service.dart';
 import 'services/cg_services/missed_task_monitor_service.dart';
-import 'services/background_attendance_service.dart';
+import 'package:workmanager/workmanager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -566,6 +566,15 @@ void main() async {
       print('Firebase already initialized');
     }
 
+    // Cancel all old WorkManager tasks (especially background_attendance_check)
+    try {
+      print('🧹 Canceling all old WorkManager tasks...');
+      await Workmanager().cancelAll();
+      print('✅ All WorkManager tasks canceled successfully');
+    } catch (e) {
+      print('❌ Failed to cancel WorkManager tasks: $e');
+    }
+
     // Initialize task reminder service
     try {
       print('🔧 Starting TaskReminderService initialization...');
@@ -590,15 +599,7 @@ void main() async {
       print('❌ MissedTaskMonitorService failed to start: $e');
     }
 
-    // Initialize background attendance service
-    try {
-      print('🔧 Starting Background Attendance Service...');
-      await BackgroundAttendanceService.initialize();
-      print('✅ Background Attendance Service started successfully');
-    } catch (e) {
-      print('❌ Background Attendance Service failed to start: $e');
-      print('Note: Background tasks require Android API level 23 or higher');
-    }
+    // NOTE: Other services are initialized in AuthWrapper after user authentication
 
     // UNCOMMENT THE LINE BELOW TO CLEAR DATABASE AND CREATE ADMIN ACCOUNT (kung back to 002 uli increment start ng user)
     // WARNING: This will delete ALL user data!

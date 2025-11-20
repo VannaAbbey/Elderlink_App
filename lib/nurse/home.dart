@@ -19,7 +19,6 @@ import '../main.dart' as main;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
 import '../services/attendance_check_service.dart';
-import '../services/background_attendance_service.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -46,6 +45,13 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   List<Map<String, dynamic>> _todaysBirthdays = []; // Store today's birthdays
 
   late ConfettiController _confettiController;
+
+  // Real-time schedule listener
+  StreamSubscription<QuerySnapshot>? _scheduleSubscription;
+  // Real-time birthday listener
+  StreamSubscription<QuerySnapshot>? _birthdaySubscription;
+  Map<String, dynamic>? _cachedScheduleData;
+  bool _isLoadingSchedule = true;
 
   // Common task descriptions per category
   final Map<String, List<String>> _commonTaskDescriptions = {
@@ -179,8 +185,17 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       duration: const Duration(seconds: 2),
     );
     _loadHouses();
+    _initializeScheduleListener(); // Initialize real-time schedule listener
     _initializeEmergencyListener(); // Initialize emergency listener
     _initializeIncidentListener(); // Initialize incident listener
+    // Real-time birthday listener
+    _birthdaySubscription = FirebaseFirestore.instance
+        .collection('elderly')
+        .where('elderly_status', isEqualTo: 'Alive')
+        .snapshots()
+        .listen((_) {
+          _checkForBirthday();
+        });
     NotificationService.init(
       navigatorKey: main.navigatorKey,
       onNotificationTap: _handleNotificationTap,
@@ -195,16 +210,6 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         // Callback when attendance is marked
         print('✅ NURSE: Attendance marked');
       });
-
-      // Trigger immediate background check to catch users who should be marked absent
-      // This is especially useful when app is opened after the 15-minute window
-      BackgroundAttendanceService.triggerManualCheck()
-          .then((_) {
-            print('✅ NURSE: Manual background check completed');
-          })
-          .catchError((e) {
-            print('❌ NURSE: Manual background check failed: $e');
-          });
 
       // Check for pending notification payload
       final pending = NotificationService.getAndClearPendingPayload();
@@ -278,6 +283,65 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       debugPrint('✅ Cleaned up $updatedCount medication tasks');
     } catch (e) {
       debugPrint('Error cleaning up old medication tasks: $e');
+    }
+  }
+
+  /// Initialize real-time schedule listener for auto-updates
+  void _initializeScheduleListener() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) {
+        debugPrint('❌ No nurse ID found for schedule listener');
+        return;
+      }
+
+      debugPrint('🔄 Initializing schedule listener for nurse: $nurseId');
+
+      _scheduleSubscription = _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              debugPrint(
+                '📅 Schedule update received: ${snapshot.docs.length} assignments',
+              );
+
+              if (mounted) {
+                setState(() {
+                  if (snapshot.docs.isNotEmpty) {
+                    _cachedScheduleData = snapshot.docs.first.data();
+                    debugPrint(
+                      '✅ Schedule updated: ${_cachedScheduleData?['shift']}',
+                    );
+                  } else {
+                    _cachedScheduleData = null;
+                    debugPrint('⚠️ No schedule assignments found');
+                  }
+                  _isLoadingSchedule = false;
+                });
+              }
+            },
+            onError: (error) {
+              debugPrint('❌ Error in schedule listener: $error');
+              if (mounted) {
+                setState(() {
+                  _isLoadingSchedule = false;
+                });
+              }
+            },
+          );
+
+      debugPrint('✅ Schedule listener initialized successfully');
+    } catch (e) {
+      debugPrint('❌ Error initializing schedule listener: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingSchedule = false;
+        });
+      }
     }
   }
 
@@ -779,89 +843,43 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       }
       debugPrint('Birthday check: Nurse ID = $nurseId');
 
-      final currentShift = _getCurrentShift();
-      debugPrint('Birthday check: Current shift = $currentShift');
+      // 🎂 MODIFIED: Fetch ALL elderly birthdays (not just assigned ones)
+      debugPrint('Birthday check: Fetching ALL elderly birthdays...');
 
-      // Get elderly_assignments for this nurse
-      final assignQuery = await _firestore
-          .collection('elderly_assignments')
-          .where('user_id', isEqualTo: nurseId)
-          .where('user_type', isEqualTo: 'nurse')
-          .where('is_current', isEqualTo: true)
-          .where('shift', isEqualTo: currentShift)
+      // Get ALL elderly who are alive
+      final elderlyQuery = await _firestore
+          .collection('elderly')
+          .where('elderly_status', isEqualTo: 'Alive')
           .get();
 
       debugPrint(
-        'Birthday check: Found ${assignQuery.docs.length} assignment docs',
+        'Birthday check: Found ${elderlyQuery.docs.length} elderly in system',
       );
 
-      if (assignQuery.docs.isEmpty) {
-        debugPrint('Birthday check: No assignments found for nurse');
+      if (elderlyQuery.docs.isEmpty) {
+        debugPrint('Birthday check: No elderly found in system');
         setState(() => _todaysBirthdays = []);
         return;
       }
 
-      // Collect all elderly IDs
-      final Set<String> elderlyIds = {};
-      for (final doc in assignQuery.docs) {
-        final data = doc.data();
-        final ids = List<String>.from(data['elderly_ids'] ?? []);
-        elderlyIds.addAll(ids);
-        debugPrint('Birthday check: Assignment ${doc.id} has elderly: $ids');
-      }
-
-      debugPrint('Birthday check: Total elderly IDs: $elderlyIds');
-
-      if (elderlyIds.isEmpty) {
-        debugPrint('Birthday check: No elderly assigned to nurse');
-        setState(() => _todaysBirthdays = []);
-        return;
-      }
-
-      // Query elderly for birthdays in chunks of 10
+      // Check each elderly for birthday today
       final List<Map<String, dynamic>> birthdays = [];
-      final elderlyList = elderlyIds.toList();
-      for (var i = 0; i < elderlyList.length; i += 10) {
-        final end = (i + 10 < elderlyList.length) ? i + 10 : elderlyList.length;
-        final chunk = elderlyList.sublist(i, end);
+      for (final doc in elderlyQuery.docs) {
+        final data = doc.data();
+        final birthday = data['elderly_bday'] ?? data['birthdate'];
 
-        final elderlyQuery = await _firestore
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-
-        debugPrint(
-          'Birthday check: Chunk ${i ~/ 10 + 1} - Found ${elderlyQuery.docs.length} elderly docs',
-        );
-
-        for (final doc in elderlyQuery.docs) {
-          final data = doc.data();
-          final birthday = data['elderly_bday'] ?? data['birthdate'];
-          debugPrint(
-            'Birthday check: Elderly ${doc.id} - ${data['elderly_fname']} ${data['elderly_lname']}, birthday: $birthday',
-          );
-
-          if (_isBirthdayToday(birthday)) {
-            final gender = data['elderly_sex'] ?? 'male';
-            debugPrint('Birthday check: Elderly ${doc.id} gender: $gender');
-            final prefix = gender.toLowerCase().startsWith('f')
-                ? 'Lola'
-                : 'Lolo';
-            final fullName =
-                '$prefix ${data['elderly_fname']} ${data['elderly_lname']}';
-            birthdays.add({
-              'id': doc.id,
-              'name': fullName,
-              'birthday': birthday,
-            });
-            debugPrint('Birthday check: Today is $fullName\'s birthday!');
-          } else {
-            debugPrint(
-              'Birthday check: Not birthday today for ${data['elderly_fname']} ${data['elderly_lname']}',
-            );
-          }
+        if (_isBirthdayToday(birthday)) {
+          final gender = data['elderly_sex'] ?? 'male';
+          debugPrint('Birthday check: Elderly ${doc.id} gender: $gender');
+          final prefix = gender.toLowerCase().startsWith('f') ? 'Lola' : 'Lolo';
+          final fullName =
+              '$prefix ${data['elderly_fname']} ${data['elderly_lname']}';
+          birthdays.add({'id': doc.id, 'name': fullName, 'birthday': birthday});
+          debugPrint('Birthday check: Today is $fullName\'s birthday!');
         }
       }
+
+      debugPrint('Birthday check: Found ${birthdays.length} birthdays today');
 
       setState(() => _todaysBirthdays = birthdays);
       if (birthdays.isNotEmpty) {
@@ -991,7 +1009,7 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                       const Text('🎂🍰🎈🎉🎊', style: TextStyle(fontSize: 24)),
                       const SizedBox(height: 20),
                       // Button
-                      Container(
+                      SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
                           onPressed: () async {
@@ -1253,14 +1271,11 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
       final nurseId = await _getNurseIdFromAuth();
       if (nurseId == null) return null;
 
-      final currentShift = _getCurrentShift();
-
       final shiftQuery = await _firestore
           .collection('house_shift_assignments')
           .where('user_id', isEqualTo: nurseId)
           .where('user_type', isEqualTo: 'nurse')
           .where('is_current', isEqualTo: true)
-          .where('shift', isEqualTo: currentShift)
           .get();
 
       if (shiftQuery.docs.isNotEmpty) {
@@ -1333,8 +1348,14 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   }
 
   @override
+  @override
+  @override
   void dispose() {
     _confettiController.dispose();
+    // Cancel schedule listener
+    _scheduleSubscription?.cancel();
+    // Cancel birthday listener
+    _birthdaySubscription?.cancel();
     // Stop the periodic attendance check timer
     AttendanceCheckService.stopPeriodicAttendanceCheck();
     super.dispose();
@@ -1437,161 +1458,69 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                   ),
                                   const SizedBox(height: 15),
 
-                                  FutureBuilder<Map<String, dynamic>?>(
-                                    future: getCaregiverStatus(),
-                                    builder: (context, snapshot) {
-                                      if (snapshot.connectionState ==
-                                          ConnectionState.waiting) {
-                                        return const Center(
+                                  // Use cached schedule data instead of FutureBuilder
+                                  _isLoadingSchedule
+                                      ? const Center(
                                           child: CircularProgressIndicator(),
-                                        );
-                                      }
+                                        )
+                                      : Builder(
+                                          builder: (context) {
+                                            final statusData =
+                                                _cachedScheduleData;
+                                            final daysAssigned =
+                                                statusData?['days_assigned']
+                                                    as List<dynamic>? ??
+                                                [];
 
-                                      final statusData = snapshot.data;
-                                      final daysAssigned =
-                                          statusData?['days_assigned']
-                                              as List<dynamic>? ??
-                                          [];
+                                            // Handle shift field - could be String or Map
+                                            final shiftData =
+                                                statusData?['shift'];
+                                            final shift = shiftData is String
+                                                ? shiftData
+                                                : shiftData
+                                                      is Map<String, dynamic>
+                                                ? (shiftData['name'] ??
+                                                      shiftData['shift_name'] ??
+                                                      'Not assigned')
+                                                : 'Not assigned';
 
-                                      // Handle shift field - could be String or Map
-                                      final shiftData = statusData?['shift'];
-                                      final shift = shiftData is String
-                                          ? shiftData
-                                          : shiftData is Map<String, dynamic>
-                                          ? (shiftData['name'] ??
-                                                shiftData['shift_name'] ??
-                                                'Not assigned')
-                                          : 'Not assigned';
+                                            // Handle start_time and end_time fields (NEW structure)
+                                            final startTime =
+                                                statusData?['start_time']
+                                                    as String? ??
+                                                '';
+                                            final endTime =
+                                                statusData?['end_time']
+                                                    as String? ??
+                                                '';
 
-                                      // Handle start_time and end_time fields (NEW structure)
-                                      final startTime =
-                                          statusData?['start_time']
-                                              as String? ??
-                                          '';
-                                      final endTime =
-                                          statusData?['end_time'] as String? ??
-                                          '';
+                                            final timeRange =
+                                                (startTime.isNotEmpty &&
+                                                    endTime.isNotEmpty)
+                                                ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
+                                                : 'Not specified';
 
-                                      final timeRange =
-                                          (startTime.isNotEmpty &&
-                                              endTime.isNotEmpty)
-                                          ? '${_convertTo12HourFormat(startTime)} - ${_convertTo12HourFormat(endTime)}'
-                                          : 'Not specified';
-
-                                      return Column(
-                                        children: [
-                                          // Current Work Schedule
-                                          Container(
-                                            padding: const EdgeInsets.all(16),
-                                            decoration: BoxDecoration(
-                                              color: Color(0xFFB7DDF5),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
+                                            return Column(
                                               children: [
-                                                const Text(
-                                                  'Current Work Schedule',
-                                                  style: TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Color(0xFF00588E),
+                                                // Current Work Schedule
+                                                Container(
+                                                  padding: const EdgeInsets.all(
+                                                    16,
                                                   ),
-                                                ),
-                                                const SizedBox(height: 15),
-                                                Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceEvenly,
-                                                  children: [
-                                                    for (int i = 0; i < 7; i++)
-                                                      Column(
-                                                        children: [
-                                                          Container(
-                                                            width: 32,
-                                                            height: 32,
-                                                            decoration: BoxDecoration(
-                                                              shape: BoxShape
-                                                                  .circle,
-                                                              color:
-                                                                  daysAssigned.contains(
-                                                                    [
-                                                                      'Sunday',
-                                                                      'Monday',
-                                                                      'Tuesday',
-                                                                      'Wednesday',
-                                                                      'Thursday',
-                                                                      'Friday',
-                                                                      'Saturday',
-                                                                    ][i],
-                                                                  )
-                                                                  ? Color(
-                                                                      0xFF00588E,
-                                                                    )
-                                                                  : Colors
-                                                                        .grey
-                                                                        .shade300,
-                                                            ),
-                                                          ),
-                                                          const SizedBox(
-                                                            height: 4,
-                                                          ),
-                                                          Text(
-                                                            [
-                                                              'Sun',
-                                                              'Mon',
-                                                              'Tue',
-                                                              'Wed',
-                                                              'Thu',
-                                                              'Fri',
-                                                              'Sat',
-                                                            ][i],
-                                                            style: TextStyle(
-                                                              fontSize: 12,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w500,
-                                                              color: Color(
-                                                                0xFF00588E,
-                                                              ),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                  ],
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-
-                                          const SizedBox(height: 15),
-
-                                          // Current Shift Schedule
-                                          Container(
-                                            padding: const EdgeInsets.all(16),
-                                            decoration: BoxDecoration(
-                                              color: Color(0xFFB7DDF5),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                const Icon(
-                                                  Icons.access_time,
-                                                  color: Color(0xFF00588E),
-                                                  size: 70,
-                                                ),
-                                                const SizedBox(width: 20),
-                                                Expanded(
+                                                  decoration: BoxDecoration(
+                                                    color: Color(0xFFB7DDF5),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                  ),
                                                   child: Column(
                                                     crossAxisAlignment:
                                                         CrossAxisAlignment
-                                                            .center,
+                                                            .start,
                                                     children: [
                                                       const Text(
-                                                        'Current Shift Schedule',
+                                                        'Current Work Schedule',
                                                         style: TextStyle(
                                                           fontSize: 16,
                                                           fontWeight:
@@ -1600,555 +1529,744 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                                                             0xFF00588E,
                                                           ),
                                                         ),
-                                                        textAlign:
-                                                            TextAlign.center,
                                                       ),
-                                                      const SizedBox(height: 8),
-                                                      Text(
-                                                        '${shift.toUpperCase()} SHIFT',
-                                                        style: TextStyle(
-                                                          fontSize: 24,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          color: Color(
-                                                            0xFF00588E,
-                                                          ),
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
+                                                      const SizedBox(
+                                                        height: 15,
                                                       ),
-                                                      const SizedBox(height: 6),
-                                                      Text(
-                                                        timeRange,
-                                                        style: TextStyle(
-                                                          fontSize: 18,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          color: Color(
-                                                            0xFF00588E,
-                                                          ),
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
+                                                      Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .spaceEvenly,
+                                                        children: [
+                                                          for (
+                                                            int i = 0;
+                                                            i < 7;
+                                                            i++
+                                                          )
+                                                            Column(
+                                                              children: [
+                                                                Container(
+                                                                  width: 32,
+                                                                  height: 32,
+                                                                  decoration: BoxDecoration(
+                                                                    shape: BoxShape
+                                                                        .circle,
+                                                                    color:
+                                                                        daysAssigned.contains(
+                                                                          [
+                                                                            'Sunday',
+                                                                            'Monday',
+                                                                            'Tuesday',
+                                                                            'Wednesday',
+                                                                            'Thursday',
+                                                                            'Friday',
+                                                                            'Saturday',
+                                                                          ][i],
+                                                                        )
+                                                                        ? Color(
+                                                                            0xFF00588E,
+                                                                          )
+                                                                        : Colors
+                                                                              .grey
+                                                                              .shade300,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(
+                                                                  height: 4,
+                                                                ),
+                                                                Text(
+                                                                  [
+                                                                    'Sun',
+                                                                    'Mon',
+                                                                    'Tue',
+                                                                    'Wed',
+                                                                    'Thu',
+                                                                    'Fri',
+                                                                    'Sat',
+                                                                  ][i],
+                                                                  style: TextStyle(
+                                                                    fontSize:
+                                                                        12,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w500,
+                                                                    color: Color(
+                                                                      0xFF00588E,
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                        ],
                                                       ),
                                                     ],
                                                   ),
                                                 ),
-                                              ],
-                                            ),
-                                          ),
 
-                                          const SizedBox(height: 15),
+                                                const SizedBox(height: 15),
 
-                                          // Absence Status & Temporary Assignments
-                                          Consumer<AbsenceProvider>(
-                                            builder: (context, absenceProvider, child) {
-                                              // Show absence status if absent
-                                              if (absenceProvider
-                                                  .isAbsentToday) {
-                                                return Container(
+                                                // Current Shift Schedule
+                                                Container(
                                                   padding: const EdgeInsets.all(
                                                     16,
                                                   ),
                                                   decoration: BoxDecoration(
-                                                    color: Colors.orange[100],
+                                                    color: Color(0xFFB7DDF5),
                                                     borderRadius:
                                                         BorderRadius.circular(
                                                           12,
                                                         ),
-                                                    border: Border.all(
-                                                      color: Colors.orange,
-                                                      width: 2,
-                                                    ),
                                                   ),
                                                   child: Row(
                                                     children: [
-                                                      Icon(
-                                                        absenceProvider
-                                                                    .absenceType ==
-                                                                'leave'
-                                                            ? Icons.event_busy
-                                                            : Icons
-                                                                  .cancel_outlined,
-                                                        color: Colors.orange,
-                                                        size: 40,
+                                                      const Icon(
+                                                        Icons.access_time,
+                                                        color: Color(
+                                                          0xFF00588E,
+                                                        ),
+                                                        size: 70,
                                                       ),
-                                                      const SizedBox(width: 12),
+                                                      const SizedBox(width: 20),
                                                       Expanded(
                                                         child: Column(
                                                           crossAxisAlignment:
                                                               CrossAxisAlignment
-                                                                  .start,
-                                                          children: const [
-                                                            Text(
-                                                              'Not Present at Work',
+                                                                  .center,
+                                                          children: [
+                                                            const Text(
+                                                              'Current Shift Schedule',
                                                               style: TextStyle(
                                                                 fontSize: 16,
                                                                 fontWeight:
                                                                     FontWeight
                                                                         .bold,
-                                                                color: Colors
-                                                                    .black87,
+                                                                color: Color(
+                                                                  0xFF00588E,
+                                                                ),
                                                               ),
+                                                              textAlign:
+                                                                  TextAlign
+                                                                      .center,
                                                             ),
-                                                            SizedBox(height: 4),
+                                                            const SizedBox(
+                                                              height: 8,
+                                                            ),
                                                             Text(
-                                                              'You are marked absent/on leave for today',
+                                                              '${shift.toUpperCase()} SHIFT',
                                                               style: TextStyle(
-                                                                fontSize: 14,
-                                                                color: Colors
-                                                                    .black54,
+                                                                fontSize: 24,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Color(
+                                                                  0xFF00588E,
+                                                                ),
                                                               ),
+                                                              textAlign:
+                                                                  TextAlign
+                                                                      .center,
+                                                            ),
+                                                            const SizedBox(
+                                                              height: 6,
+                                                            ),
+                                                            Text(
+                                                              timeRange,
+                                                              style: TextStyle(
+                                                                fontSize: 18,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                                color: Color(
+                                                                  0xFF00588E,
+                                                                ),
+                                                              ),
+                                                              textAlign:
+                                                                  TextAlign
+                                                                      .center,
                                                             ),
                                                           ],
                                                         ),
                                                       ),
                                                     ],
                                                   ),
-                                                );
-                                              }
+                                                ),
 
-                                              // Show temporary assignments if any
-                                              final tempCount = absenceProvider
-                                                  .temporaryElderlyIds
-                                                  .length;
-                                              print(
-                                                '🏠 Nurse Home.dart: Temporary elderly count = $tempCount',
-                                              );
-                                              print(
-                                                '🏠 Nurse Home.dart: hasTemporaryAssignments = ${absenceProvider.hasTemporaryAssignments}',
-                                              );
+                                                const SizedBox(height: 15),
 
-                                              if (absenceProvider
-                                                      .hasTemporaryAssignments &&
-                                                  tempCount > 0) {
-                                                return Container(
-                                                  padding: const EdgeInsets.all(
-                                                    16,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.blue[50],
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: Colors.blue,
-                                                      width: 2,
-                                                    ),
-                                                  ),
-                                                  child: Row(
-                                                    children: [
-                                                      const Icon(
-                                                        Icons.people,
-                                                        color: Colors.blue,
-                                                        size: 40,
-                                                      ),
-                                                      const SizedBox(width: 12),
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            const Text(
-                                                              'Temporary Assignments',
-                                                              style: TextStyle(
-                                                                fontSize: 16,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                color: Colors
-                                                                    .black87,
+                                                // Absence Status & Temporary Assignments
+                                                Consumer<AbsenceProvider>(
+                                                  builder: (context, absenceProvider, child) {
+                                                    // Show absence status if absent
+                                                    if (absenceProvider
+                                                        .isAbsentToday) {
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              16,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors
+                                                              .orange[100],
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
                                                               ),
+                                                          border: Border.all(
+                                                            color:
+                                                                Colors.orange,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          children: [
+                                                            Icon(
+                                                              absenceProvider
+                                                                          .absenceType ==
+                                                                      'leave'
+                                                                  ? Icons
+                                                                        .event_busy
+                                                                  : Icons
+                                                                        .cancel_outlined,
+                                                              color:
+                                                                  Colors.orange,
+                                                              size: 40,
                                                             ),
                                                             const SizedBox(
-                                                              height: 4,
+                                                              width: 12,
                                                             ),
-                                                            Text(
-                                                              'You have $tempCount temporary ${tempCount == 1 ? 'assignment' : 'assignments'} today',
-                                                              style:
-                                                                  const TextStyle(
+                                                            Expanded(
+                                                              child: Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: const [
+                                                                  Text(
+                                                                    'Not Present at Work',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: Colors
+                                                                          .black87,
+                                                                    ),
+                                                                  ),
+                                                                  SizedBox(
+                                                                    height: 4,
+                                                                  ),
+                                                                  Text(
+                                                                    'You are marked absent/on leave for today',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          14,
+                                                                      color: Colors
+                                                                          .black54,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    }
+
+                                                    // Show temporary assignments if any
+                                                    final tempCount =
+                                                        absenceProvider
+                                                            .temporaryElderlyIds
+                                                            .length;
+                                                    print(
+                                                      '🏠 Nurse Home.dart: Temporary elderly count = $tempCount',
+                                                    );
+                                                    print(
+                                                      '🏠 Nurse Home.dart: hasTemporaryAssignments = ${absenceProvider.hasTemporaryAssignments}',
+                                                    );
+
+                                                    if (absenceProvider
+                                                            .hasTemporaryAssignments &&
+                                                        tempCount > 0) {
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              16,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              Colors.blue[50],
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                          border: Border.all(
+                                                            color: Colors.blue,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          children: [
+                                                            const Icon(
+                                                              Icons.people,
+                                                              color:
+                                                                  Colors.blue,
+                                                              size: 40,
+                                                            ),
+                                                            const SizedBox(
+                                                              width: 12,
+                                                            ),
+                                                            Expanded(
+                                                              child: Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  const Text(
+                                                                    'Temporary Assignments',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: Colors
+                                                                          .black87,
+                                                                    ),
+                                                                  ),
+                                                                  const SizedBox(
+                                                                    height: 4,
+                                                                  ),
+                                                                  Text(
+                                                                    'You have $tempCount temporary ${tempCount == 1 ? 'assignment' : 'assignments'} today',
+                                                                    style: const TextStyle(
+                                                                      fontSize:
+                                                                          14,
+                                                                      color: Colors
+                                                                          .black54,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    }
+
+                                                    // Check if nurse is scheduled for today
+                                                    final now = DateTime.now();
+                                                    final daysOfWeek = [
+                                                      'Sunday',
+                                                      'Monday',
+                                                      'Tuesday',
+                                                      'Wednesday',
+                                                      'Thursday',
+                                                      'Friday',
+                                                      'Saturday',
+                                                    ];
+                                                    final todayName =
+                                                        daysOfWeek[now.weekday %
+                                                            7]; // Convert weekday to day name
+                                                    final isScheduledToday =
+                                                        daysAssigned.contains(
+                                                          todayName,
+                                                        );
+
+                                                    // Show not on duty status if not scheduled for today
+                                                    if (!isScheduledToday) {
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              16,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.red[50],
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                          border: Border.all(
+                                                            color: Colors.red,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          children: const [
+                                                            Icon(
+                                                              Icons.event_busy,
+                                                              color: Colors.red,
+                                                              size: 40,
+                                                            ),
+                                                            SizedBox(width: 12),
+                                                            Expanded(
+                                                              child: Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  Text(
+                                                                    'Not On Duty',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: Colors
+                                                                          .black87,
+                                                                    ),
+                                                                  ),
+                                                                  SizedBox(
+                                                                    height: 4,
+                                                                  ),
+                                                                  Text(
+                                                                    'You are not on duty for today',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          14,
+                                                                      color: Colors
+                                                                          .black54,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    }
+
+                                                    // Check if shift has started or ended
+                                                    bool shiftNotStarted =
+                                                        false;
+                                                    bool shiftEnded = false;
+
+                                                    if (startTime.isNotEmpty &&
+                                                        endTime.isNotEmpty) {
+                                                      try {
+                                                        final now =
+                                                            DateTime.now();
+
+                                                        // Parse shift times
+                                                        final startParts =
+                                                            startTime.split(
+                                                              ':',
+                                                            );
+                                                        final shiftStartHour =
+                                                            int.parse(
+                                                              startParts[0],
+                                                            );
+                                                        final shiftStartMinute =
+                                                            int.parse(
+                                                              startParts[1],
+                                                            );
+
+                                                        final endParts = endTime
+                                                            .split(':');
+                                                        final shiftEndHour =
+                                                            int.parse(
+                                                              endParts[0],
+                                                            );
+                                                        final shiftEndMinute =
+                                                            int.parse(
+                                                              endParts[1],
+                                                            );
+
+                                                        DateTime
+                                                        shiftStartDateTime =
+                                                            DateTime(
+                                                              now.year,
+                                                              now.month,
+                                                              now.day,
+                                                              shiftStartHour,
+                                                              shiftStartMinute,
+                                                            );
+
+                                                        DateTime
+                                                        shiftEndDateTime =
+                                                            DateTime(
+                                                              now.year,
+                                                              now.month,
+                                                              now.day,
+                                                              shiftEndHour,
+                                                              shiftEndMinute,
+                                                            );
+
+                                                        // Determine if it's an overnight shift
+                                                        final isOvernightShift =
+                                                            shiftEndHour <
+                                                                shiftStartHour ||
+                                                            (shiftEndHour ==
+                                                                    shiftStartHour &&
+                                                                shiftEndMinute <=
+                                                                    shiftStartMinute);
+
+                                                        if (isOvernightShift) {
+                                                          // Overnight shift logic (e.g., 3rd shift: 10 PM - 6 AM)
+                                                          if (now.hour <
+                                                                  shiftEndHour ||
+                                                              (now.hour ==
+                                                                      shiftEndHour &&
+                                                                  now.minute <
+                                                                      shiftEndMinute)) {
+                                                            // Current time is in the "end period" (before shift end) - shift is active
+                                                            shiftNotStarted =
+                                                                false;
+                                                            shiftEnded = false;
+                                                          } else if (now.hour >=
+                                                                  shiftStartHour ||
+                                                              (now.hour ==
+                                                                      shiftStartHour &&
+                                                                  now.minute >=
+                                                                      shiftStartMinute)) {
+                                                            // Current time is in the "start period" (after shift start) - shift is active
+                                                            shiftNotStarted =
+                                                                false;
+                                                            shiftEnded = false;
+                                                          } else {
+                                                            // Time is between end and start
+                                                            // Check if we're before start or after end
+                                                            if (now.hour <
+                                                                shiftStartHour) {
+                                                              shiftNotStarted =
+                                                                  true;
+                                                              shiftEnded =
+                                                                  false;
+                                                            } else {
+                                                              shiftNotStarted =
+                                                                  false;
+                                                              shiftEnded = true;
+                                                            }
+                                                          }
+                                                        } else {
+                                                          // Regular shift (not overnight)
+                                                          if (now.isBefore(
+                                                            shiftStartDateTime,
+                                                          )) {
+                                                            shiftNotStarted =
+                                                                true;
+                                                            shiftEnded = false;
+                                                          } else if (now.isAfter(
+                                                            shiftEndDateTime,
+                                                          )) {
+                                                            shiftNotStarted =
+                                                                false;
+                                                            shiftEnded = true;
+                                                          } else {
+                                                            // Currently within shift hours
+                                                            shiftNotStarted =
+                                                                false;
+                                                            shiftEnded = false;
+                                                          }
+                                                        }
+                                                      } catch (e) {
+                                                        print(
+                                                          'Error checking shift times: $e',
+                                                        );
+                                                        shiftNotStarted = false;
+                                                        shiftEnded = false;
+                                                      }
+                                                    }
+
+                                                    // Show shift not started status
+                                                    if (shiftNotStarted) {
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              16,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              Colors.amber[50],
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                          border: Border.all(
+                                                            color: Colors.amber,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          children: const [
+                                                            Icon(
+                                                              Icons.schedule,
+                                                              color:
+                                                                  Colors.amber,
+                                                              size: 40,
+                                                            ),
+                                                            SizedBox(width: 12),
+                                                            Expanded(
+                                                              child: Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  Text(
+                                                                    'Shift Not Started',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: Colors
+                                                                          .black87,
+                                                                    ),
+                                                                  ),
+                                                                  SizedBox(
+                                                                    height: 4,
+                                                                  ),
+                                                                  Text(
+                                                                    'Your shift hasn\'t started yet for today',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          14,
+                                                                      color: Colors
+                                                                          .black54,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    }
+
+                                                    // Show shift ended status
+                                                    if (shiftEnded) {
+                                                      return Container(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              16,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              Colors.grey[200],
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                          border: Border.all(
+                                                            color: Colors.grey,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          children: const [
+                                                            Icon(
+                                                              Icons.work_off,
+                                                              color:
+                                                                  Colors.grey,
+                                                              size: 40,
+                                                            ),
+                                                            SizedBox(width: 12),
+                                                            Expanded(
+                                                              child: Column(
+                                                                crossAxisAlignment:
+                                                                    CrossAxisAlignment
+                                                                        .start,
+                                                                children: [
+                                                                  Text(
+                                                                    'Shift Ended',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          16,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: Colors
+                                                                          .black87,
+                                                                    ),
+                                                                  ),
+                                                                  SizedBox(
+                                                                    height: 4,
+                                                                  ),
+                                                                  Text(
+                                                                    'Your shift has ended for today',
+                                                                    style: TextStyle(
+                                                                      fontSize:
+                                                                          14,
+                                                                      color: Colors
+                                                                          .black54,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                    }
+
+                                                    // Show normal status (on duty)
+                                                    return Container(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                            16,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.green[50],
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              12,
+                                                            ),
+                                                        border: Border.all(
+                                                          color: Colors.green,
+                                                          width: 2,
+                                                        ),
+                                                      ),
+                                                      child: Row(
+                                                        children: const [
+                                                          Icon(
+                                                            Icons.check_circle,
+                                                            color: Colors.green,
+                                                            size: 40,
+                                                          ),
+                                                          SizedBox(width: 12),
+                                                          Expanded(
+                                                            child: Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .start,
+                                                              children: [
+                                                                Text(
+                                                                  'On Duty',
+                                                                  style: TextStyle(
+                                                                    fontSize:
+                                                                        16,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .bold,
+                                                                    color: Colors
+                                                                        .black87,
+                                                                  ),
+                                                                ),
+                                                                SizedBox(
+                                                                  height: 4,
+                                                                ),
+                                                                Text(
+                                                                  'You are on duty today',
+                                                                  style: TextStyle(
                                                                     fontSize:
                                                                         14,
                                                                     color: Colors
                                                                         .black54,
                                                                   ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                );
-                                              }
-
-                                              // Check if nurse is scheduled for today
-                                              final now = DateTime.now();
-                                              final daysOfWeek = [
-                                                'Sunday',
-                                                'Monday',
-                                                'Tuesday',
-                                                'Wednesday',
-                                                'Thursday',
-                                                'Friday',
-                                                'Saturday',
-                                              ];
-                                              final todayName =
-                                                  daysOfWeek[now.weekday %
-                                                      7]; // Convert weekday to day name
-                                              final isScheduledToday =
-                                                  daysAssigned.contains(
-                                                    todayName,
-                                                  );
-
-                                              // Show not on duty status if not scheduled for today
-                                              if (!isScheduledToday) {
-                                                return Container(
-                                                  padding: const EdgeInsets.all(
-                                                    16,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.red[50],
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: Colors.red,
-                                                      width: 2,
-                                                    ),
-                                                  ),
-                                                  child: Row(
-                                                    children: const [
-                                                      Icon(
-                                                        Icons.event_busy,
-                                                        color: Colors.red,
-                                                        size: 40,
-                                                      ),
-                                                      SizedBox(width: 12),
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Text(
-                                                              'Not On Duty',
-                                                              style: TextStyle(
-                                                                fontSize: 16,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                color: Colors
-                                                                    .black87,
-                                                              ),
-                                                            ),
-                                                            SizedBox(height: 4),
-                                                            Text(
-                                                              'You are not on duty for today',
-                                                              style: TextStyle(
-                                                                fontSize: 14,
-                                                                color: Colors
-                                                                    .black54,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                );
-                                              }
-
-                                              // Check if shift has started or ended
-                                              bool shiftNotStarted = false;
-                                              bool shiftEnded = false;
-
-                                              if (startTime.isNotEmpty &&
-                                                  endTime.isNotEmpty) {
-                                                try {
-                                                  final now = DateTime.now();
-
-                                                  // Parse shift times
-                                                  final startParts = startTime
-                                                      .split(':');
-                                                  final shiftStartHour =
-                                                      int.parse(startParts[0]);
-                                                  final shiftStartMinute =
-                                                      int.parse(startParts[1]);
-
-                                                  final endParts = endTime
-                                                      .split(':');
-                                                  final shiftEndHour =
-                                                      int.parse(endParts[0]);
-                                                  final shiftEndMinute =
-                                                      int.parse(endParts[1]);
-
-                                                  DateTime shiftStartDateTime =
-                                                      DateTime(
-                                                        now.year,
-                                                        now.month,
-                                                        now.day,
-                                                        shiftStartHour,
-                                                        shiftStartMinute,
-                                                      );
-
-                                                  DateTime shiftEndDateTime =
-                                                      DateTime(
-                                                        now.year,
-                                                        now.month,
-                                                        now.day,
-                                                        shiftEndHour,
-                                                        shiftEndMinute,
-                                                      );
-
-                                                  // Determine if it's an overnight shift
-                                                  final isOvernightShift =
-                                                      shiftEndHour <
-                                                          shiftStartHour ||
-                                                      (shiftEndHour ==
-                                                              shiftStartHour &&
-                                                          shiftEndMinute <=
-                                                              shiftStartMinute);
-
-                                                  if (isOvernightShift) {
-                                                    // Overnight shift logic (e.g., 3rd shift: 10 PM - 6 AM)
-                                                    if (now.hour <
-                                                            shiftEndHour ||
-                                                        (now.hour ==
-                                                                shiftEndHour &&
-                                                            now.minute <
-                                                                shiftEndMinute)) {
-                                                      // Current time is in the "end period" (before shift end) - shift is active
-                                                      shiftNotStarted = false;
-                                                      shiftEnded = false;
-                                                    } else if (now.hour >=
-                                                            shiftStartHour ||
-                                                        (now.hour ==
-                                                                shiftStartHour &&
-                                                            now.minute >=
-                                                                shiftStartMinute)) {
-                                                      // Current time is in the "start period" (after shift start) - shift is active
-                                                      shiftNotStarted = false;
-                                                      shiftEnded = false;
-                                                    } else {
-                                                      // Time is between end and start
-                                                      // Check if we're before start or after end
-                                                      if (now.hour <
-                                                          shiftStartHour) {
-                                                        shiftNotStarted = true;
-                                                        shiftEnded = false;
-                                                      } else {
-                                                        shiftNotStarted = false;
-                                                        shiftEnded = true;
-                                                      }
-                                                    }
-                                                  } else {
-                                                    // Regular shift (not overnight)
-                                                    if (now.isBefore(
-                                                      shiftStartDateTime,
-                                                    )) {
-                                                      shiftNotStarted = true;
-                                                      shiftEnded = false;
-                                                    } else if (now.isAfter(
-                                                      shiftEndDateTime,
-                                                    )) {
-                                                      shiftNotStarted = false;
-                                                      shiftEnded = true;
-                                                    } else {
-                                                      // Currently within shift hours
-                                                      shiftNotStarted = false;
-                                                      shiftEnded = false;
-                                                    }
-                                                  }
-                                                } catch (e) {
-                                                  print(
-                                                    'Error checking shift times: $e',
-                                                  );
-                                                  shiftNotStarted = false;
-                                                  shiftEnded = false;
-                                                }
-                                              }
-
-                                              // Show shift not started status
-                                              if (shiftNotStarted) {
-                                                return Container(
-                                                  padding: const EdgeInsets.all(
-                                                    16,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.amber[50],
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: Colors.amber,
-                                                      width: 2,
-                                                    ),
-                                                  ),
-                                                  child: Row(
-                                                    children: const [
-                                                      Icon(
-                                                        Icons.schedule,
-                                                        color: Colors.amber,
-                                                        size: 40,
-                                                      ),
-                                                      SizedBox(width: 12),
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Text(
-                                                              'Shift Not Started',
-                                                              style: TextStyle(
-                                                                fontSize: 16,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                color: Colors
-                                                                    .black87,
-                                                              ),
-                                                            ),
-                                                            SizedBox(height: 4),
-                                                            Text(
-                                                              'Your shift hasn\'t started yet for today',
-                                                              style: TextStyle(
-                                                                fontSize: 14,
-                                                                color: Colors
-                                                                    .black54,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                );
-                                              }
-
-                                              // Show shift ended status
-                                              if (shiftEnded) {
-                                                return Container(
-                                                  padding: const EdgeInsets.all(
-                                                    16,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.grey[200],
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: Colors.grey,
-                                                      width: 2,
-                                                    ),
-                                                  ),
-                                                  child: Row(
-                                                    children: const [
-                                                      Icon(
-                                                        Icons.work_off,
-                                                        color: Colors.grey,
-                                                        size: 40,
-                                                      ),
-                                                      SizedBox(width: 12),
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Text(
-                                                              'Shift Ended',
-                                                              style: TextStyle(
-                                                                fontSize: 16,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                color: Colors
-                                                                    .black87,
-                                                              ),
-                                                            ),
-                                                            SizedBox(height: 4),
-                                                            Text(
-                                                              'Your shift has ended for today',
-                                                              style: TextStyle(
-                                                                fontSize: 14,
-                                                                color: Colors
-                                                                    .black54,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                );
-                                              }
-
-                                              // Show normal status (on duty)
-                                              return Container(
-                                                padding: const EdgeInsets.all(
-                                                  16,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.green[50],
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  border: Border.all(
-                                                    color: Colors.green,
-                                                    width: 2,
-                                                  ),
-                                                ),
-                                                child: Row(
-                                                  children: const [
-                                                    Icon(
-                                                      Icons.check_circle,
-                                                      color: Colors.green,
-                                                      size: 40,
-                                                    ),
-                                                    SizedBox(width: 12),
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          Text(
-                                                            'On Duty',
-                                                            style: TextStyle(
-                                                              fontSize: 16,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              color: Colors
-                                                                  .black87,
-                                                            ),
-                                                          ),
-                                                          SizedBox(height: 4),
-                                                          Text(
-                                                            'You are on duty today',
-                                                            style: TextStyle(
-                                                              fontSize: 14,
-                                                              color: Colors
-                                                                  .black54,
+                                                                ),
+                                                              ],
                                                             ),
                                                           ),
                                                         ],
                                                       ),
-                                                    ),
-                                                  ],
+                                                    );
+                                                  },
                                                 ),
-                                              );
-                                            },
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
+                                              ],
+                                            );
+                                          },
+                                        ),
                                 ],
                               ),
                             ),
@@ -2297,19 +2415,17 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
           ),
           const SizedBox(height: 10),
           const SizedBox(height: 10),
-          // Tasks list
+          // Tasks list - filtered by nurse's assigned elderly
           Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: 2,
               vertical: 8,
             ), // Reduced horizontal padding for wider cards
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('medical_tasks')
-                  .orderBy('task_start')
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+            child: FutureBuilder<Set<String>>(
+              future: _getNurseAssignedElderlyIds(),
+              builder: (context, elderlySnapshot) {
+                if (elderlySnapshot.connectionState ==
+                    ConnectionState.waiting) {
                   return const Center(
                     child: Padding(
                       padding: EdgeInsets.all(20),
@@ -2318,221 +2434,308 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                   );
                 }
 
-                final List<Map<String, dynamic>> tasks =
-                    snapshot.hasData && snapshot.data!.docs.isNotEmpty
-                    ? snapshot.data!.docs.map((doc) {
-                        final task = doc.data() as Map<String, dynamic>;
-                        task['task_id'] = doc.id; // assign doc ID
-                        return task;
-                      }).toList()
-                    : [];
+                final assignedElderlyIds = elderlySnapshot.data ?? {};
 
-                // Store current tasks for See All functionality
-                _currentTasks = tasks;
-
-                // Filter tasks for today and tomorrow (only future tasks)
-                final filteredTasks = tasks.where((task) {
-                  final start = task['task_start'] != null
-                      ? (task['task_start'] as Timestamp).toDate()
-                      : DateTime.now();
-                  final taskDaysRaw = task['days'];
-                  final taskDays = taskDaysRaw is List
-                      ? List<String>.from(taskDaysRaw)
-                      : [];
-                  final frequency = task['task_frequency'] ?? 'Once';
-                  final now = DateTime.now();
-                  final todayStart = DateTime(now.year, now.month, now.day);
-                  final tomorrowStart = todayStart.add(const Duration(days: 1));
-                  final dayAfterTomorrowStart = tomorrowStart.add(
-                    const Duration(days: 1),
+                if (assignedElderlyIds.isEmpty) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Text(
+                        "No elderly assigned to you.",
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.black,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   );
-                  if (frequency == 'Every Assigned Days') {
-                    // Find the next scheduled day
-                    DateTime nextScheduledDate = now;
-                    for (int i = 0; i < 7; i++) {
-                      final date = now.add(Duration(days: i));
-                      final dayName = DateFormat('EEEE').format(date);
-                      if (taskDays.contains(dayName)) {
-                        nextScheduledDate = date;
-                        break;
-                      }
-                    }
-                    // Show if the next scheduled day is today or tomorrow
-                    final nextDateStart = DateTime(
-                      nextScheduledDate.year,
-                      nextScheduledDate.month,
-                      nextScheduledDate.day,
-                    );
-                    return nextDateStart == todayStart ||
-                        nextDateStart == tomorrowStart;
-                  } else {
-                    // For 'Once', only show if the task start is in the future and within tomorrow
-                    return start.isAfter(now) &&
-                        start.isBefore(dayAfterTomorrowStart);
-                  }
-                }).toList();
+                }
 
-                debugPrint(
-                  'Total tasks: ${tasks.length}, Filtered tasks: ${filteredTasks.length}',
-                );
-
-                return Column(
-                  children: [
-                    if (snapshot.connectionState == ConnectionState.waiting)
-                      const Center(
+                return StreamBuilder<QuerySnapshot>(
+                  stream: _firestore
+                      .collection('medical_tasks')
+                      .orderBy('task_start')
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
                         child: Padding(
                           padding: EdgeInsets.all(20),
                           child: CircularProgressIndicator(),
                         ),
-                      )
-                    else if (filteredTasks.isEmpty)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Text(
-                            "No medical task available.",
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.black,
-                              fontWeight: FontWeight.w500,
+                      );
+                    }
+
+                    final List<Map<String, dynamic>> tasks =
+                        snapshot.hasData && snapshot.data!.docs.isNotEmpty
+                        ? snapshot.data!.docs.map((doc) {
+                            final task = doc.data() as Map<String, dynamic>;
+                            task['task_id'] = doc.id; // assign doc ID
+                            return task;
+                          }).toList()
+                        : [];
+
+                    // Get current shift time range
+                    final currentShift = _getCurrentShift();
+                    int shiftStartHour, shiftEndHour;
+                    if (currentShift == '1st') {
+                      shiftStartHour = 6;
+                      shiftEndHour = 14;
+                    } else if (currentShift == '2nd') {
+                      shiftStartHour = 14;
+                      shiftEndHour = 22;
+                    } else {
+                      // 3rd shift
+                      shiftStartHour = 22;
+                      shiftEndHour =
+                          30; // 6 AM next day (22 + 8 = 30 for comparison)
+                    }
+
+                    // Filter tasks by assigned elderly AND shift time
+                    final nurseRelatedTasks = tasks.where((task) {
+                      final taskElderlyId = task['elderly_id'] as String?;
+
+                      // Check if elderly is assigned to this nurse
+                      if (taskElderlyId == null ||
+                          !assignedElderlyIds.contains(taskElderlyId)) {
+                        return false;
+                      }
+
+                      // Check if task time falls within current shift
+                      final taskStart = task['task_start'] != null
+                          ? (task['task_start'] as Timestamp).toDate()
+                          : DateTime.now();
+
+                      final taskHour = taskStart.hour;
+
+                      // For 3rd shift (22:00-06:00), handle time wrapping
+                      if (currentShift == '3rd') {
+                        return taskHour >= 22 || taskHour < 6;
+                      } else {
+                        return taskHour >= shiftStartHour &&
+                            taskHour < shiftEndHour;
+                      }
+                    }).toList();
+
+                    debugPrint(
+                      '🔍 Total tasks: ${tasks.length}, Nurse\'s elderly tasks (shift filtered): ${nurseRelatedTasks.length}',
+                    );
+
+                    // Store current tasks for See All functionality
+                    _currentTasks = nurseRelatedTasks;
+
+                    // Filter tasks for today and tomorrow (only future tasks)
+                    final filteredTasks = nurseRelatedTasks.where((task) {
+                      final start = task['task_start'] != null
+                          ? (task['task_start'] as Timestamp).toDate()
+                          : DateTime.now();
+                      final taskDaysRaw = task['days'];
+                      final taskDays = taskDaysRaw is List
+                          ? List<String>.from(taskDaysRaw)
+                          : [];
+                      final frequency = task['task_frequency'] ?? 'Once';
+                      final now = DateTime.now();
+                      final todayStart = DateTime(now.year, now.month, now.day);
+                      final tomorrowStart = todayStart.add(
+                        const Duration(days: 1),
+                      );
+                      final dayAfterTomorrowStart = tomorrowStart.add(
+                        const Duration(days: 1),
+                      );
+                      if (frequency == 'Every Assigned Days') {
+                        // Find the next scheduled day
+                        DateTime nextScheduledDate = now;
+                        for (int i = 0; i < 7; i++) {
+                          final date = now.add(Duration(days: i));
+                          final dayName = DateFormat('EEEE').format(date);
+                          if (taskDays.contains(dayName)) {
+                            nextScheduledDate = date;
+                            break;
+                          }
+                        }
+                        // Show if the next scheduled day is today or tomorrow
+                        final nextDateStart = DateTime(
+                          nextScheduledDate.year,
+                          nextScheduledDate.month,
+                          nextScheduledDate.day,
+                        );
+                        return nextDateStart == todayStart ||
+                            nextDateStart == tomorrowStart;
+                      } else {
+                        // For 'Once', only show if the task start is in the future and within tomorrow
+                        return start.isAfter(now) &&
+                            start.isBefore(dayAfterTomorrowStart);
+                      }
+                    }).toList();
+
+                    debugPrint(
+                      'Total tasks: ${tasks.length}, Filtered tasks: ${filteredTasks.length}',
+                    );
+
+                    return Column(
+                      children: [
+                        if (snapshot.connectionState == ConnectionState.waiting)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator(),
                             ),
-                          ),
-                        ),
-                      )
-                    else
-                      ListView.builder(
-                        physics: const NeverScrollableScrollPhysics(),
-                        shrinkWrap: true,
-                        itemCount: filteredTasks.length,
-                        itemBuilder: (context, index) {
-                          final task = filteredTasks[index];
-                          final title = task['task_title'] ?? '';
-                          final description = task['task_description'] ?? '';
-                          final start = task['task_start'] != null
-                              ? (task['task_start'] as Timestamp).toDate()
-                              : DateTime.now();
-                          final formattedTime = TimeOfDay.fromDateTime(
-                            start,
-                          ).format(context);
-
-                          // Schedule notification and dialog if not already shown
-                          final taskId = task['task_id'];
-                          final frequency = task['task_frequency'] ?? 'Once';
-                          if (frequency == 'Every Assigned Days') {
-                            final now = DateTime.now();
-                            final taskTime = TimeOfDay.fromDateTime(start);
-                            final todayAtTime = DateTime(
-                              now.year,
-                              now.month,
-                              now.day,
-                              taskTime.hour,
-                              taskTime.minute,
-                            );
-                            if (todayAtTime.isAfter(now) &&
-                                !_shownTaskDialogs.containsKey(taskId)) {
-                              _shownTaskDialogs[taskId] = true;
-
-                              final notificationId = taskId.hashCode;
-                              NotificationService.cancelNotification(
-                                notificationId,
-                              );
-                              NotificationService.scheduleTaskNotification(
-                                id: notificationId,
-                                title: title,
-                                body: description,
-                                dateTime: todayAtTime,
-                              );
-
-                              Future.delayed(
-                                todayAtTime.difference(now),
-                                () async {
-                                  if (mounted) {
-                                    await _showTaskDialog(
-                                      taskId,
-                                      title,
-                                      description,
-                                      formattedTime,
-                                    );
-                                  }
-                                },
-                              );
-                            }
-                          } else if (!_shownTaskDialogs.containsKey(taskId) &&
-                              start.isAfter(DateTime.now())) {
-                            _shownTaskDialogs[taskId] = true;
-
-                            final notificationId = taskId.hashCode;
-                            NotificationService.cancelNotification(
-                              notificationId,
-                            );
-                            NotificationService.scheduleTaskNotification(
-                              id: notificationId,
-                              title: title,
-                              body: description,
-                              dateTime: start,
-                            );
-
-                            Future.delayed(
-                              start.difference(DateTime.now()),
-                              () async {
-                                if (mounted) {
-                                  await _showTaskDialog(
-                                    taskId,
-                                    title,
-                                    description,
-                                    formattedTime,
-                                  );
-                                }
-                              },
-                            );
-                          }
-
-                          // Check if task is for tomorrow
-                          String displayTime = formattedTime;
-                          String? tomorrowMark;
-                          final now = DateTime.now();
-                          final tomorrow = now.add(const Duration(days: 1));
-                          if (frequency != 'Every Assigned Days' &&
-                              start.year == tomorrow.year &&
-                              start.month == tomorrow.month &&
-                              start.day == tomorrow.day) {
-                            tomorrowMark = 'Tomorrow Task';
-                          }
-
-                          return _medicalTaskCard(
-                            title,
-                            description,
-                            displayTime,
-                            taskId: taskId,
-                            tomorrowMark: tomorrowMark,
-                          );
-                        },
-                      ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: _showAddTaskDialog,
-                            icon: const Icon(Icons.add),
-                            label: const Text(
-                              "Add Task",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
+                          )
+                        else if (filteredTasks.isEmpty)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(10),
+                              child: Text(
+                                "No medical task available.",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF22688E),
-                              foregroundColor: Colors.white,
-                              elevation: null,
-                            ),
+                          )
+                        else
+                          ListView.builder(
+                            physics: const NeverScrollableScrollPhysics(),
+                            shrinkWrap: true,
+                            itemCount: filteredTasks.length,
+                            itemBuilder: (context, index) {
+                              final task = filteredTasks[index];
+                              final title = task['task_title'] ?? '';
+                              final description =
+                                  task['task_description'] ?? '';
+                              final start = task['task_start'] != null
+                                  ? (task['task_start'] as Timestamp).toDate()
+                                  : DateTime.now();
+                              final formattedTime = TimeOfDay.fromDateTime(
+                                start,
+                              ).format(context);
+
+                              // Schedule notification and dialog if not already shown
+                              final taskId = task['task_id'];
+                              final frequency =
+                                  task['task_frequency'] ?? 'Once';
+                              if (frequency == 'Every Assigned Days') {
+                                final now = DateTime.now();
+                                final taskTime = TimeOfDay.fromDateTime(start);
+                                final todayAtTime = DateTime(
+                                  now.year,
+                                  now.month,
+                                  now.day,
+                                  taskTime.hour,
+                                  taskTime.minute,
+                                );
+                                if (todayAtTime.isAfter(now) &&
+                                    !_shownTaskDialogs.containsKey(taskId)) {
+                                  _shownTaskDialogs[taskId] = true;
+
+                                  final notificationId = taskId.hashCode;
+                                  NotificationService.cancelNotification(
+                                    notificationId,
+                                  );
+                                  NotificationService.scheduleTaskNotification(
+                                    id: notificationId,
+                                    title: title,
+                                    body: description,
+                                    dateTime: todayAtTime,
+                                  );
+
+                                  Future.delayed(
+                                    todayAtTime.difference(now),
+                                    () async {
+                                      if (mounted) {
+                                        await _showTaskDialog(
+                                          taskId,
+                                          title,
+                                          description,
+                                          formattedTime,
+                                        );
+                                      }
+                                    },
+                                  );
+                                }
+                              } else if (!_shownTaskDialogs.containsKey(
+                                    taskId,
+                                  ) &&
+                                  start.isAfter(DateTime.now())) {
+                                _shownTaskDialogs[taskId] = true;
+
+                                final notificationId = taskId.hashCode;
+                                NotificationService.cancelNotification(
+                                  notificationId,
+                                );
+                                NotificationService.scheduleTaskNotification(
+                                  id: notificationId,
+                                  title: title,
+                                  body: description,
+                                  dateTime: start,
+                                );
+
+                                Future.delayed(
+                                  start.difference(DateTime.now()),
+                                  () async {
+                                    if (mounted) {
+                                      await _showTaskDialog(
+                                        taskId,
+                                        title,
+                                        description,
+                                        formattedTime,
+                                      );
+                                    }
+                                  },
+                                );
+                              }
+
+                              // Check if task is for tomorrow
+                              String displayTime = formattedTime;
+                              String? tomorrowMark;
+                              final now = DateTime.now();
+                              final tomorrow = now.add(const Duration(days: 1));
+                              if (frequency != 'Every Assigned Days' &&
+                                  start.year == tomorrow.year &&
+                                  start.month == tomorrow.month &&
+                                  start.day == tomorrow.day) {
+                                tomorrowMark = 'Tomorrow Task';
+                              }
+
+                              return _medicalTaskCard(
+                                title,
+                                description,
+                                displayTime,
+                                taskId: taskId,
+                                tomorrowMark: tomorrowMark,
+                              );
+                            },
                           ),
-                        ],
-                      ),
-                    ),
-                  ],
+                        Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _showAddTaskDialog,
+                                icon: const Icon(Icons.add),
+                                label: const Text(
+                                  "Add Task",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF22688E),
+                                  foregroundColor: Colors.white,
+                                  elevation: null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 );
               },
             ),
@@ -2540,6 +2743,54 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
         ],
       ),
     );
+  }
+
+  /// Get all elderly IDs assigned to this nurse for their current shift
+  Future<Set<String>> _getNurseAssignedElderlyIds() async {
+    try {
+      final nurseId = await _getNurseIdFromAuth();
+      if (nurseId == null) return {};
+
+      final currentShift = _getCurrentShift();
+      final currentDay = _getCurrentDay();
+
+      debugPrint(
+        '🔍 Getting assigned elderly for nurse: $nurseId, shift: $currentShift, day: $currentDay',
+      );
+
+      // Get elderly_assignments for this nurse for current shift AND current day
+      final assignQuery = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('shift', isEqualTo: currentShift)
+          .where('day', isEqualTo: currentDay)
+          .get();
+
+      if (assignQuery.docs.isEmpty) {
+        debugPrint(
+          '❌ No elderly assignments found for nurse on $currentDay ($currentShift shift)',
+        );
+        return {};
+      }
+
+      // Collect all elderly IDs across assignments
+      final Set<String> elderlyIds = {};
+      for (final doc in assignQuery.docs) {
+        final data = doc.data();
+        final ids = List<String>.from(data['elderly_ids'] ?? []);
+        elderlyIds.addAll(ids);
+      }
+
+      debugPrint(
+        '✅ Found ${elderlyIds.length} assigned elderly for $currentDay ($currentShift): $elderlyIds',
+      );
+      return elderlyIds;
+    } catch (e) {
+      debugPrint('❌ Error getting assigned elderly: $e');
+      return {};
+    }
   }
 
   // ---------------------- SHOW ADD TASK DIALOG ----------------------

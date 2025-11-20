@@ -197,102 +197,147 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
 
   // Build the Upcoming tab with red circle count
   Widget _buildUpcomingTabWithCount(Map<String, dynamic> house, bool selected) {
-    return FutureBuilder<bool>(
-      future: _isNurseAssignedToCurrentShift(),
-      builder: (context, shiftSnapshot) {
-        final isAssignedToShift =
-            shiftSnapshot.data ?? true; // Default to true if loading
+    return StreamBuilder<int>(
+      stream: _getUpcomingVitalsCountStream(house['house_id']),
+      builder: (context, snapshot) {
+        int count = snapshot.data ?? 0;
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: _getUpcomingVitalsCountStream(house['house_id']),
-          builder: (context, snapshot) {
-            int count = 0;
-            if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-              count = snapshot.data!.docs.length;
-            }
+        // Debug output
+        if (snapshot.hasData) {
+          print(
+            '🔴 Badge displaying count for house ${house['house_id']}: $count',
+          );
+        } else {
+          print(
+            '⚪ Badge waiting for data. ConnectionState: ${snapshot.connectionState}',
+          );
+        }
 
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  alignment: Alignment.center,
-                  children: [
-                    // Main text
-                    Text(
-                      'Upcoming',
-                      style: TextStyle(
-                        color: selected
-                            ? Colors.white
-                            : const Color(0xFF00588e),
-                        fontWeight: selected
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                        fontSize: 14,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Upcoming',
+              style: TextStyle(
+                color: selected ? Colors.white : const Color(0xFF00588e),
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 11.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 3),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                child: Center(
+                  child: Text(
+                    count.toString(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
-                    // Red circle badge on top-right
-                    if (count > 0 && isAssignedToShift)
-                      Positioned(
-                        top: -2,
-                        right: -23,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 18,
-                            minHeight: 18,
-                          ),
-                          child: Center(
-                            child: Text(
-                              count.toString(),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
               ),
-            );
-          },
+            ],
+          ],
         );
       },
     );
   }
 
-  // Get stream for upcoming vitals count
-  Stream<QuerySnapshot> _getUpcomingVitalsCountStream(String houseId) {
+  // Get stream for upcoming vitals count (only pending vitals)
+  Stream<int> _getUpcomingVitalsCountStream(String houseId) {
     // Get current shift and day
     final currentShift = _getCurrentShift();
+    final currentDay = _getCurrentDay();
     final today = _getTodayDateString();
 
-    // Get nurse ID
-    return Stream.fromFuture(_getNurseId()).asyncExpand((nurseId) {
-      if (nurseId == null) {
-        // Return empty stream
-        return Stream<QuerySnapshot>.empty();
-      }
+    // Get nurse ID directly from Firebase Auth
+    final user = FirebaseAuth.instance.currentUser;
 
-      return _firestore
-          .collection('vitals')
-          .where('assigned_nurse_id', isEqualTo: nurseId)
-          .where('house_id', isEqualTo: houseId)
-          .where('assigned_date', isEqualTo: today)
-          .where('shift', isEqualTo: currentShift)
-          .where('status', isEqualTo: 'pending')
-          .snapshots();
-    });
-  } // Get current shift
+    if (user == null) {
+      return Stream.value(0);
+    }
+
+    // Query elderly_assignments to get assigned elderly, then filter by house and vitals status
+    return _firestore
+        .collection('elderly_assignments')
+        .where('user_type', isEqualTo: 'nurse')
+        .where('user_id', isEqualTo: user.uid)
+        .where('is_current', isEqualTo: true)
+        .where('house_id', arrayContains: houseId)
+        .where('shift', isEqualTo: currentShift)
+        .where('day', isEqualTo: currentDay)
+        .snapshots()
+        .asyncMap((snapshot) async {
+          if (snapshot.docs.isEmpty) return 0;
+
+          // Collect all elderly IDs from all assignment documents
+          final allElderlyIds = <String>[];
+          for (final doc in snapshot.docs) {
+            final elderlyIds = List<String>.from(
+              doc.data()['elderly_ids'] ?? [],
+            );
+            allElderlyIds.addAll(elderlyIds);
+          }
+
+          if (allElderlyIds.isEmpty) return 0;
+
+          // ⚡ OPTIMIZATION: Batch fetch all elderly documents at once
+          final elderlyDocs = await Future.wait(
+            allElderlyIds.map(
+              (id) => _firestore.collection('elderly').doc(id).get(),
+            ),
+          );
+
+          // Filter elderly that belong to the specific house
+          final elderlyInHouse = <String>[];
+          for (final elderlyDoc in elderlyDocs) {
+            if (elderlyDoc.exists) {
+              final elderlyHouseId = elderlyDoc.data()?['house_id'];
+              if (elderlyHouseId == houseId) {
+                elderlyInHouse.add(elderlyDoc.id);
+              }
+            }
+          }
+
+          if (elderlyInHouse.isEmpty) return 0;
+
+          // ⚡ Check vitals status: Count only elderly WITHOUT completed vitals today
+          final vitalQueries = await Future.wait(
+            elderlyInHouse.map(
+              (elderlyId) => _firestore
+                  .collection('vitals')
+                  .where('elderly_id', isEqualTo: elderlyId)
+                  .where('assigned_date', isEqualTo: today)
+                  .where('status', isEqualTo: 'completed')
+                  .limit(1)
+                  .get(),
+            ),
+          );
+
+          // Count elderly who DON'T have completed vitals (pending vitals)
+          int pendingCount = 0;
+          for (int i = 0; i < elderlyInHouse.length; i++) {
+            if (vitalQueries[i].docs.isEmpty) {
+              // No completed vital = still pending
+              pendingCount++;
+            }
+          }
+
+          return pendingCount;
+        });
+  }
+
+  // Get current shift
 
   String _getCurrentShift() {
     final currentHour = DateTime.now().hour;
@@ -323,25 +368,10 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
     return DateFormat('yyyy-MM-dd').format(now);
   }
 
-  // Get nurse ID from name
+  // Get nurse ID directly from Firebase Auth (more reliable than name-based lookup)
   Future<String?> _getNurseId() async {
-    if (nurseName == null) return null;
-
-    final nameParts = nurseName!.split(' ');
-    if (nameParts.length < 2) return null;
-
-    final firstName = nameParts[0];
-    final lastName = nameParts[1];
-
-    final userQuery = await _firestore
-        .collection('users')
-        .where('user_fname', isEqualTo: firstName)
-        .where('user_lname', isEqualTo: lastName)
-        .where('user_type', isEqualTo: 'nurse')
-        .get();
-
-    if (userQuery.docs.isEmpty) return null;
-    return userQuery.docs.first.id;
+    final user = FirebaseAuth.instance.currentUser;
+    return user?.uid;
   }
 
   // Check if nurse is assigned to current shift
@@ -568,7 +598,7 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
                                               child: Padding(
                                                 padding:
                                                     const EdgeInsets.symmetric(
-                                                      horizontal: 4.0,
+                                                      horizontal: 2.0,
                                                     ),
                                                 child: GestureDetector(
                                                   onTap: () {
@@ -584,12 +614,12 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
                                                         );
                                                   },
                                                   child: Container(
-                                                    constraints: BoxConstraints(
-                                                      minWidth: 120,
-                                                    ),
+                                                    clipBehavior: Clip
+                                                        .none, // CRITICAL: Don't clip the badge!
+                                                    // Remove fixed width constraint to let content expand
                                                     padding:
                                                         const EdgeInsets.symmetric(
-                                                          horizontal: 8,
+                                                          horizontal: 6,
                                                           vertical: 8,
                                                         ),
                                                     decoration: selected

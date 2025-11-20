@@ -8,11 +8,11 @@ class LoadingOverlay extends StatelessWidget {
   final Color? spinnerColor;
 
   const LoadingOverlay({
-    Key? key,
+    super.key,
     this.message,
     this.backgroundColor,
     this.spinnerColor,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

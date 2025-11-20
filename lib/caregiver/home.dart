@@ -15,7 +15,6 @@ import 'houses.dart';
 import '../services/cg_services/house_service.dart';
 import 'emergency_handler.dart';
 import '../services/attendance_check_service.dart';
-import '../services/background_attendance_service.dart';
 
 void main() {
   runApp(
@@ -344,15 +343,6 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
         // Callback when attendance is marked
         print('✅ CAREGIVER: Attendance marked');
       });
-
-      // Trigger immediate background check to catch users who should be marked absent
-      BackgroundAttendanceService.triggerManualCheck()
-          .then((_) {
-            print('✅ CAREGIVER: Manual background check completed');
-          })
-          .catchError((e) {
-            print('❌ CAREGIVER: Manual background check failed: $e');
-          });
     });
   }
 

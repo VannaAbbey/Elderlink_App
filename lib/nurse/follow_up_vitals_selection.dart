@@ -531,7 +531,7 @@ class _FollowUpVitalsSelectionScreenState
           'Follow-up Vitals Selection',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        backgroundColor: Colors.green[600],
+        backgroundColor: Color(0xFF00588E),
         foregroundColor: Colors.white,
       ),
       body: _isLoading
@@ -563,23 +563,23 @@ class _FollowUpVitalsSelectionScreenState
                   padding: EdgeInsets.all(16),
                   margin: EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.green[50],
+                    color: Color(0xFFE3F2FD),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.green[200]!),
+                    border: Border.all(color: Color(0xFFBBDEFB)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.info_outline, color: Colors.green[600]),
+                          Icon(Icons.info_outline, color: Color(0xFF00588E)),
                           SizedBox(width: 8),
                           Text(
                             'Follow-up Vitals Recording',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: Colors.green[700],
+                              color: Color(0xFF00588E),
                             ),
                           ),
                         ],
@@ -589,7 +589,7 @@ class _FollowUpVitalsSelectionScreenState
                         'Select an elderly to record follow-up vitals. You can record follow-ups for ANY elderly assigned to you, even if their vitals were completed by other nurses from previous shifts.',
                         style: TextStyle(
                           fontSize: 14,
-                          color: Colors.green[700],
+                          color: Color(0xFF00588E),
                         ),
                       ),
                     ],
@@ -619,7 +619,7 @@ class _FollowUpVitalsSelectionScreenState
                                 children: [
                                   CircleAvatar(
                                     backgroundColor: canFollowUp
-                                        ? Colors.green[600]
+                                        ? Color(0xFF00588E)
                                         : Colors.grey[400],
                                     radius: 24,
                                     child: Icon(
@@ -649,7 +649,7 @@ class _FollowUpVitalsSelectionScreenState
                                           ),
                                           decoration: BoxDecoration(
                                             color: canFollowUp
-                                                ? Colors.green[100]
+                                                ? Color(0xFFE3F2FD)
                                                 : Colors.grey[200],
                                             borderRadius: BorderRadius.circular(
                                               16,
@@ -662,7 +662,7 @@ class _FollowUpVitalsSelectionScreenState
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: canFollowUp
-                                                  ? Colors.green[700]
+                                                  ? Color(0xFF00588E)
                                                   : Colors.grey[600],
                                               fontWeight: FontWeight.w500,
                                             ),
@@ -790,7 +790,7 @@ class _FollowUpVitalsSelectionScreenState
                                     onPressed: () =>
                                         _recordFollowUpVitals(elderlyInfo),
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.green[600],
+                                      backgroundColor: Color(0xFF00588E),
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(8),

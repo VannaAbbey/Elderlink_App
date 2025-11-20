@@ -57,7 +57,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
   String? selectedEmergencyType; // new emergency type variable
   String emergencyDetails = '';
   bool acknowledged = false;
-  bool _isSendingAlert = false; // Loading state for submission
+  bool isSendingAlert = false; // Loading state for submission
 
   final List<String> houses = [
     'St. Sebastian',
@@ -350,7 +350,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                         width: double.infinity,
                         child: ElevatedButton(
                           onPressed:
-                              (_isSendingAlert || !acknowledged ||
+                              (isSendingAlert || !acknowledged ||
                                   selectedHouse == null ||
                                   selectedEmergencyType == null)
                               ? null
@@ -363,9 +363,9 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                                   }
                                   
                                   // Prevent multiple submissions
-                                  if (_isSendingAlert) return;
+                                  if (isSendingAlert) return;
                                   
-                                  setState(() => _isSendingAlert = true);
+                                  setState(() => isSendingAlert = true);
                                   
                                   // Small delay to show loading state
                                   await Future.delayed(const Duration(milliseconds: 100));
@@ -380,14 +380,14 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                                   }
                                 },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _isSendingAlert ? Colors.grey : const Color(0xFF00588e),
+                            backgroundColor: isSendingAlert ? Colors.grey : const Color(0xFF00588e),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
                             padding: const EdgeInsets.symmetric(vertical: 15),
                             elevation: 4,
                           ),
-                          child: _isSendingAlert
+                          child: isSendingAlert
                             ? const SizedBox(
                                 height: 20,
                                 width: 20,
@@ -410,7 +410,7 @@ Future<Map<String, dynamic>?> showEmergencyModal(
                   ),
                 ),
                 // Loading overlay
-                if (_isSendingAlert)
+                if (isSendingAlert)
                   const LoadingOverlay(
                     message: 'Sending emergency alert...',
                   ),

@@ -31,6 +31,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
   // Keyed by: houseId|nurseName|shift|day to avoid cross-shift staleness.
   static final Map<String, List<Map<String, dynamic>>> _medsCache = {};
   static final Map<String, DateTime> _medsCacheTime = {};
+  // Real-time listeners for auto-refresh
+  StreamSubscription<QuerySnapshot>? _medicationListener;
+  StreamSubscription<QuerySnapshot>? _assignmentListener;
+  StreamSubscription<QuerySnapshot>? _shiftListener;
   // Track medication IDs that were recently created by this instance so they
   // can be included immediately in the upcoming list without relying on
   // server timestamps or background sync.
@@ -98,6 +102,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     _startMissedMedicationTimer();
     _startAutoRefreshTimer();
     _confettiController = ConfettiController(duration: Duration(seconds: 2));
+    // Initialize real-time listeners for instant updates
+    _initializeListeners();
   }
 
   @override
@@ -143,6 +149,71 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     await _loadUpcomingMedications();
   }
 
+  void _initializeListeners() async {
+    try {
+      final nurseId = await _getNurseId();
+      if (nurseId == null) return;
+
+      print(
+        '🔄 Initializing medication real-time listeners for nurse: $nurseId',
+      );
+
+      // Listen to medications collection for this house
+      _medicationListener = _firestore
+          .collection('medications')
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('status', isEqualTo: 'active')
+          .snapshots()
+          .listen((snapshot) {
+            print('🔔 Medications changed! Documents: ${snapshot.docs.length}');
+            // Clear cache and reload
+            _medsCache.clear();
+            _medsCacheTime.clear();
+            _loadUpcomingMedications(forceRefresh: true);
+          });
+
+      // Listen to elderly_assignments for this nurse
+      _assignmentListener = _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .snapshots()
+          .listen((snapshot) {
+            print(
+              '🔔 Elderly assignments changed! Documents: ${snapshot.docs.length}',
+            );
+            // Clear cache and reload
+            _medsCache.clear();
+            _medsCacheTime.clear();
+            _loadAssignedElderly();
+            _loadUpcomingMedications(forceRefresh: true);
+          });
+
+      // Listen to house_shift_assignments for schedule changes
+      _shiftListener = _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .snapshots()
+          .listen((snapshot) {
+            print(
+              '🔔 Shift assignments changed! Documents: ${snapshot.docs.length}',
+            );
+            // Clear cache and reload
+            _medsCache.clear();
+            _medsCacheTime.clear();
+            _checkSchedule();
+            _loadUpcomingMedications(forceRefresh: true);
+          });
+
+      print('✅ Medication listeners initialized successfully');
+    } catch (e) {
+      print('❌ Error initializing medication listeners: $e');
+    }
+  }
+
   @override
   void dispose() {
     _missedMedicationTimer?.cancel();
@@ -150,6 +221,10 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     _scheduleCheckTimer?.cancel();
     _cancelAllMedicationTimers();
     _confettiController.dispose();
+    // Cancel real-time listeners
+    _medicationListener?.cancel();
+    _assignmentListener?.cancel();
+    _shiftListener?.cancel();
     super.dispose();
   }
 
@@ -647,26 +722,83 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       // Update medication_id in the document
       await medicationDocRef.update({'medication_id': medicationId});
 
-      // Create Medication_Takes records for each intake
+      // Create Medication_Takes records
+      // For duration-based medications (e.g., "2 days"), create takes for each day
       final batch = _firestore.batch();
-      for (int i = 0; i < numberOfIntakes; i++) {
-        final takeDocRef = _firestore.collection('medication_takes').doc();
-        batch.set(takeDocRef, {
-          'take_id': takeDocRef.id,
-          'medication_id': medicationId,
-          'take_number': i + 1,
-          'scheduled_time': intakeTimesFormatted[i],
-          // For one-time medications, record the specific scheduled date so
-          // loaders can match takes to the exact calendar day.
-          'scheduled_date': repeatInterval == 'Once'
-              ? Timestamp.fromDate(_selectedDate)
-              : null,
-          'status': 'pending',
-          'completed_at': null,
-          'completed_by': null,
-          'created_at': Timestamp.fromDate(DateTime.now()),
-          'updated_at': Timestamp.fromDate(DateTime.now()),
-        });
+
+      int durationDays = 1; // Default for Once/Daily
+      if (repeatInterval.contains('days') && repeatInterval != 'Daily') {
+        // Extract number of days from "X days" format
+        final match = RegExp(r'^(\d+)\s+days?$').firstMatch(repeatInterval);
+        if (match != null) {
+          durationDays = int.tryParse(match.group(1) ?? '1') ?? 1;
+        }
+      }
+
+      // Check if first intake time has already passed
+      // If so, start the duration from tomorrow
+      final now = DateTime.now();
+      DateTime startDate = _selectedDate;
+
+      if (intakeTimes.isNotEmpty) {
+        final firstIntake = intakeTimes[0];
+        final firstIntakeDateTime = DateTime(
+          _selectedDate.year,
+          _selectedDate.month,
+          _selectedDate.day,
+          firstIntake.hour,
+          firstIntake.minute,
+        );
+
+        if (firstIntakeDateTime.isBefore(now)) {
+          // Time has passed today, start from tomorrow
+          startDate = _selectedDate.add(Duration(days: 1));
+          print(
+            '⏰ First intake time has passed. Starting medication from ${startDate.toString().split(' ')[0]}',
+          );
+          print(
+            '⏰ Duration: $durationDays days, will show on: ${List.generate(durationDays, (i) => startDate.add(Duration(days: i)).toString().split(' ')[0]).join(', ')}',
+          );
+        }
+      }
+
+      // For duration-based meds, create takes for each consecutive day from startDate
+      // For Once/Daily, create takes for just the selected/current day
+      for (int dayOffset = 0; dayOffset < durationDays; dayOffset++) {
+        final dateForThisDay = startDate.add(Duration(days: dayOffset));
+
+        for (int i = 0; i < numberOfIntakes; i++) {
+          final takeDocRef = _firestore.collection('medication_takes').doc();
+
+          // Determine scheduled_date based on repeat_interval:
+          // - "Once": set to selected date
+          // - Duration-based (2 days, 3 days, etc.): set to each day in range
+          // - "Daily": null (repeats every day)
+          Timestamp? scheduledDateValue;
+          if (repeatInterval == 'Once') {
+            scheduledDateValue = Timestamp.fromDate(startDate);
+          } else if (repeatInterval.contains('days') &&
+              repeatInterval != 'Daily') {
+            // Duration-based: set specific date for this day
+            scheduledDateValue = Timestamp.fromDate(dateForThisDay);
+          } else {
+            // Daily: null to show every applicable day
+            scheduledDateValue = null;
+          }
+
+          batch.set(takeDocRef, {
+            'take_id': takeDocRef.id,
+            'medication_id': medicationId,
+            'take_number': i + 1,
+            'scheduled_time': intakeTimesFormatted[i],
+            'scheduled_date': scheduledDateValue,
+            'status': 'pending',
+            'completed_at': null,
+            'completed_by': null,
+            'created_at': Timestamp.fromDate(DateTime.now()),
+            'updated_at': Timestamp.fromDate(DateTime.now()),
+          });
+        }
       }
 
       // Commit the batch
@@ -915,18 +1047,22 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         // then schedule for the next day to avoid creating immediate past tasks.
         if (taskStart.isBefore(now)) {
           finalTaskStart = taskStart.add(Duration(days: 1));
-          // Update the scheduled_date in the take document to match the new day
-          await takeDoc.reference.update({
-            'scheduled_date': Timestamp.fromDate(
-              DateTime(
-                finalTaskStart.year,
-                finalTaskStart.month,
-                finalTaskStart.day,
-                hour,
-                minute,
+          // Only update scheduled_date for Once medications, NOT for Daily
+          // Daily medications should keep scheduled_date as null so they repeat every day
+          final repeatInterval = medicationData['repeat_interval'] as String?;
+          if (repeatInterval == 'Once') {
+            await takeDoc.reference.update({
+              'scheduled_date': Timestamp.fromDate(
+                DateTime(
+                  finalTaskStart.year,
+                  finalTaskStart.month,
+                  finalTaskStart.day,
+                  hour,
+                  minute,
+                ),
               ),
-            ),
-          });
+            });
+          }
         }
 
         // Skip past takes (shouldn't happen now, but keep as safety check)
@@ -1484,11 +1620,38 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final medicationShift = data['shift'] as String?;
         final repeatInterval = data['repeat_interval'] as String?;
 
+        // Debug: Print what we're checking
+        print(
+          '🔍 Med ${doc.id}: repeatInterval="$repeatInterval", shift=$medicationShift',
+        );
+
         // Check if medication is scheduled for current shift and day
         bool isScheduledForToday = false;
-        // If medication is Daily, it's scheduled every day (shift must match)
-        if (medicationShift == currentShift && repeatInterval == 'Daily') {
-          isScheduledForToday = true;
+        // If medication is Daily, it's scheduled every day for its designated shift
+        // Daily medications should appear EVERY day, not just once
+        if (repeatInterval == 'Daily') {
+          // For Daily medications, check if the shift matches
+          // This ensures the medication appears daily in the correct shift
+          if (medicationShift == currentShift) {
+            isScheduledForToday = true;
+            print('🔍 Med ${doc.id}: Matched as Daily medication');
+          }
+        }
+        // Handle duration-based intervals (2 days, 3 days, 4 days, etc.)
+        // For these, we rely on medication_takes having explicit scheduled_date
+        // So just check if shift matches - the takes will be filtered by date later
+        else if (repeatInterval != null &&
+            repeatInterval.contains('days') &&
+            repeatInterval != 'Daily') {
+          print('🔍 Med ${doc.id}: Duration-based medication');
+          // For duration meds, include if shift matches
+          // The actual date filtering happens when loading medication_takes
+          if (medicationShift == currentShift) {
+            isScheduledForToday = true;
+            print(
+              '✅ Med ${doc.id}: Shift matches, will check takes for scheduled_date',
+            );
+          }
         }
 
         // If medication is Once, include it only on its scheduled date
@@ -1520,14 +1683,33 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final createdAt = data['created_at'] as Timestamp?;
         final createdDate = createdAt?.toDate();
 
+        // Check if viewing the same day the medication was created
+        final isViewingCreationDay =
+            createdDate != null &&
+            DateTime(
+              createdDate.year,
+              createdDate.month,
+              createdDate.day,
+            ).isAtSameMomentAs(
+              DateTime(
+                _selectedDate.year,
+                _selectedDate.month,
+                _selectedDate.day,
+              ),
+            );
+
+        // Only allow "recent" bypass on the day of creation
         final bool isRecentByThisNurse =
             createdDate != null &&
             currentUserId != null &&
             createdDate.isAfter(recentCutoff) &&
+            isViewingCreationDay &&
             (data['created_nurse_id'] == currentUserId ||
                 data['created_nurse'] == currentUserId);
 
-        final bool isRecentById = _recentlyCreatedMedIds.contains(doc.id);
+        // Also limit isRecentById to creation day only
+        final bool isRecentById =
+            _recentlyCreatedMedIds.contains(doc.id) && isViewingCreationDay;
 
         // Debug logs to understand inclusion/exclusion
         try {
@@ -1602,9 +1784,43 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             print('🎯   shift: $medicationShift (current: $currentShift)');
             print('🎯   repeat: $repeatInterval');
             bool isScheduledForToday = false;
-            if (medicationShift == currentShift && repeatInterval == 'Daily') {
-              isScheduledForToday = true;
-              print('🎯   ✅ Daily med with matching shift');
+            if (repeatInterval == 'Daily') {
+              // Daily medications should appear every day in their designated shift
+              if (medicationShift == currentShift) {
+                isScheduledForToday = true;
+                print('🎯   ✅ Daily med with matching shift');
+              }
+            }
+            // Handle duration-based intervals (2 days, 3 days, etc.)
+            else if (repeatInterval != null &&
+                repeatInterval.contains('days') &&
+                repeatInterval != 'Daily') {
+              final match = RegExp(
+                r'^(\d+)\s+days?$',
+              ).firstMatch(repeatInterval);
+              if (match != null) {
+                final durationDays = int.tryParse(match.group(1) ?? '1') ?? 1;
+                final createdAtTs = data['created_at'] as Timestamp?;
+                if (createdAtTs != null && medicationShift == currentShift) {
+                  final createdDate = createdAtTs.toDate();
+                  final daysSinceCreation = _selectedDate
+                      .difference(
+                        DateTime(
+                          createdDate.year,
+                          createdDate.month,
+                          createdDate.day,
+                        ),
+                      )
+                      .inDays;
+                  if (daysSinceCreation >= 0 &&
+                      daysSinceCreation < durationDays) {
+                    isScheduledForToday = true;
+                    print(
+                      '🎯   ✅ Duration med ($durationDays days, day $daysSinceCreation)',
+                    );
+                  }
+                }
+              }
             }
             if (repeatInterval == 'Once') {
               final oneTimeDateTs = data['one_time_date'] as Timestamp?;
@@ -1683,8 +1899,39 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
             final repeatInterval = data['repeat_interval'] as String?;
 
             bool isScheduledForToday = false;
-            if (medicationShift == currentShift && repeatInterval == 'Daily') {
-              isScheduledForToday = true;
+            if (repeatInterval == 'Daily') {
+              // Daily medications should appear every day in their designated shift
+              if (medicationShift == currentShift) {
+                isScheduledForToday = true;
+              }
+            }
+            // Handle duration-based intervals (2 days, 3 days, etc.)
+            else if (repeatInterval != null &&
+                repeatInterval.contains('days') &&
+                repeatInterval != 'Daily') {
+              final match = RegExp(
+                r'^(\d+)\s+days?$',
+              ).firstMatch(repeatInterval);
+              if (match != null) {
+                final durationDays = int.tryParse(match.group(1) ?? '1') ?? 1;
+                final createdAtTs = data['created_at'] as Timestamp?;
+                if (createdAtTs != null && medicationShift == currentShift) {
+                  final createdDate = createdAtTs.toDate();
+                  final daysSinceCreation = _selectedDate
+                      .difference(
+                        DateTime(
+                          createdDate.year,
+                          createdDate.month,
+                          createdDate.day,
+                        ),
+                      )
+                      .inDays;
+                  if (daysSinceCreation >= 0 &&
+                      daysSinceCreation < durationDays) {
+                    isScheduledForToday = true;
+                  }
+                }
+              }
             }
             if (repeatInterval == 'Once') {
               final oneTimeDateTs = data['one_time_date'] as Timestamp?;
@@ -1904,8 +2151,30 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         // Filter out completed and missed takes - only show active takes
         // Accept both 'complete' and 'completed' values for backwards compatibility
+        // For Daily medications, only exclude if completed TODAY (same selected date)
         final activeTakes = allTakes.where((take) {
           final s = (take['status'] as String?) ?? '';
+
+          // If pending, always include
+          if (s == 'pending') return true;
+
+          // If completed or missed, check if it was on the selected date
+          if (s == 'complete' || s == 'completed' || s == 'missed') {
+            final completedAtTs = take['completed_at'] as Timestamp?;
+            if (completedAtTs != null) {
+              final completedDate = completedAtTs.toDate();
+              // Only exclude if completed on the SAME day as selected date
+              if (completedDate.year == _selectedDate.year &&
+                  completedDate.month == _selectedDate.month &&
+                  completedDate.day == _selectedDate.day) {
+                return false; // Exclude - completed today
+              }
+              // Completed on different day, so include (for daily meds)
+              return true;
+            }
+          }
+
+          // For any other status or no completion date, include
           return s != 'complete' && s != 'completed' && s != 'missed';
         }).toList();
 
@@ -1948,6 +2217,37 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               scheduledDateForTake.month == _selectedDate.month &&
               scheduledDateForTake.day == _selectedDate.day;
         }).toList();
+
+        // Check if ALL intake times have passed for TODAY (not future/past dates)
+        final isToday =
+            _selectedDate.year == now.year &&
+            _selectedDate.month == now.month &&
+            _selectedDate.day == now.day;
+
+        if (isToday && filteredTakes.isNotEmpty) {
+          final allTimesPassed = filteredTakes.every((take) {
+            final scheduledTimeStr = take['scheduled_time'] as String?;
+            if (scheduledTimeStr == null) return false;
+            final timeParts = scheduledTimeStr.split(':');
+            if (timeParts.length < 2) return false;
+            final hour = int.tryParse(timeParts[0]) ?? 0;
+            final minute = int.tryParse(timeParts[1]) ?? 0;
+            final scheduledTime = DateTime(
+              now.year,
+              now.month,
+              now.day,
+              hour,
+              minute,
+            );
+            return now.isAfter(scheduledTime) ||
+                now.isAtSameMomentAs(scheduledTime);
+          });
+
+          // If all times have passed today, skip this medication for today
+          if (allTimesPassed) {
+            continue;
+          }
+        }
 
         // Sort takes by scheduled time (earliest first). For medications
         // assigned to the 3rd shift (22:00-06:00) treat times between
@@ -2096,7 +2396,17 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     ];
 
     // Repeat intervals
-    final List<String> repeatIntervals = ['Once', 'Daily'];
+    final List<String> repeatIntervals = [
+      'Once',
+      'Daily',
+      '2 days',
+      '3 days',
+      '4 days',
+      '5 days',
+      '7 days',
+      '14 days',
+      '30 days',
+    ];
 
     // Number of intakes options
     final List<int> intakeOptions = [1, 2, 3, 4, 5, 6];
@@ -3531,7 +3841,17 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       '500mg',
       '1g',
     ];
-    final List<String> repeatIntervals = ['Once', 'Daily'];
+    final List<String> repeatIntervals = [
+      'Once',
+      'Daily',
+      '2 days',
+      '3 days',
+      '4 days',
+      '5 days',
+      '7 days',
+      '14 days',
+      '30 days',
+    ];
     final List<int> intakeOptions = [1, 2, 3, 4, 5, 6];
 
     // Function to check if any changes were made

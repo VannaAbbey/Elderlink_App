@@ -26,7 +26,9 @@ void _showAbsenceDialog(BuildContext context, String absenceType) {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                absenceType == 'leave' ? 'On Leave Today' : 'Marked Absent Today',
+                absenceType == 'leave'
+                    ? 'On Leave Today'
+                    : 'Marked Absent Today',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.orange,
@@ -46,10 +48,7 @@ void _showAbsenceDialog(BuildContext context, String absenceType) {
             },
             child: const Text(
               'OK',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
           ),
         ],
@@ -92,16 +91,25 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   }
 
   final assign = cgAssignSnap.docs.first.data();
-  
+
   // 🔹 Null safety checks for all required fields
   final daysAssigned = assign["days_assigned"] as List<dynamic>?;
   final shift = assign["shift"] as String?;
   final startTime = assign["start_time"] as String?;
   final endTime = assign["end_time"] as String?;
   final houseId = assign["house_id"] as String?;
-  
-  if (daysAssigned == null || shift == null || startTime == null || endTime == null || houseId == null) {
-    if (context.mounted) _showError(context, "Invalid assignment data. Please contact administrator.");
+
+  if (daysAssigned == null ||
+      shift == null ||
+      startTime == null ||
+      endTime == null ||
+      houseId == null) {
+    if (context.mounted) {
+      _showError(
+        context,
+        "Invalid assignment data. Please contact administrator.",
+      );
+    }
     return;
   }
 
@@ -110,8 +118,10 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   final end = _parseTimeOfDay(endTime);
 
   // 🔹 Determine if this is an overnight shift
-  final isOvernightShift = end.hour < start.hour || (end.hour == start.hour && end.minute <= start.minute);
-  
+  final isOvernightShift =
+      end.hour < start.hour ||
+      (end.hour == start.hour && end.minute <= start.minute);
+
   // 🔹 For overnight shifts, determine which day to check based on current time
   String todayName;
   if (isOvernightShift && today.hour >= 0 && today.hour < end.hour) {
@@ -172,314 +182,369 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
   );
 
   if (result != null) {
-  // Show loading dialog
-  if (context.mounted) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext loadingContext) {
-        return const LoadingOverlay(
-          message: 'Processing emergency alert...',
-        );
-      },
-    );
-  }
-  
-  try {
-    // ✅ Hanapin nurses na naka-duty today at this shift
-    print('🔍 === EMERGENCY ALERT: Finding on-duty nurses ===');
-    print('Current time: ${now.hour}:${now.minute}');
-    print('Current day: $todayName');
-  
-  final nurseQuery = await FirebaseFirestore.instance
-      .collection("house_shift_assignments")
-      .where("user_type", isEqualTo: "nurse")
-      .where("is_current", isEqualTo: true)
-      .get();
-
-  print('📋 Total nurse assignments found: ${nurseQuery.docs.length}');
-
-  List<String> activeNurseIds = [];
-
-  for (var doc in nurseQuery.docs) {
-    final data = doc.data();
-
-    final assignedDays = (data["days_assigned"] as List<dynamic>?) ?? [];
-    final startStr = data["start_time"] as String?;
-    final endStr = data["end_time"] as String?;
-    final nurseId = data["user_id"] as String?; // Changed from nurse_id to user_id
-    final nurseShift = data["shift"] as String?;
-    
-    print('\n--- Checking Nurse: $nurseId ---');
-    print('   Shift: $nurseShift');
-    print('   Time: $startStr - $endStr');
-    print('   Assigned Days: $assignedDays');
-    
-    // Skip if missing critical data
-    if (startStr == null || endStr == null || nurseId == null || nurseShift == null) {
-      print('   ❌ SKIPPED: Missing critical data');
-      continue;
+    // Show loading dialog
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext loadingContext) {
+          return const LoadingOverlay(message: 'Processing emergency alert...');
+        },
+      );
     }
 
-    // Parse nurse shift times
-    final start = _parseTimeOfDay(startStr);
-    final end = _parseTimeOfDay(endStr);
-    
-    // Determine if this is an overnight shift
-    final isNurseOvernightShift = end.hour < start.hour || (end.hour == start.hour && end.minute <= start.minute);
-    print('   Overnight shift: $isNurseOvernightShift');
-    
-    // For overnight shifts, determine which day to check based on current time
-    String nurseDayToCheck;
-    if (isNurseOvernightShift && today.hour >= 0 && today.hour < end.hour) {
-      // Current time is in the "end period" of an overnight shift
-      // Check if the previous day is assigned
-      final previousDay = today.subtract(const Duration(days: 1));
-      nurseDayToCheck = _getDayName(previousDay.weekday);
-      print('   Day to check: $nurseDayToCheck (previous day - in end period of overnight)');
-    } else {
-      // Regular shift or "start period" of overnight shift
-      nurseDayToCheck = _getDayName(today.weekday);
-      print('   Day to check: $nurseDayToCheck (current day)');
-    }
-
-    // check if today (or previous day for overnight) is assigned
-    final isDayAssigned = assignedDays.contains(nurseDayToCheck);
-    print('   Day assigned: $isDayAssigned');
-    if (!isDayAssigned) {
-      print('   ❌ SKIPPED: Not assigned for $nurseDayToCheck');
-      continue;
-    }
-
-    // check if time fits - more accurate check including minutes
-    bool inShift;
-    final currentMinutes = now.hour * 60 + now.minute;
-    final startMinutes = start.hour * 60 + start.minute;
-    final endMinutes = end.hour * 60 + end.minute;
-    
-    print('   Current: $currentMinutes min, Start: $startMinutes min, End: $endMinutes min');
-
-    if (isNurseOvernightShift) {
-      // For overnight shifts (e.g., 22:00 – 06:00)
-      // Nurse is in shift if current time is after start OR before end
-      inShift = currentMinutes >= startMinutes || currentMinutes < endMinutes;
-      print('   Overnight check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) OR currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift');
-    } else {
-      // For regular shifts, current time must be between start and end
-      inShift = currentMinutes >= startMinutes && currentMinutes < endMinutes;
-      print('   Regular check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) AND currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift');
-    }
-
-    if (inShift) {
-      activeNurseIds.add(nurseId);
-      print('   ✅ ADDED: Nurse is on duty');
-    } else {
-      print('   ❌ SKIPPED: Not currently in shift time');
-    }
-  }
-  
-  print('\n🎯 Total on-duty nurses found: ${activeNurseIds.length}');
-  print('Nurse IDs: $activeNurseIds');
-  print('=== END EMERGENCY ALERT NURSE SEARCH ===\n');
-
-  if (activeNurseIds.isEmpty) {
-    // Close loading dialog
-    if (context.mounted && Navigator.canPop(context)) {
-      Navigator.of(context).pop();
-    }
-    if (context.mounted) _showError(context, "No nurse is currently on duty for this shift.");
-    return;
-  }
-
-  // ✅ Save to Firestore with BOTH house_id & house_name
-  await FirebaseFirestore.instance.collection("emergency_alert").add({
-    "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
-    "emergency_type": result["emergencyType"] ?? "", // Main field for emergency type
-    "additional_info": result["description"] ?? "", // Optional additional information
-    "alert_timestamp": DateTime.now(),
-    "house_id": houseNameToId[result["houseName"]] ?? "",
-    "house_name": result["houseName"] ?? "",
-    "caregiver_name": result["caregiverName"] ?? "", // Add caregiver name field
-    "user_id_cg": user.uid,
-    "user_id_nu": FieldValue.arrayUnion(activeNurseIds), // ✅ force array save
-  });
-
-  // ✅ Also save to unified shift logs collection
-  try {
-    final emergencyType = result["emergencyType"] as String? ?? "";
-    final description = result["description"] as String? ?? "";
-    final caregiverName = result["caregiverName"] as String? ?? "Unknown";
-    
-    await CaregiverShiftLogService.createEmergencyAlertLog(
-      caregiverId: user.uid,
-      emergencyType: emergencyType,
-      description: description,
-      caregiverFname: caregiverName.split(' ').first, // Extract first name
-    );
-    print('✅ Emergency alert logged to shift logs successfully');
-  } catch (e) {
-    print('❌ Error logging emergency alert to shift logs: $e');
-    // Don't fail the entire operation if logging fails
-  }
-
-  // Fetch nurse names to display in dialog
-  List<String> nurseNames = [];
-  for (String nurseId in activeNurseIds) {
     try {
-      final nurseDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(nurseId)
+      // ✅ Hanapin nurses na naka-duty today at this shift
+      print('🔍 === EMERGENCY ALERT: Finding on-duty nurses ===');
+      print('Current time: ${now.hour}:${now.minute}');
+      print('Current day: $todayName');
+
+      final nurseQuery = await FirebaseFirestore.instance
+          .collection("house_shift_assignments")
+          .where("user_type", isEqualTo: "nurse")
+          .where("is_current", isEqualTo: true)
           .get();
-      if (nurseDoc.exists) {
-        final nurseFname = nurseDoc['user_fname'] ?? '';
-        final nurseLname = nurseDoc['user_lname'] ?? '';
-        final fullName = '$nurseFname $nurseLname'.trim();
-        if (fullName.isNotEmpty) {
-          nurseNames.add(fullName);
+
+      print('📋 Total nurse assignments found: ${nurseQuery.docs.length}');
+
+      List<String> activeNurseIds = [];
+
+      for (var doc in nurseQuery.docs) {
+        final data = doc.data();
+
+        final assignedDays = (data["days_assigned"] as List<dynamic>?) ?? [];
+        final startStr = data["start_time"] as String?;
+        final endStr = data["end_time"] as String?;
+        final nurseId =
+            data["user_id"] as String?; // Changed from nurse_id to user_id
+        final nurseShift = data["shift"] as String?;
+
+        print('\n--- Checking Nurse: $nurseId ---');
+        print('   Shift: $nurseShift');
+        print('   Time: $startStr - $endStr');
+        print('   Assigned Days: $assignedDays');
+
+        // Skip if missing critical data
+        if (startStr == null ||
+            endStr == null ||
+            nurseId == null ||
+            nurseShift == null) {
+          print('   ❌ SKIPPED: Missing critical data');
+          continue;
+        }
+
+        // Parse nurse shift times
+        final start = _parseTimeOfDay(startStr);
+        final end = _parseTimeOfDay(endStr);
+
+        // Determine if this is an overnight shift
+        final isNurseOvernightShift =
+            end.hour < start.hour ||
+            (end.hour == start.hour && end.minute <= start.minute);
+        print('   Overnight shift: $isNurseOvernightShift');
+
+        // For overnight shifts, determine which day to check based on current time
+        String nurseDayToCheck;
+        if (isNurseOvernightShift && today.hour >= 0 && today.hour < end.hour) {
+          // Current time is in the "end period" of an overnight shift
+          // Check if the previous day is assigned
+          final previousDay = today.subtract(const Duration(days: 1));
+          nurseDayToCheck = _getDayName(previousDay.weekday);
+          print(
+            '   Day to check: $nurseDayToCheck (previous day - in end period of overnight)',
+          );
+        } else {
+          // Regular shift or "start period" of overnight shift
+          nurseDayToCheck = _getDayName(today.weekday);
+          print('   Day to check: $nurseDayToCheck (current day)');
+        }
+
+        // check if today (or previous day for overnight) is assigned
+        final isDayAssigned = assignedDays.contains(nurseDayToCheck);
+        print('   Day assigned: $isDayAssigned');
+        if (!isDayAssigned) {
+          print('   ❌ SKIPPED: Not assigned for $nurseDayToCheck');
+          continue;
+        }
+
+        // check if time fits - more accurate check including minutes
+        bool inShift;
+        final currentMinutes = now.hour * 60 + now.minute;
+        final startMinutes = start.hour * 60 + start.minute;
+        final endMinutes = end.hour * 60 + end.minute;
+
+        print(
+          '   Current: $currentMinutes min, Start: $startMinutes min, End: $endMinutes min',
+        );
+
+        if (isNurseOvernightShift) {
+          // For overnight shifts (e.g., 22:00 – 06:00)
+          // Nurse is in shift if current time is after start OR before end
+          inShift =
+              currentMinutes >= startMinutes || currentMinutes < endMinutes;
+          print(
+            '   Overnight check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) OR currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift',
+          );
+        } else {
+          // For regular shifts, current time must be between start and end
+          inShift =
+              currentMinutes >= startMinutes && currentMinutes < endMinutes;
+          print(
+            '   Regular check: currentMinutes($currentMinutes) >= startMinutes($startMinutes) AND currentMinutes($currentMinutes) < endMinutes($endMinutes) = $inShift',
+          );
+        }
+
+        if (inShift) {
+          activeNurseIds.add(nurseId);
+          print('   ✅ ADDED: Nurse is on duty');
+        } else {
+          print('   ❌ SKIPPED: Not currently in shift time');
         }
       }
-    } catch (e) {
-      print('❌ Error fetching nurse name: $e');
-    }
-  }
 
-  // Close loading dialog before showing success dialog
-  if (context.mounted && Navigator.canPop(context)) {
-    Navigator.of(context).pop();
-  }
+      print('\n🎯 Total on-duty nurses found: ${activeNurseIds.length}');
+      print('Nurse IDs: $activeNurseIds');
+      print('=== END EMERGENCY ALERT NURSE SEARCH ===\n');
 
-  // Show success dialog with nurse names
-  if (context.mounted) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Row(
-            children: [
-              Icon(
-                Icons.check_circle,
-                color: Colors.green,
-                size: 32,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Alert Sent',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF00588e),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Your emergency alert has been sent to:',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              SizedBox(height: 12),
-              if (nurseNames.isEmpty)
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'No nurses currently on shift',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontStyle: FontStyle.italic,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  constraints: BoxConstraints(
-                    maxHeight: 200,
-                  ),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      children: nurseNames.map((name) {
-                        return Padding(
-                          padding: EdgeInsets.symmetric(vertical: 6),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.person,
-                                size: 20,
-                                color: Color(0xFF00588e),
-                              ),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  name,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          actions: [
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFF00588e),
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  'OK',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ],
+      if (activeNurseIds.isEmpty) {
+        // Close loading dialog
+        if (context.mounted && Navigator.canPop(context)) {
+          Navigator.of(context).pop();
+        }
+        if (context.mounted) {
+          _showError(context, "No nurse is currently on duty for this shift.");
+        }
+        return;
+      }
+
+      // ✅ Save to Firestore with BOTH house_id & house_name
+      final alertDoc = await FirebaseFirestore.instance
+          .collection("emergency_alert")
+          .add({
+            "alert_id": "EA${DateTime.now().millisecondsSinceEpoch}",
+            "emergency_type":
+                result["emergencyType"] ?? "", // Main field for emergency type
+            "additional_info":
+                result["description"] ?? "", // Optional additional information
+            "alert_timestamp": DateTime.now(),
+            "house_id": houseNameToId[result["houseName"]] ?? "",
+            "house_name": result["houseName"] ?? "",
+            "caregiver_name":
+                result["caregiverName"] ?? "", // Add caregiver name field
+            "user_id_cg": user.uid,
+            "user_id_nu": FieldValue.arrayUnion(
+              activeNurseIds,
+            ), // ✅ force array save
+          });
+
+      // ✅ Send push notifications to all active nurses
+      try {
+        final emergencyType = result["emergencyType"] as String? ?? "Emergency";
+        final houseName = result["houseName"] as String? ?? "Unknown House";
+        final description = result["description"] as String? ?? "";
+
+        // Send notification to each nurse
+        for (String nurseId in activeNurseIds) {
+          try {
+            // Get nurse's FCM token
+            final tokenDoc = await FirebaseFirestore.instance
+                .collection('fcm_tokens')
+                .doc(nurseId)
+                .get();
+
+            if (tokenDoc.exists && tokenDoc.data()?['token'] != null) {
+              // Store notification data that will be picked up by FCM
+              await FirebaseFirestore.instance
+                  .collection('pending_notifications')
+                  .add({
+                    'to_user_id': nurseId,
+                    'title': '🚨 Emergency Alert',
+                    'body':
+                        '$emergencyType at $houseName${description.isNotEmpty ? " - $description" : ""}',
+                    'data': {
+                      'type': 'emergency',
+                      'alertId': alertDoc.id,
+                      'house_name': houseName,
+                      'emergency_type': emergencyType,
+                    },
+                    'created_at': FieldValue.serverTimestamp(),
+                    'sent': false,
+                  });
+            }
+          } catch (e) {
+            print('❌ Error sending notification to nurse $nurseId: $e');
+          }
+        }
+      } catch (e) {
+        print('❌ Error sending emergency notifications: $e');
+      }
+
+      // ✅ Also save to unified shift logs collection
+      try {
+        final emergencyType = result["emergencyType"] as String? ?? "";
+        final description = result["description"] as String? ?? "";
+        final caregiverName = result["caregiverName"] as String? ?? "Unknown";
+
+        await CaregiverShiftLogService.createEmergencyAlertLog(
+          caregiverId: user.uid,
+          emergencyType: emergencyType,
+          description: description,
+          caregiverFname: caregiverName.split(' ').first, // Extract first name
         );
-      },
-    );
-  }
-  } catch (e) {
-    // Close loading dialog
-    if (context.mounted && Navigator.canPop(context)) {
-      Navigator.of(context).pop();
-    }
-    
-    print('Error processing emergency alert: $e');
-    if (context.mounted) {
-      _showError(context, 'Error sending emergency alert. Please try again.');
-    }
-  }
-}
+        print('✅ Emergency alert logged to shift logs successfully');
+      } catch (e) {
+        print('❌ Error logging emergency alert to shift logs: $e');
+        // Don't fail the entire operation if logging fails
+      }
 
+      // Fetch nurse names to display in dialog
+      List<String> nurseNames = [];
+      for (String nurseId in activeNurseIds) {
+        try {
+          final nurseDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(nurseId)
+              .get();
+          if (nurseDoc.exists) {
+            final nurseFname = nurseDoc['user_fname'] ?? '';
+            final nurseLname = nurseDoc['user_lname'] ?? '';
+            final fullName = '$nurseFname $nurseLname'.trim();
+            if (fullName.isNotEmpty) {
+              nurseNames.add(fullName);
+            }
+          }
+        } catch (e) {
+          print('❌ Error fetching nurse name: $e');
+        }
+      }
+
+      // Close loading dialog before showing success dialog
+      if (context.mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      // Show success dialog with nurse names
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              title: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green, size: 32),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Alert Sent',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF00588e),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Your emergency alert has been sent to:',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                  ),
+                  SizedBox(height: 12),
+                  if (nurseNames.isEmpty)
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'No nurses currently on shift',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      constraints: BoxConstraints(maxHeight: 200),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: nurseNames.map((name) {
+                            return Padding(
+                              padding: EdgeInsets.symmetric(vertical: 6),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.person,
+                                    size: 20,
+                                    color: Color(0xFF00588e),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF00588e),
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'OK',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      }
+    } catch (e) {
+      // Close loading dialog
+      if (context.mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      print('Error processing emergency alert: $e');
+      if (context.mounted) {
+        _showError(context, 'Error sending emergency alert. Please try again.');
+      }
+    }
+  }
 }
 
 void _showError(BuildContext context, String msg) {
@@ -583,8 +648,9 @@ const Map<String, String> houseIdToName = {
 };
 
 /// 🔹 Reverse mapping House Name → House ID
-final Map<String, String> houseNameToId =
-    houseIdToName.map((key, value) => MapEntry(value, key));
+final Map<String, String> houseNameToId = houseIdToName.map(
+  (key, value) => MapEntry(value, key),
+);
 
 /// 🔹 Para maayos ang pagkakasunod ng araw
 const Map<String, int> _dayOrder = {
@@ -600,12 +666,14 @@ const Map<String, int> _dayOrder = {
 // ✅ Kunin caregiver display name
 Future<String> _getCaregiverName(String uid) async {
   try {
-    final userDoc =
-        await FirebaseFirestore.instance.collection("users").doc(uid).get();
+    final userDoc = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(uid)
+        .get();
 
     if (userDoc.exists) {
       final data = userDoc.data();
-      
+
       if (data == null) {
         return "Unknown Caregiver";
       }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'background_attendance_service.dart';
 import 'attendance_check_service.dart';
 
 /// 🐛 DEBUG SCREEN FOR ATTENDANCE SYSTEM
@@ -114,11 +113,15 @@ class _AttendanceDebugScreenState extends State<AttendanceDebugScreen> {
   Future<void> _triggerBackgroundCheck() async {
     setState(() {
       _isLoading = true;
-      _resultMessage = 'Running background check...';
+      _resultMessage = 'Running attendance check...';
     });
 
     try {
-      await BackgroundAttendanceService.triggerManualCheck();
+      // Trigger the attendance check directly
+      await AttendanceCheckService.startPeriodicAttendanceCheck(context, () {
+        // Callback when attendance is checked
+        print('Attendance checked from debug screen');
+      });
 
       // Wait a bit for the check to complete
       await Future.delayed(const Duration(seconds: 2));
@@ -127,13 +130,13 @@ class _AttendanceDebugScreenState extends State<AttendanceDebugScreen> {
       await _loadData();
 
       setState(() {
-        _resultMessage = '✅ Background check completed successfully!';
+        _resultMessage = '✅ Attendance check completed successfully!';
         _isLoading = false;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Background check completed!'),
+          content: Text('Attendance check completed!'),
           backgroundColor: Colors.green,
         ),
       );

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart' as app_auth;
 import 'edit_profile.dart';
 import 'leave_form.dart';
+import 'health_analytics_selector.dart';
 
 class NurseSidebar extends StatelessWidget {
   final bool isSidebarOpen;
@@ -99,7 +100,25 @@ class NurseSidebar extends StatelessWidget {
                     },
                   ),
                   ListTile(
-                    leading: Icon(Icons.settings, color: Color(0xFF00588E)),
+                    leading: Icon(Icons.analytics, color: Color(0xFF00588E)),
+                    title: Text('Health Analytics'),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        parentContext,
+                        MaterialPageRoute(
+                          builder: (context) => HealthAnalyticsSelectorScreen(
+                            nurseName: Provider.of<app_auth.AuthProvider>(
+                              parentContext,
+                              listen: false,
+                            ).userFirstName,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.request_page, color: Color(0xFF00588E)),
                     title: Text('Request Leave'),
                     onTap: () {
                       toggleSidebar();

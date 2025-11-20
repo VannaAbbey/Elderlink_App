@@ -9,11 +9,19 @@ import 'dart:async';
 /// Service to manage attendance check functionality for nurses and caregivers
 ///
 /// **Key Features:**
-/// - ✅ Automatic attendance dialog at shift start (15-min window)
-/// - ⏰ Auto-mark absent after 15 minutes of no response
+/// - ✅ Attendance dialog shows at shift start (15-min grace period to respond)
+/// - ⏰ Timer counts down from 15:00 to 0:00
+/// - 🚪 Dialog auto-closes after 15 minutes with warning message
+/// - 👤 Users should manually mark Present or Absent before timer expires
 /// - 👥 Works for both nurses and caregivers
-/// - 🔒 Modal dialog (cannot dismiss until answered)
-/// - 📊 Records attendance to Firestore
+/// - 🔒 Modal dialog (cannot dismiss manually until user responds or timer expires)
+/// - 📊 Only manual Present/Absent marks record to Firestore
+///
+/// **Important Note:**
+/// - Dialog auto-closes after 15 minutes with warning (UI/UX only)
+/// - NO database write happens on auto-close
+/// - Web dashboard backend handles automatic absent marking in database
+/// - Mobile app only writes to database when user manually clicks Present/Absent
 ///
 /// **Shift Times:**
 /// - 1st Shift: 6:00 AM - 2:00 PM
@@ -46,7 +54,6 @@ import 'dart:async';
 /// ```
 class AttendanceCheckService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  static Timer? _attendanceTimer;
   static Timer?
   _periodicCheckTimer; // Timer to periodically check for shift start
   static bool _isDialogShown = false;
@@ -139,15 +146,36 @@ class AttendanceCheckService {
         shiftStartMinute,
       );
 
-      // Check if current time is within 15 minutes of shift start
-      // (from shift start to 15 minutes after)
+      // For 3rd shift, if current time is before 6 AM, shift started yesterday
+      if (shiftStartHour == 22 && now.hour < 6) {
+        // This is morning continuation of last night's 3rd shift
+        final yesterdayShiftStart = shiftStart.subtract(
+          const Duration(days: 1),
+        );
+        final timeDifference = now.difference(yesterdayShiftStart);
+        final isWithinWindow =
+            timeDifference.inMinutes >= 0 && timeDifference.inMinutes < 15;
+
+        print(
+          '🔍 ATTENDANCE: 3rd shift (continued from yesterday) starts at $yesterdayShiftStart',
+        );
+        print(
+          '🔍 ATTENDANCE: Time difference: ${timeDifference.inMinutes} minutes',
+        );
+        print('🔍 ATTENDANCE: Within window: $isWithinWindow');
+
+        return isWithinWindow;
+      }
+
+      // Check if current time is exactly at shift start or within 15 minutes AFTER
+      // Dialog should show from exactly 6:00 AM (not 5:59 AM)
       final timeDifference = now.difference(shiftStart);
       final isWithinWindow =
-          timeDifference.inMinutes >= 0 && timeDifference.inMinutes <= 15;
+          timeDifference.inSeconds >= 0 && timeDifference.inMinutes < 15;
 
       print('🔍 ATTENDANCE: Shift starts at $shiftStart');
       print(
-        '🔍 ATTENDANCE: Time difference: ${timeDifference.inMinutes} minutes',
+        '🔍 ATTENDANCE: Time difference: ${timeDifference.inMinutes} minutes ${timeDifference.inSeconds % 60} seconds',
       );
       print('🔍 ATTENDANCE: Within window: $isWithinWindow');
 
@@ -358,30 +386,9 @@ class AttendanceCheckService {
       return;
     }
 
-    // Check if dialog was shown before and 15 minutes already elapsed
-    if (_dialogShowTime != null) {
-      final elapsed = DateTime.now().difference(_dialogShowTime!);
-      if (elapsed.inMinutes >= 15) {
-        print(
-          '⏰ ATTENDANCE: 15 minutes already elapsed - auto-marking as absent',
-        );
-        await recordAttendance(
-          isPresent: false,
-          reason: 'Auto-marked absent - no response within 15 minutes',
-        );
-        _dialogShowTime = null;
-        _isDialogShown = false;
-        onDismissed();
-        return;
-      }
-    }
-
     // Set the time when dialog is first shown
     _dialogShowTime ??= DateTime.now();
     _isDialogShown = true;
-
-    // Start 15-minute timer for auto-absent
-    _startAutoAbsentTimer(context, onDismissed);
 
     try {
       await showDialog(
@@ -392,7 +399,6 @@ class AttendanceCheckService {
             onWillPop: () async => false, // Prevent back button
             child: AttendanceCheckDialog(
               onAttendanceMarked: () {
-                _cancelAutoAbsentTimer();
                 _dialogShowTime = null; // Reset the show time
                 _isDialogShown = false;
                 onDismissed();
@@ -404,88 +410,101 @@ class AttendanceCheckService {
     } catch (e) {
       print('🔴 ATTENDANCE Error showing dialog: $e');
       _isDialogShown = false;
-      _cancelAutoAbsentTimer();
     }
-  }
-
-  /// Starts a 15-minute timer that auto-marks user as absent
-  static void _startAutoAbsentTimer(
-    BuildContext context,
-    VoidCallback onDismissed,
-  ) {
-    _cancelAutoAbsentTimer(); // Cancel any existing timer
-
-    print('⏱️ ATTENDANCE: Starting 15-minute auto-absent timer');
-
-    _attendanceTimer = Timer(const Duration(minutes: 15), () async {
-      print('⏰ ATTENDANCE: 15 minutes elapsed - auto-marking as absent');
-
-      // Record as absent
-      await recordAttendance(
-        isPresent: false,
-        reason: 'Auto-marked absent - no response within 15 minutes',
-      );
-
-      // Reset dialog show time
-      _dialogShowTime = null;
-
-      // Close dialog if still showing
-      if (_isDialogShown && context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        _isDialogShown = false;
-
-        // Show notification that they were marked absent
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              '⚠️ You have been marked as absent for not responding within 15 minutes',
-              style: TextStyle(fontSize: 16),
-            ),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 5),
-          ),
-        );
-      }
-
-      onDismissed();
-    });
-  }
-
-  /// Cancels the auto-absent timer
-  static void _cancelAutoAbsentTimer() {
-    if (_attendanceTimer != null && _attendanceTimer!.isActive) {
-      _attendanceTimer!.cancel();
-      print('🛑 ATTENDANCE: Auto-absent timer cancelled');
-    }
-    _attendanceTimer = null;
   }
 
   /// Resets the dialog shown flag (for testing or manual reset)
   static void resetDialogState() {
     _isDialogShown = false;
     _dialogShowTime = null;
-    _cancelAutoAbsentTimer();
   }
 
-  /// Starts a periodic timer to check for shift start every minute
-  /// This ensures attendance dialog appears automatically when shift time arrives
+  /// Calculates and schedules attendance check at exact shift start time
+  /// This is efficient - only runs once at the precise moment needed
   /// Call this from initState of nurse/caregiver home screens
-  static void startPeriodicAttendanceCheck(
+  static Future<void> startPeriodicAttendanceCheck(
     BuildContext context,
     VoidCallback onAttendanceChecked,
-  ) {
+  ) async {
     // Cancel any existing timer
     stopPeriodicAttendanceCheck();
 
-    print('🔄 ATTENDANCE: Starting periodic attendance check (every minute)');
+    print('🔄 ATTENDANCE: Setting up smart attendance check scheduler...');
 
-    // Check immediately
-    _performPeriodicAttendanceCheck(context, onAttendanceChecked);
+    // Check immediately if we're already at shift start
+    await _performPeriodicAttendanceCheck(context, onAttendanceChecked);
 
-    // Then check every minute
-    _periodicCheckTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
-      _performPeriodicAttendanceCheck(context, onAttendanceChecked);
-    });
+    // Calculate when next shift starts and schedule dialog
+    await _scheduleNextShiftCheck(context, onAttendanceChecked);
+  }
+
+  /// Schedules the next shift check at the exact shift start time
+  static Future<void> _scheduleNextShiftCheck(
+    BuildContext context,
+    VoidCallback onAttendanceChecked,
+  ) async {
+    try {
+      final now = DateTime.now();
+
+      // Get user's assigned shift time
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final houseSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: currentUser.uid)
+          .where('is_current', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (houseSnapshot.docs.isEmpty) return;
+
+      final houseData = houseSnapshot.docs.first.data();
+      final startTime = houseData['start_time'] as String?;
+      if (startTime == null) return;
+
+      // Parse shift start time
+      final timeParts = startTime.split(':');
+      final shiftStartHour = int.parse(timeParts[0]);
+      final shiftStartMinute = int.parse(timeParts[1]);
+
+      // Calculate next shift start
+      DateTime nextShiftStart = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        shiftStartHour,
+        shiftStartMinute,
+      );
+
+      // If shift start has passed today, schedule for tomorrow
+      if (nextShiftStart.isBefore(now) ||
+          nextShiftStart.difference(now).inMinutes >= 15) {
+        nextShiftStart = nextShiftStart.add(const Duration(days: 1));
+      }
+
+      final waitDuration = nextShiftStart.difference(now);
+
+      print('⏰ ATTENDANCE: Next shift starts at $nextShiftStart');
+      print(
+        '⏰ ATTENDANCE: Scheduling dialog in ${waitDuration.inHours}h ${waitDuration.inMinutes % 60}m ${waitDuration.inSeconds % 60}s',
+      );
+
+      // Schedule ONE timer to fire exactly at shift start
+      _periodicCheckTimer = Timer(waitDuration, () async {
+        if (context.mounted) {
+          await _performPeriodicAttendanceCheck(context, onAttendanceChecked);
+          // Schedule the next shift check (tomorrow)
+          await _scheduleNextShiftCheck(context, onAttendanceChecked);
+        }
+      });
+    } catch (e) {
+      print('❌ ATTENDANCE: Error scheduling next shift: $e');
+      // Fallback: check every minute if smart scheduling fails
+      _periodicCheckTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+        _performPeriodicAttendanceCheck(context, onAttendanceChecked);
+      });
+    }
   }
 
   /// Performs the periodic attendance check
@@ -724,7 +743,7 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
     super.dispose();
   }
 
-  /// Starts the countdown timer display
+  /// Starts the countdown timer display and auto-closes dialog when time expires
   void _startCountdown() {
     print(
       '⏰ DIALOG: Starting countdown timer with $_remainingSeconds seconds remaining',
@@ -743,11 +762,11 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
           print('⚠️ DIALOG: 10 seconds remaining');
         }
       } else {
-        // Timer reached 0 - auto-mark as absent and close dialog
-        print('🔴 DIALOG: Timer reached 0 - triggering auto-close');
+        // Timer reached 0 - auto-close with warning (no database write)
+        print('🔴 DIALOG: Timer reached 0 - closing dialog with warning');
         timer.cancel();
         if (mounted) {
-          _autoMarkAbsentAndClose();
+          _autoCloseWithWarning();
         } else {
           print('❌ DIALOG: Widget not mounted, cannot auto-close');
         }
@@ -755,9 +774,11 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
     });
   }
 
-  /// Auto-mark user as absent when time runs out
-  Future<void> _autoMarkAbsentAndClose() async {
-    print('⏰ DIALOG: Timer expired - auto-marking as absent');
+  /// Auto-close dialog with warning message (no database write - web handles it)
+  Future<void> _autoCloseWithWarning() async {
+    print(
+      '⏰ DIALOG: Timer expired - showing warning and closing (web will mark absent)',
+    );
 
     // Prevent multiple calls
     if (_isLoading) {
@@ -770,19 +791,12 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
     });
 
     try {
-      await AttendanceCheckService.recordAttendance(
-        isPresent: false,
-        reason: 'Auto-marked absent - no response within 15 minutes',
-      );
-
-      print('✅ DIALOG: Successfully marked as absent');
-
       if (mounted) {
-        // Show notification
+        // Show warning notification
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '⚠️ You have been marked as absent for not responding within 15 minutes',
+              '⚠️ You did not respond within 15 minutes. Please contact your supervisor.',
               style: TextStyle(fontSize: 16),
             ),
             backgroundColor: Colors.red,
@@ -790,18 +804,18 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
           ),
         );
 
-        // Close dialog
-        print('🔄 DIALOG: Closing dialog and calling callback');
+        // Close dialog without writing to database
+        print('🔄 DIALOG: Closing dialog (web will handle absent marking)');
         Navigator.of(context).pop();
         widget.onAttendanceMarked();
-        print('✅ DIALOG: Dialog closed successfully');
+        print('✅ DIALOG: Dialog closed - web system will mark as absent');
       } else {
-        print('❌ DIALOG: Widget not mounted after marking absent');
+        print('❌ DIALOG: Widget not mounted');
       }
     } catch (e) {
-      print('❌ DIALOG: Error auto-marking absent: $e');
+      print('❌ DIALOG: Error closing dialog: $e');
 
-      // Even on error, try to close the dialog
+      // Try to close dialog anyway
       if (mounted) {
         Navigator.of(context).pop();
         widget.onAttendanceMarked();
@@ -815,6 +829,7 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
     }
   }
 
+  /// Auto-mark user as absent when time runs out
   /// Formats remaining time as MM:SS
   String _formatTime(int seconds) {
     final minutes = seconds ~/ 60;
@@ -1039,7 +1054,7 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Auto-marked absent if no response',
+                'Please mark your attendance within 15 minutes',
                 style: TextStyle(
                   fontSize: 12,
                   fontStyle: FontStyle.italic,

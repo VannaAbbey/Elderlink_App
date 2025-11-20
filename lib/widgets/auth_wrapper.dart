@@ -108,7 +108,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
             (userRole == 'caregiver' || userRole == 'nurse')) {
           _leaveListenerInitialized = true;
           WidgetsBinding.instance.addPostFrameCallback((_) async {
-            print('🔔 Initializing LeaveNotificationListener for $userRole: $userId');
+            print(
+              '🔔 Initializing LeaveNotificationListener for $userRole: $userId',
+            );
             await LeaveNotificationListener().initialize();
             print('✅ LeaveNotificationListener initialized successfully');
           });
