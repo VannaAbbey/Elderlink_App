@@ -5,7 +5,31 @@ import 'absence_service.dart';
 class HouseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  /// Get assigned house for caregiver
+  /// This method checks for emergency coverage first before returning the regular assignment
   Future<Map<String, dynamic>?> getAssignedHouseForCaregiver(String caregiverId) async {
+    // First, check if caregiver has an emergency coverage assignment
+    final emergencyCoverageHouseId = await AbsenceService.getEmergencyCoverageHouseId(caregiverId);
+    
+    if (emergencyCoverageHouseId != null) {
+      print('🚨 Caregiver $caregiverId has emergency coverage for house: $emergencyCoverageHouseId');
+      
+      // Return the emergency coverage house instead of regular assignment
+      final houseSnapshot = await _firestore
+          .collection('house')
+          .where('house_id', isEqualTo: emergencyCoverageHouseId)
+          .limit(1)
+          .get();
+      
+      if (houseSnapshot.docs.isNotEmpty) {
+        final houseData = houseSnapshot.docs.first.data();
+        houseData['is_emergency_coverage'] = true; // Flag to indicate this is emergency coverage
+        print('✅ Returning emergency coverage house: ${houseData['house_name']}');
+        return houseData;
+      }
+    }
+    
+    // No emergency coverage, return regular assignment
     final assignSnapshot = await _firestore
         .collection('house_shift_assignments')
         .where('user_id', isEqualTo: caregiverId)
@@ -25,12 +49,24 @@ class HouseService {
         .limit(1)
         .get();
     if (houseSnapshot.docs.isEmpty) return null;
-    return houseSnapshot.docs.first.data();
+    
+    final houseData = houseSnapshot.docs.first.data();
+    houseData['is_emergency_coverage'] = false;
+    return houseData;
   }
 
   Future<List<Map<String, dynamic>>> getAssignedElderlyForCaregiver(String caregiverId) async {
     try {
       print('DEBUG HouseService: Getting assigned elderly for caregiver $caregiverId');
+      
+      // PRIORITY CHECK: Check for emergency coverage first
+      final emergencyCoverageHouseId = await AbsenceService.getEmergencyCoverageHouseId(caregiverId);
+      
+      if (emergencyCoverageHouseId != null) {
+        print('🚨 Caregiver has emergency coverage for house: $emergencyCoverageHouseId');
+        // Return ALL elderly in the emergency coverage house
+        return await _getElderlyForEmergencyCoverageHouse(caregiverId, emergencyCoverageHouseId);
+      }
       
       // ENHANCED APPROACH: First try to get specific elderly assignments, 
       // then fallback to house-based approach if needed
@@ -504,12 +540,23 @@ class HouseService {
 
   /// Get assigned elderly for a caregiver including temporary assignments from absent caregivers
   /// This method combines regular assignments with temporary assignments for the current day
+  /// PRIORITY: Emergency coverage overrides everything
   Future<List<Map<String, dynamic>>> getAssignedElderlyIncludingTemporary(
     String caregiverId,
     String day,
   ) async {
     try {
       print('DEBUG HouseService: Getting assigned elderly including temporary for caregiver $caregiverId on $day');
+      
+      // PRIORITY CHECK: Check for emergency coverage FIRST
+      final emergencyCoverageHouseId = await AbsenceService.getEmergencyCoverageHouseId(caregiverId);
+      
+      if (emergencyCoverageHouseId != null) {
+        print('🚨 EMERGENCY COVERAGE DETECTED in getAssignedElderlyIncludingTemporary');
+        print('🚨 Emergency house ID: $emergencyCoverageHouseId');
+        // Return ONLY emergency coverage elderly, ignore regular assignments
+        return await _getElderlyForEmergencyCoverageHouse(caregiverId, emergencyCoverageHouseId);
+      }
       
       // Get regular assigned elderly
       final regularElderly = await getAssignedElderlyForCaregiverDay(caregiverId, day);
@@ -590,6 +637,76 @@ class HouseService {
       print('DEBUG HouseService: Error in getAssignedElderlyIncludingTemporary: $e');
       // Return regular assignments as fallback
       return await getAssignedElderlyForCaregiverDay(caregiverId, day);
+    }
+  }
+
+  /// Get all elderly for a house under emergency coverage
+  /// This is used when a caregiver is temporarily assigned to a different house
+  Future<List<Map<String, dynamic>>> _getElderlyForEmergencyCoverageHouse(
+    String caregiverId,
+    String emergencyCoverageHouseId,
+  ) async {
+    try {
+      print('🚨 Getting elderly for emergency coverage house: $emergencyCoverageHouseId');
+      
+      // Get house information
+      final houseSnapshot = await _firestore
+          .collection('house')
+          .where('house_id', isEqualTo: emergencyCoverageHouseId)
+          .limit(1)
+          .get();
+      
+      String? houseName;
+      if (houseSnapshot.docs.isNotEmpty) {
+        final houseData = houseSnapshot.docs.first.data();
+        houseName = houseData['house_name'] as String?;
+        print('🚨 Emergency coverage house name: $houseName');
+      }
+      
+      // Get the caregiver's days assigned (from their regular assignment)
+      final caregiverHouseSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .limit(1)
+          .get();
+      
+      List<String> daysAssigned = [];
+      if (caregiverHouseSnapshot.docs.isNotEmpty) {
+        final caregiverData = caregiverHouseSnapshot.docs.first.data();
+        daysAssigned = List<String>.from(caregiverData['days_assigned'] ?? []);
+      }
+      
+      // Get ALL elderly in the emergency coverage house
+      final elderlySnapshot = await _firestore
+          .collection('elderly')
+          .where('house_id', isEqualTo: emergencyCoverageHouseId)
+          .where('elderly_status', isEqualTo: 'Alive')
+          .get();
+      
+      print('🚨 Found ${elderlySnapshot.docs.length} elderly in emergency coverage house');
+      
+      final result = <Map<String, dynamic>>[];
+      for (var elderlyDoc in elderlySnapshot.docs) {
+        final elderlyData = elderlyDoc.data();
+        final elderlyId = elderlyDoc.id;
+        
+        final elderlyRecord = _buildElderlyRecord(elderlyData, elderlyId, daysAssigned, houseName);
+        
+        // Mark as emergency coverage assignment
+        elderlyRecord['is_emergency_coverage'] = true;
+        elderlyRecord['emergency_coverage_note'] = 'Emergency coverage - Full house reassignment';
+        
+        result.add(elderlyRecord);
+        print('🚨 Added emergency coverage elderly: ${elderlyData['elderly_fname']} (ID: $elderlyId)');
+      }
+      
+      print('🚨 Returning ${result.length} elderly for emergency coverage');
+      return result;
+      
+    } catch (e) {
+      print('❌ Error getting elderly for emergency coverage house: $e');
+      return [];
     }
   }
 }

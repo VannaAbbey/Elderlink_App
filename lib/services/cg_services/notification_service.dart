@@ -169,6 +169,25 @@ class NotificationService {
     }
   }
 
+  /// Delete all notifications for a user
+  Future<bool> deleteAllNotifications(String userId) async {
+    try {
+      final allNotifications = await _appNotificationsCollection
+          .where('user_id', isEqualTo: userId)
+          .get();
+
+      final batch = _firestore.batch();
+      for (final doc in allNotifications.docs) {
+        batch.delete(doc.reference);
+      }
+
+      await batch.commit();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// Delete old notifications (older than specified days)
   Future<bool> deleteOldNotifications(String userId, {int daysOld = 30}) async {
     try {

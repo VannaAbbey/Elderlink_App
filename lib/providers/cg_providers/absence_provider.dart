@@ -29,6 +29,41 @@ class AbsenceProvider extends ChangeNotifier {
   
   /// Check if user has temporary elderly assignments today
   bool get hasTemporaryAssignments => _temporaryAssignments.isNotEmpty;
+  
+  /// Check if user has emergency coverage assignment (full house reassignment)
+  bool get hasEmergencyCoverage {
+    final result = _temporaryAssignments.any((assignment) => assignment.isEmergencyCoverage);
+    print('🔍 AbsenceProvider.hasEmergencyCoverage: $result');
+    print('🔍 Total assignments: ${_temporaryAssignments.length}');
+    for (var assignment in _temporaryAssignments) {
+      print('🔍 Assignment type: ${assignment.assignmentType}, isEmergencyCoverage: ${assignment.isEmergencyCoverage}');
+    }
+    return result;
+  }
+  
+  /// Get emergency coverage assignment if any
+  TemporaryAssignment? get emergencyCoverageAssignment {
+    try {
+      final assignment = _temporaryAssignments.firstWhere((assignment) => assignment.isEmergencyCoverage);
+      print('✅ Found emergency coverage assignment: ${assignment.id}');
+      return assignment;
+    } catch (e) {
+      print('⚠️ No emergency coverage assignment found');
+      return null;
+    }
+  }
+  
+  /// Get the emergency coverage house ID if under emergency coverage (async method)
+  Future<String?> getEmergencyCoverageHouseId() async {
+    final assignment = emergencyCoverageAssignment;
+    if (assignment == null) {
+      return null;
+    }
+    
+    final houseId = await assignment.getEmergencyHouseId();
+    print('🏠 Emergency coverage house ID: $houseId');
+    return houseId;
+  }
 
   /// Initialize absence tracking for a specific user
   /// This sets up real-time listeners for absence and temporary assignments

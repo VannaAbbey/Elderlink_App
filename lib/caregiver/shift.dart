@@ -22,6 +22,7 @@ class ShiftScreen extends StatefulWidget {
 class _ShiftScreenState extends State<ShiftScreen> {
   DateTime selectedDate = DateTime.now();
   final ScrollController _additionalLogsScrollController = ScrollController();
+  final ScrollController _shiftLogsScrollController = ScrollController();
   bool _dialogShown = false;
 
   @override
@@ -497,6 +498,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
       // Context might be invalid during disposal, ignore
     }
     _additionalLogsScrollController.dispose();
+    _shiftLogsScrollController.dispose();
     super.dispose();
   }
 
@@ -630,8 +632,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                       const SizedBox(height: 9),
                                       // Task summary row - Real-time data from Firebase (filtered by current caregiver)
                                       Expanded(
-                                        child: SingleChildScrollView(
-                                          child: StreamBuilder<List<Map<String, dynamic>>>(
+                                        child: Scrollbar(
+                                          controller: _shiftLogsScrollController,
+                                          thumbVisibility: false,
+                                          thickness: 4,
+                                          radius: const Radius.circular(8),
+                                          child: SingleChildScrollView(
+                                            controller: _shiftLogsScrollController,
+                                            child: StreamBuilder<List<Map<String, dynamic>>>(
                                             stream: _getCurrentCaregiverShiftLogs(selectedDate),
                                             builder: (context, snapshot) {
                                               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -695,6 +703,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                                               );
                                             },
                                           ),
+                                        ),
                                         ),
                                       ),
                                     ],
