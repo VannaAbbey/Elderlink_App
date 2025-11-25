@@ -167,17 +167,31 @@ Future<void> openEmergencyIfAllowed(BuildContext context) async {
     return;
   }
 
-  // ✅ Allowed → convert houseId → house name
-  final String houseName = houseIdToName[houseId] ?? "Unknown House";
+  // ✅ Check if caregiver has emergency coverage
+  String finalHouseName = houseIdToName[houseId] ?? "Unknown House";
+  
+  if (absenceProvider.hasEmergencyCoverage) {
+    print('🚨 Caregiver has emergency coverage, checking house...');
+    final emergencyHouseId = await absenceProvider.getEmergencyCoverageHouseId();
+    if (emergencyHouseId != null) {
+      final emergencyHouseName = houseIdToName[emergencyHouseId];
+      if (emergencyHouseName != null) {
+        print('🏠 Emergency coverage house: $emergencyHouseName (ID: $emergencyHouseId)');
+        finalHouseName = emergencyHouseName;
+      } else {
+        print('⚠️ Emergency house ID not found in mapping: $emergencyHouseId');
+      }
+    }
+  }
 
   // ✅ Kunin caregiver display name
   final cgName = await _getCaregiverName(user.uid);
 
-  // ✅ Open emergency modal with caregiver name
+  // ✅ Open emergency modal with correct house (regular or emergency)
   if (!context.mounted) return;
   final result = await showEmergencyModal(
     context,
-    defaultHouse: houseName,
+    defaultHouse: finalHouseName,
     caregiverName: cgName, // <-- ipapasa sa UI
   );
 

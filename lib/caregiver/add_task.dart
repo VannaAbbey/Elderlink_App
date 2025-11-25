@@ -359,6 +359,9 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
           'elderly_id': elderly['elderly_id'],
           'caregiver_id': caregiverId,
           'elderly_fname': prefix + (elderly['elderly_fname'] ?? ''),
+          // IMPORTANT: Pass through the emergency coverage and temporary assignment flags
+          'is_emergency_coverage': elderly['is_emergency_coverage'] ?? false,
+          'is_temporary_assignment': elderly['is_temporary_assignment'] ?? false,
         });
       }
       

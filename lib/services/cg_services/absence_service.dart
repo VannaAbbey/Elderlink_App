@@ -369,21 +369,91 @@ class AbsenceService {
   }
 
   /// Get all elderly IDs that are temporarily assigned to a caregiver today
+  /// This EXCLUDES emergency coverage elderly (those are handled separately)
   static Future<List<String>> getTodayTemporaryElderlyIds(String userId) async {
     try {
       final assignments = await getTodayTemporaryAssignmentsTo(userId);
 
-      // Flatten all elderly IDs from all assignments
+      // Flatten all elderly IDs from ABSENCE COVERAGE assignments only
       final elderlyIds = <String>{};
       for (final assignment in assignments) {
-        elderlyIds.addAll(assignment.elderlyIds);
+        // Skip emergency coverage assignments - those are handled separately
+        if (!assignment.isEmergencyCoverage) {
+          elderlyIds.addAll(assignment.elderlyIds);
+        }
       }
 
-      print('✅ Found ${elderlyIds.length} temporarily assigned elderly');
+      print('✅ Found ${elderlyIds.length} temporarily assigned elderly (absence coverage only)');
       return elderlyIds.toList();
     } catch (e) {
       print('❌ Error getting temporary elderly IDs: $e');
       return [];
+    }
+  }
+
+  /// Check if user has an active emergency coverage assignment for today
+  static Future<TemporaryAssignment?> getTodayEmergencyCoverageAssignment(String userId) async {
+    try {
+      final assignments = await getTodayTemporaryAssignmentsTo(userId);
+      
+      // Find emergency coverage assignment
+      for (final assignment in assignments) {
+        if (assignment.isEmergencyCoverage) {
+          print('🚨 Found emergency coverage assignment: ${assignment.emergencyCoverageHouseId}');
+          return assignment;
+        }
+      }
+      
+      print('✅ No emergency coverage assignment found');
+      return null;
+    } catch (e) {
+      print('❌ Error getting emergency coverage assignment: $e');
+      return null;
+    }
+  }
+
+  /// Get the house ID for emergency coverage if caregiver is under emergency coverage
+  static Future<String?> getEmergencyCoverageHouseId(String userId) async {
+    try {
+      final emergencyCoverage = await getTodayEmergencyCoverageAssignment(userId);
+      if (emergencyCoverage == null) {
+        return null;
+      }
+      
+      // Use the smart extraction method from the model
+      final houseId = await emergencyCoverage.getEmergencyHouseId();
+      
+      if (houseId != null) {
+        print('🚨 Emergency house ID for user $userId: $houseId');
+        return houseId;
+      }
+      
+      // Fallback: Try to get house ID from one of the elderly
+      if (emergencyCoverage.elderlyIds.isNotEmpty) {
+        print('🔍 Fallback: Fetching house ID from elderly documents...');
+        final firstElderlyId = emergencyCoverage.elderlyIds.first;
+        
+        final elderlyDoc = await _firestore
+            .collection('elderly')
+            .doc(firstElderlyId)
+            .get();
+        
+        if (elderlyDoc.exists) {
+          final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
+          final houseIdFromElderly = elderlyData['house_id'] as String?;
+          
+          if (houseIdFromElderly != null) {
+            print('✅ Extracted house ID from elderly document: $houseIdFromElderly');
+            return houseIdFromElderly;
+          }
+        }
+      }
+      
+      print('⚠️ Could not determine emergency coverage house ID');
+      return null;
+    } catch (e) {
+      print('❌ Error getting emergency coverage house ID: $e');
+      return null;
     }
   }
 

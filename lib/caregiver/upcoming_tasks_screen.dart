@@ -1378,8 +1378,12 @@ class UpcomingTasksScreen extends StatefulWidget {
 
 class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsBindingObserver {
   Timer? _refreshTimer;
-  int _refreshKey = 0; // Simple key to force rebuilds
   bool _isSavingTask = false; // Loading state for task submission
+  final ScrollController _scrollController = ScrollController(); // Preserve scroll position
+  
+  // Multi-select mode state - using ValueNotifier to prevent StreamBuilder rebuilds
+  final ValueNotifier<bool> _isMultiSelectMode = ValueNotifier<bool>(false);
+  final ValueNotifier<Set<String>> _selectedTaskIds = ValueNotifier<Set<String>>({});
 
   @override
   void initState() {
@@ -1399,6 +1403,9 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
+    _scrollController.dispose(); // Clean up scroll controller
+    _isMultiSelectMode.dispose(); // Clean up ValueNotifier
+    _selectedTaskIds.dispose(); // Clean up ValueNotifier
     super.dispose();
   }
 
@@ -1410,7 +1417,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       print('🔄 App resumed, refreshing tasks...');
       // DON'T call _checkProgressiveTaskSystem here - it causes immediate task date updates
       // Only let the periodic timer handle progression checks (which respects shift end time)
-      _triggerRefresh();
+      // StreamBuilder will automatically update when Firestore data changes
     }
   }
 
@@ -1421,21 +1428,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
           print('🔄 Periodic refresh triggered...');
           // Check if shift has ended and run progressive task system if needed
           _checkProgressiveTaskSystem(context);
-          _triggerRefresh();
+          // No need to call setState - StreamBuilder automatically reacts to Firestore changes
         } catch (e) {
           print('⚠️ Periodic refresh error (non-critical): $e');
           // Don't crash if refresh fails
         }
       }
     });
-  }
-
-  void _triggerRefresh() {
-    if (mounted) {
-      setState(() {
-        _refreshKey++; // Force rebuild by changing key
-      });
-    }
   }
 
   Stream<List<Map<String, dynamic>>> getTasksStream() {
@@ -1777,9 +1776,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     if (currentUser != null) {
       await TaskService.checkAndProgressRecurringTasks(currentUser.uid);
     }
-    // Force refresh the data
-    _triggerRefresh();
-    // Add a small delay to ensure UI updates
+    // StreamBuilder automatically updates when Firestore data changes
+    // Add a small delay to ensure UI updates are visible
     await Future.delayed(const Duration(milliseconds: 500));
   }
 
@@ -1791,7 +1789,8 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
     return RefreshIndicator(
       onRefresh: _onRefresh,
       child: StreamBuilder<List<Map<String, dynamic>>>(
-      key: ValueKey(_refreshKey), // Force rebuild when refresh key changes
+      // Removed key - StreamBuilder automatically updates when data changes
+      // Adding a key causes widget to be destroyed/recreated, losing scroll position
       stream: getTasksStream(),
       builder: (context, snapshot) {
         // Show loading spinner while data is loading
@@ -1886,6 +1885,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                 child: tasks.isEmpty
                   ? const Center(child: Text('No Upcoming Tasks', style: TextStyle(fontSize: 18, color: Color(0xFF22688E), fontWeight: FontWeight.bold)))
                   : ListView(
+                      controller: _scrollController, // Preserve scroll position during rebuilds
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                       children: [
                         for (final key in sortedKeys)
@@ -1911,7 +1911,15 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                   return aStart.compareTo(bStart);
                                 })))
                                   InkWell(
+                                    key: ValueKey(task['task_id']), // Preserve widget state
                                     onTap: () {
+                                      // If in multi-select mode, toggle selection instead of opening dialog
+                                      if (_isMultiSelectMode.value) {
+                                        _toggleTaskSelection(task['task_id']);
+                                        return;
+                                      }
+                                      
+                                      // Normal behavior: show task details dialog
                                       bool showReasonInput = false;
                                       TextEditingController reasonController = TextEditingController();
                                       showDialog(
@@ -2355,6 +2363,28 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                     child: Row(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
+                                        // Checkbox in multi-select mode
+                                        ValueListenableBuilder<bool>(
+                                          valueListenable: _isMultiSelectMode,
+                                          builder: (context, isMultiSelect, child) {
+                                            if (!isMultiSelect) return const SizedBox.shrink();
+                                            return ValueListenableBuilder<Set<String>>(
+                                              valueListenable: _selectedTaskIds,
+                                              builder: (context, selectedIds, child) {
+                                                return Padding(
+                                                  padding: const EdgeInsets.only(right: 12),
+                                                  child: Checkbox(
+                                                    value: selectedIds.contains(task['task_id']),
+                                                    onChanged: (bool? value) {
+                                                      _toggleTaskSelection(task['task_id']);
+                                                    },
+                                                    activeColor: const Color(0xFF22688E),
+                                                  ),
+                                                );
+                                              },
+                                            );
+                                          },
+                                        ),
                                         Container(
                                           width: 56,
                                           height: 56,
@@ -2463,6 +2493,76 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                   ],
                 ),
               ),
+              // Multi-select action bar (shows when tasks are selected)
+              ValueListenableBuilder<Set<String>>(
+                valueListenable: _selectedTaskIds,
+                builder: (context, selectedIds, child) {
+                  if (selectedIds.isEmpty) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8, left: 16, right: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22688E),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            '${selectedIds.length} task${selectedIds.length > 1 ? 's' : ''} selected',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 3,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Flexible(
+                                child: TextButton(
+                                  onPressed: () => _markSelectedTasksComplete(context),
+                                  style: TextButton.styleFrom(
+                                    backgroundColor: const Color(0xFFE6F3FA),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                  ),
+                                  child: const Icon(Icons.check_circle, color: Color(0xFF22688E), size: 28),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: TextButton(
+                                  onPressed: () => _markSelectedTasksIncomplete(context),
+                                  style: TextButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFDEAEA),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                  ),
+                                  child: const Icon(Icons.cancel, color: Color(0xFFD32F2F), size: 28),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
               Padding(
                 padding: const EdgeInsets.only(bottom: 16, left: 16, right: 16),
                 child: Row(
@@ -2540,7 +2640,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                             List<Map<String, dynamic>> assignedElderly = elderlyByDay[selectedDay] ?? [];
                             print('🔍 DEBUG: assignedElderly result = ${assignedElderly.length} elderly found for $selectedDay');
                             for (var elderly in assignedElderly) {
-                              print('🔍 DEBUG: Elderly: ${elderly['elderly_fname']} (ID: ${elderly['elderly_id']})');
+                              print('🔍 DEBUG: Elderly: ${elderly['elderly_fname']} (ID: ${elderly['elderly_id']}) - is_temporary: ${elderly['is_temporary_assignment']}, is_emergency: ${elderly['is_emergency_coverage']}');
                             }
                             final rangeStart = _parseTimeOfDay(caregiverTimeRange['start'] ?? '00:00');
                             final rangeEnd = _parseTimeOfDay(caregiverTimeRange['end'] ?? '23:59');
@@ -2558,6 +2658,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                 String? selectedElderly;
                                 String? selectedFrequency = 'Only once';
                                 bool isTemporaryAssignment = false; // Track if selected elderly is temporary
+                                bool isEmergencyCoverage = false; // Track if selected elderly is from emergency coverage
                               TimeOfDay? startTime;
                               TimeOfDay? endTime;
                               TextEditingController activityController = TextEditingController();
@@ -2567,7 +2668,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                               DateTime? selectedRecurringStartDate;
                               return StatefulBuilder(
                                 builder: (context, setState) {
-                                  // Check if initial/auto-selected elderly is temporary
+                                  // Check if initial/auto-selected elderly is temporary or emergency coverage
                                   WidgetsBinding.instance.addPostFrameCallback((_) {
                                     if (selectedElderly != null && assignedElderly.isNotEmpty) {
                                       final elderlyData = assignedElderly.firstWhere(
@@ -2576,11 +2677,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                       );
                                       
                                       final isTemp = elderlyData['is_temporary_assignment'] == true;
+                                      final isEmergency = elderlyData['is_emergency_coverage'] == true;
                                       
-                                      if (isTemp != isTemporaryAssignment) {
+                                      if (isTemp != isTemporaryAssignment || isEmergency != isEmergencyCoverage) {
                                         setState(() {
                                           isTemporaryAssignment = isTemp;
-                                          if (isTemp) {
+                                          isEmergencyCoverage = isEmergency;
+                                          if (isTemp || isEmergency) {
                                             selectedFrequency = 'Only once';
                                             selectedDate = DateTime.now();
                                             selectedRecurringStartDate = DateTime.now();
@@ -2727,6 +2830,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                         sortedElderly.sort((a, b) => (a['elderly_fname'] ?? '').toString().toLowerCase().compareTo((b['elderly_fname'] ?? '').toString().toLowerCase()));
                                                         return sortedElderly.map((elderly) {
                                                           final isTemporary = elderly['is_temporary_assignment'] == true;
+                                                          final isEmergency = elderly['is_emergency_coverage'] == true;
                                                           return DropdownMenuItem<String>(
                                                             value: elderly['elderly_id'],
                                                             child: Row(
@@ -2737,7 +2841,21 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                                     style: const TextStyle(color: Color.fromARGB(255, 0, 0, 0)),
                                                                   ),
                                                                 ),
-                                                                if (isTemporary)
+                                                                if (isEmergency)
+                                                                  Container(
+                                                                    width: 10,
+                                                                    height: 10,
+                                                                    margin: const EdgeInsets.only(left: 8),
+                                                                    decoration: BoxDecoration(
+                                                                      color: Colors.red,
+                                                                      shape: BoxShape.circle,
+                                                                      border: Border.all(
+                                                                        color: Colors.white,
+                                                                        width: 1,
+                                                                      ),
+                                                                    ),
+                                                                  )
+                                                                else if (isTemporary)
                                                                   Container(
                                                                     width: 10,
                                                                     height: 10,
@@ -2760,7 +2878,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                         setState(() {
                                                           selectedElderly = value;
                                                           
-                                                          // Check if this elderly is temporarily assigned
+                                                          // Check if this elderly is temporarily assigned or emergency coverage
                                                           if (value != null) {
                                                             final elderlyData = assignedElderly.firstWhere(
                                                               (e) => e['elderly_id'] == value,
@@ -2769,10 +2887,13 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                             
                                                             // Check if marked as temporary assignment
                                                             final isTemp = elderlyData['is_temporary_assignment'] == true;
+                                                            // Check if marked as emergency coverage
+                                                            final isEmergency = elderlyData['is_emergency_coverage'] == true;
                                                             
                                                             isTemporaryAssignment = isTemp;
-                                                            if (isTemp) {
-                                                              // Auto-set to "Only once" for temporary elderly
+                                                            isEmergencyCoverage = isEmergency;
+                                                            if (isTemp || isEmergency) {
+                                                              // Auto-set to "Only once" for temporary elderly or emergency coverage
                                                               selectedFrequency = 'Only once';
                                                               selectedDate = DateTime.now();
                                                               selectedRecurringStartDate = DateTime.now();
@@ -3068,7 +3189,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                             Container(
                                               height: 40,
                                               decoration: BoxDecoration(
-                                                color: isTemporaryAssignment ? const Color(0xFFE0E0E0) : const Color(0xFFE6F3FA),
+                                                color: (isTemporaryAssignment || isEmergencyCoverage) ? const Color(0xFFE0E0E0) : const Color(0xFFE6F3FA),
                                                 borderRadius: BorderRadius.circular(20),
                                               ),
                                               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -3076,7 +3197,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                 child: DropdownButton<String>(
                                                   value: selectedFrequency,
                                                   isExpanded: true,
-                                                  icon: Icon(Icons.arrow_drop_down, color: isTemporaryAssignment ? Colors.grey : const Color(0xFF22688E)),
+                                                  icon: Icon(Icons.arrow_drop_down, color: (isTemporaryAssignment || isEmergencyCoverage) ? Colors.grey : const Color(0xFF22688E)),
                                                   items: frequencyList.map((freq) {
                                                     return DropdownMenuItem<String>(
                                                       value: freq,
@@ -3084,12 +3205,12 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                         freq,
                                                         overflow: TextOverflow.ellipsis,
                                                         style: TextStyle(
-                                                          color: isTemporaryAssignment ? Colors.grey : Colors.black,
+                                                          color: (isTemporaryAssignment || isEmergencyCoverage) ? Colors.grey : Colors.black,
                                                         ),
                                                       ),
                                                     );
                                                   }).toList(),
-                                                  onChanged: isTemporaryAssignment ? null : (value) {
+                                                  onChanged: (isTemporaryAssignment || isEmergencyCoverage) ? null : (value) {
                                                     setState(() {
                                                       selectedFrequency = value;
                                                     });
@@ -3135,6 +3256,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                   
                                                   List<String> elderlyAssignedDays = [];
                                                   bool isTemporaryAssignment = false;
+                                                  bool isEmergencyCoverageAssignment = false;
                                                   
                                                   try {
                                                     // Query elderly_assignments collection for all days this elderly is assigned to this caregiver
@@ -3159,10 +3281,10 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                       }
                                                     }
                                                     
-                                                    // WORKAROUND: Check temporary_assignments for today
-                                                    // If this elderly is temporarily assigned, allow creating task for today only
+                                                    // WORKAROUND: Check temporary_assignments AND emergency coverage for today
+                                                    // If this elderly is temporarily assigned or emergency coverage, allow creating task for today only
                                                     if (elderlyAssignedDays.isEmpty) {
-                                                      print('🔍 DEBUG: No regular assignments found, checking temporary assignments...');
+                                                      print('🔍 DEBUG: No regular assignments found, checking temporary assignments and emergency coverage...');
                                                       
                                                       final now = DateTime.now();
                                                       final todayDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
@@ -3179,12 +3301,20 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                       
                                                       for (var doc in tempAssignmentSnapshot.docs) {
                                                         final tempData = doc.data();
+                                                        final assignmentType = tempData['assignment_type'] as String?;
                                                         final tempElderlyIds = List<String>.from(tempData['elderly_ids'] ?? []);
                                                         
                                                         if (tempElderlyIds.contains(selectedElderly)) {
                                                           elderlyAssignedDays.add(todayWeekday);
-                                                          isTemporaryAssignment = true;
-                                                          print('🔍 DEBUG: Found TEMPORARY assignment: $selectedElderly temporarily assigned for today ($todayWeekday)');
+                                                          
+                                                          // Check if this is emergency coverage or regular temporary assignment
+                                                          if (assignmentType == 'emergency_coverage' || assignmentType == 'emergency redistribution') {
+                                                            isEmergencyCoverageAssignment = true;
+                                                            print('🚨 DEBUG: Found EMERGENCY COVERAGE: $selectedElderly from emergency coverage for today ($todayWeekday)');
+                                                          } else {
+                                                            isTemporaryAssignment = true;
+                                                            print('🔍 DEBUG: Found TEMPORARY assignment: $selectedElderly temporarily assigned for today ($todayWeekday)');
+                                                          }
                                                           break;
                                                         }
                                                       }
@@ -3199,6 +3329,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                                                     
                                                     print('🔍 DEBUG: Final elderlyAssignedDays = $elderlyAssignedDays');
                                                     print('🔍 DEBUG: Is temporary assignment = $isTemporaryAssignment');
+                                                    print('🚨 DEBUG: Is emergency coverage = $isEmergencyCoverageAssignment');
                                                   } catch (e) {
                                                     print('🔍 ERROR: Failed to get assignment days: $e');
                                                   }
@@ -4079,6 +4210,36 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
                         ),
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: _isMultiSelectMode,
+                      builder: (context, isMultiSelect, child) {
+                        return SizedBox(
+                          width: 120,
+                          child: ElevatedButton(
+                            onPressed: _toggleMultiSelectMode,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isMultiSelect 
+                                  ? const Color(0xFFD32F2F) 
+                                  : const Color(0xFF1B7F5A),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 15),
+                              elevation: 4,
+                            ),
+                            child: Text(
+                              isMultiSelect ? 'Cancel' : 'Select',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -4177,6 +4338,7 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
             'elderly_fname': prefix + (elderly['elderly_fname'] ?? ''),
             'days_assigned': elderly['days_assigned'] ?? [day], // Use the caregiver's assigned days
             'is_temporary_assignment': elderly['is_temporary_assignment'] ?? false, // ← CRITICAL: Include temporary flag
+            'is_emergency_coverage': elderly['is_emergency_coverage'] ?? false, // ← CRITICAL: Include emergency coverage flag
           });
         }
         
@@ -4985,4 +5147,389 @@ class _UpcomingTasksScreenState extends State<UpcomingTasksScreen> with WidgetsB
       },
     );
   }
+
+  // ========================================
+  // MULTI-SELECT MODE METHODS
+  // ========================================
+
+  /// Toggle multi-select mode on/off
+  void _toggleMultiSelectMode() {
+    _isMultiSelectMode.value = !_isMultiSelectMode.value;
+    if (!_isMultiSelectMode.value) {
+      // Clear selection when exiting multi-select mode
+      _selectedTaskIds.value = {};
+    }
+  }
+
+  /// Toggle selection of a specific task
+  void _toggleTaskSelection(String taskId) {
+    final currentSelection = Set<String>.from(_selectedTaskIds.value);
+    if (currentSelection.contains(taskId)) {
+      currentSelection.remove(taskId);
+    } else {
+      currentSelection.add(taskId);
+    }
+    _selectedTaskIds.value = currentSelection;
+  }
+
+  /// Clear all selected tasks
+  void _clearSelection() {
+    _selectedTaskIds.value = {};
+    _isMultiSelectMode.value = false;
+  }
+
+  /// Mark all selected tasks as complete (batch operation)
+  Future<void> _markSelectedTasksComplete(BuildContext context) async {
+    if (_selectedTaskIds.value.isEmpty) return;
+
+    // Check if caregiver is on duty
+    final isOnDuty = await _isCaregiverOnDuty();
+    if (!isOnDuty) {
+      if (context.mounted) {
+        _showNotOnDutyDialog(context);
+      }
+      return;
+    }
+
+    // Show confirmation dialog with checkbox (matching single task behavior)
+    bool confirmChecked = false;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext confirmCtx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Row(
+                children: [
+                  Icon(
+                    Icons.check_circle_outline,
+                    color: Color(0xFF4CAF50),
+                    size: 28,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Confirm Completion',
+                      style: TextStyle(
+                        color: Color(0xFF4CAF50),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Please confirm that you have completed ${_selectedTaskIds.value.length} task${_selectedTaskIds.value.length > 1 ? 's' : ''}.',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 16),
+                  CheckboxListTile(
+                    value: confirmChecked,
+                    onChanged: (checked) {
+                      setState(() {
+                        confirmChecked = checked ?? false;
+                      });
+                    },
+                    title: const Text(
+                      'I hereby confirm that the tasks are completed',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                    activeColor: const Color(0xFF4CAF50),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(confirmCtx).pop(false),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.grey[600],
+                  ),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: confirmChecked
+                      ? () => Navigator.of(confirmCtx).pop(true)
+                      : null,
+                  style: TextButton.styleFrom(
+                    backgroundColor: confirmChecked ? const Color(0xFF4CAF50) : Colors.grey[300],
+                    foregroundColor: confirmChecked ? Colors.white : Colors.grey[600],
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text('Submit'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    // User cancelled or didn't check the box
+    if (confirmed != true) return;
+
+    // Show loading dialog
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext loadingContext) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF22688E)),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Marking ${_selectedTaskIds.value.length} tasks as complete...',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Color(0xFF22688E),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    try {
+      int successCount = 0;
+
+      // Use TaskService.markTaskComplete for each task (matching single task behavior)
+      for (final taskId in _selectedTaskIds.value) {
+        await TaskService.markTaskComplete(taskId, null);
+        successCount++;
+      }
+
+      // Close loading dialog
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // Show success message
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ $successCount task${successCount > 1 ? 's' : ''} marked as complete'),
+            backgroundColor: const Color(0xFF1B7F5A),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+
+      // Clear selection and exit multi-select mode
+      _clearSelection();
+    } catch (e) {
+      // Close loading dialog
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // Show error message
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error marking tasks complete: $e'),
+            backgroundColor: const Color(0xFFD32F2F),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Mark all selected tasks as incomplete (batch operation)
+  Future<void> _markSelectedTasksIncomplete(BuildContext context) async {
+    if (_selectedTaskIds.value.isEmpty) return;
+
+    // Check if caregiver is on duty
+    final isOnDuty = await _isCaregiverOnDuty();
+    if (!isOnDuty) {
+      if (context.mounted) {
+        _showNotOnDutyDialog(context);
+      }
+      return;
+    }
+
+    // Show dialog to get incompletion reason
+    final TextEditingController reasonController = TextEditingController();
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.cancel, color: Color(0xFFD32F2F)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Reason for ${_selectedTaskIds.value.length} Incomplete Tasks',
+                  style: const TextStyle(
+                    color: Color(0xFFD32F2F),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'This reason will apply to all selected tasks:',
+                style: TextStyle(fontSize: 14, color: Colors.black87),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFDEAEA),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: TextField(
+                  controller: reasonController,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    hintText: 'Type reason here...',
+                    hintStyle: TextStyle(fontStyle: FontStyle.italic),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.all(12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(null),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final text = reasonController.text.trim();
+                if (text.isEmpty) {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please provide a reason'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.of(dialogContext).pop(text);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Submit', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+
+    // User cancelled
+    if (reason == null || reason.isEmpty) return;
+
+    // Show loading dialog
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext loadingContext) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFD32F2F)),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Marking ${_selectedTaskIds.value.length} tasks as incomplete...',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Color(0xFFD32F2F),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    try {
+      int successCount = 0;
+
+      // Use TaskService.markTaskIncompleteWithNextOccurrence for each task (matching single task behavior)
+      for (final taskId in _selectedTaskIds.value) {
+        await TaskService.markTaskIncompleteWithNextOccurrence(taskId, reason, null);
+        successCount++;
+      }
+
+      // Close loading dialog
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // Show success message
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ $successCount task${successCount > 1 ? 's' : ''} marked as incomplete'),
+            backgroundColor: const Color(0xFFD32F2F),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+
+      // Clear selection and exit multi-select mode
+      _clearSelection();
+    } catch (e) {
+      // Close loading dialog
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // Show error message
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error marking tasks incomplete: $e'),
+            backgroundColor: const Color(0xFFD32F2F),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
 }

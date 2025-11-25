@@ -11,10 +11,10 @@ class AliveProfilesGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     print('DEBUG AliveProfilesGrid: Received ${profiles.length} profiles');
     
-    // Debug: Print details of each profile to check is_temporary_assignment flag
+    // Debug: Print details of each profile to check is_temporary_assignment and is_emergency_coverage flags
     for (int i = 0; i < profiles.length; i++) {
       final profile = profiles[i];
-      print('DEBUG AliveProfilesGrid: Profile $i - Name: ${profile['name']}, is_temporary_assignment: ${profile['is_temporary_assignment']}');
+      print('DEBUG AliveProfilesGrid: Profile $i - Name: ${profile['name']}, is_temporary: ${profile['is_temporary_assignment']}, is_emergency: ${profile['is_emergency_coverage']}');
     }
     
     print('DEBUG AliveProfilesGrid: About to show grid with ${profiles.length} items');
@@ -142,8 +142,41 @@ class AliveProfilesGrid extends StatelessWidget {
                     ),
                   ),
                 ),
-                // Temporary assignment indicator - orange dot in top right
-                if (profile['is_temporary_assignment'] == true) ...[
+                // Emergency coverage indicator - red dot in top right (higher priority)
+                if (profile['is_emergency_coverage'] == true) ...[
+                  // Debug print
+                  Builder(
+                    builder: (context) {
+                      print('🔴🔴🔴 RENDERING RED DOT (EMERGENCY) for ${profile['name']}');
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 3,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ]
+                // Temporary assignment indicator - orange dot in top right (only if not emergency)
+                else if (profile['is_temporary_assignment'] == true) ...[
                   // Debug print
                   Builder(
                     builder: (context) {

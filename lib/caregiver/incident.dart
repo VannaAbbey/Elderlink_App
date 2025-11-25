@@ -7,6 +7,7 @@ import 'caregiver_sidebar.dart';
 import '../widgets/cg_widgets/notification_icon_button.dart';
 import '../services/cg_services/caregiver_shift_log_service.dart';
 import '../services/cg_services/absence_service.dart';
+import '../services/cg_services/house_service.dart';
 import '../providers/cg_providers/absence_provider.dart';
 import '../widgets/loading_overlay.dart';
 
@@ -299,18 +300,12 @@ class _IncidentScreenState extends State<IncidentScreen> {
       final caregiverId = user.uid;
       print('🔍 INCIDENT: Checking for caregiver $caregiverId at ${now.toString()}');
 
-      final houseSnapshot = await _firestore
-          .collection('house_shift_assignments')
-          .where('user_id', isEqualTo: caregiverId)
-          .where('user_type', isEqualTo: 'caregiver')
-          .where('is_current', isEqualTo: true)
-          .limit(1)
-          .get();
+      // USE HOUSESERVICE TO GET ASSIGNED HOUSE (handles emergency coverage automatically)
+      final houseService = HouseService();
+      final houseData = await houseService.getAssignedHouseForCaregiver(caregiverId);
 
-      print('🔍 INCIDENT: Found ${houseSnapshot.docs.length} house assignments with is_current=true');
-
-      if (houseSnapshot.docs.isEmpty) {
-        print('🔴 INCIDENT: No valid house assignment found');
+      if (houseData == null) {
+        print('🔴 INCIDENT: No house assignment found');
         if (mounted) {
           setState(() {
             elderlyList = [];
@@ -321,13 +316,10 @@ class _IncidentScreenState extends State<IncidentScreen> {
         return;
       }
 
-      final houseData = houseSnapshot.docs.first.data();
-      print('🔍 INCIDENT: Raw house data: $houseData');
-      
-      // Safe parsing with detailed error checking
-      final daysAssigned = List<String>.from(houseData['days_assigned'] ?? []);
-      print('🔍 INCIDENT: Days assigned parsed: $daysAssigned');
-      
+      print('🔍 INCIDENT: House data retrieved: ${houseData['house_name']}');
+      final isEmergencyCoverage = houseData['is_emergency_coverage'] ?? false;
+      print('🚨 INCIDENT: Is emergency coverage: $isEmergencyCoverage');
+
       final houseId = houseData['house_id'] as String?;
       if (houseId == null) {
         print('🔴 INCIDENT: house_id is null!');
@@ -340,10 +332,38 @@ class _IncidentScreenState extends State<IncidentScreen> {
         }
         return;
       }
-      print('🔍 INCIDENT: House ID parsed: $houseId');
+      print('🔍 INCIDENT: House ID: $houseId');
+
+      // Get assignment data to check shift times and schedule
+      final houseSnapshot = await _firestore
+          .collection('house_shift_assignments')
+          .where('user_id', isEqualTo: caregiverId)
+          .where('user_type', isEqualTo: 'caregiver')
+          .where('is_current', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (houseSnapshot.docs.isEmpty) {
+        print('🔴 INCIDENT: No valid house assignment found in house_shift_assignments');
+        if (mounted) {
+          setState(() {
+            elderlyList = [];
+            isOnDuty = false;
+            isLoading = false;
+          });
+        }
+        return;
+      }
+
+      final assignmentData = houseSnapshot.docs.first.data();
+      print('🔍 INCIDENT: Assignment data retrieved');
+      
+      // Safe parsing with detailed error checking
+      final daysAssigned = List<String>.from(assignmentData['days_assigned'] ?? []);
+      print('🔍 INCIDENT: Days assigned parsed: $daysAssigned');
       
       // Get dates from nested schedule_period object
-      final schedulePeriod = houseData['schedule_period'] as Map<String, dynamic>?;
+      final schedulePeriod = assignmentData['schedule_period'] as Map<String, dynamic>?;
       
       if (schedulePeriod == null) {
         print('🔴 INCIDENT: schedule_period is null!');
@@ -404,8 +424,8 @@ class _IncidentScreenState extends State<IncidentScreen> {
         return;
       }
 
-      final startTime = houseData['start_time'] as String?;
-      final endTime = houseData['end_time'] as String?;
+      final startTime = assignmentData['start_time'] as String?;
+      final endTime = assignmentData['end_time'] as String?;
       
       int startHour = 6, startMinute = 0, endHour = 14, endMinute = 0;
       
@@ -506,102 +526,44 @@ class _IncidentScreenState extends State<IncidentScreen> {
         return;
       }
 
-      final assignSnapshot = await _firestore
-          .collection('elderly_assignments')
-          .where('user_id', isEqualTo: caregiverId)
-          .where('user_type', isEqualTo: 'caregiver')
-          .where('day', isEqualTo: dayToCheck)
-          .get();
+      // USE HOUSESERVICE TO GET ELDERLY (handles emergency coverage automatically)
+      print('🔍 INCIDENT: Fetching elderly using HouseService.getAssignedElderlyIncludingTemporary...');
+      final elderlyFromService = await houseService.getAssignedElderlyIncludingTemporary(
+        caregiverId,
+        dayToCheck,
+      );
 
-      print('🔍 INCIDENT: Found ${assignSnapshot.docs.length} elderly assignment documents for day $dayToCheck');
+      print('🔍 INCIDENT: HouseService returned ${elderlyFromService.length} elderly');
 
-      List<Map<String, dynamic>> elderlyDetails = [];
+      // Convert to the format needed for the dropdown
+      List<Map<String, dynamic>> elderlyDetails = elderlyFromService
+          .where((elderly) => elderly['elderly_status'] != 'Deceased')
+          .map((elderly) {
+        final elderlyId = elderly['elderly_id'] as String? ?? '';
+        final firstName = elderly['elderly_fname'] as String? ?? '';
+        final lastName = elderly['elderly_lname'] as String? ?? '';
+        final isTemp = elderly['is_temporary_assignment'] == true;
+        final isEmergency = elderly['is_emergency_coverage'] == true;
 
-      if (assignSnapshot.docs.isNotEmpty) {
-        // NEW STRUCTURE: Each document has elderly_ids array instead of individual elderly_id
-        Set<String> elderlyIds = {};
-        for (var doc in assignSnapshot.docs) {
-          final data = doc.data();
-          // Get elderly_ids array from the document
-          final idsFromDoc = List<String>.from(data['elderly_ids'] ?? []);
-          elderlyIds.addAll(idsFromDoc);
-          print('🔍 INCIDENT: Document has ${idsFromDoc.length} elderly IDs: $idsFromDoc');
-        }
+        String nameLabel = '$firstName $lastName'.trim();
+        // Don't add text labels anymore - we'll use dot indicators instead
 
-        print('🔍 INCIDENT: Total unique elderly IDs: ${elderlyIds.length}');
+        return {
+          'id': elderlyId,
+          'name': nameLabel,
+          'is_temporary': isTemp,
+          'is_emergency': isEmergency,
+        };
+      }).toList();
 
-        if (elderlyIds.isNotEmpty) {
-          // Fetch elderly details in chunks (max 30 per query due to Firestore limit)
-          final elderlyIdsList = elderlyIds.toList();
-          for (int i = 0; i < elderlyIdsList.length; i += 30) {
-            final chunk = elderlyIdsList.skip(i).take(30).toList();
-            final chunkSnapshot = await _firestore
-                .collection('elderly')
-                .where(FieldPath.documentId, whereIn: chunk)
-                .get();
+      // Sort alphabetically
+      elderlyDetails.sort(
+        (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+      );
 
-            for (var doc in chunkSnapshot.docs) {
-              final data = doc.data();
-              // Filter out deceased elderly and only include those in the same house
-              if (data['house_id'] == houseId &&
-                  data['elderly_status'] != 'Deceased') {
-                elderlyDetails.add({
-                  'id': doc.id,
-                  'name':
-                      '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}',
-                });
-              }
-            }
-          }
-
-          elderlyDetails.sort(
-            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
-          );
-        }
-      }
-
-      // Fetch temporary elderly assignments from absent caregivers
-      print('🔍 INCIDENT: Fetching temporary elderly assignments...');
-      try {
-        final temporaryElderlyIds = await AbsenceService.getTodayTemporaryElderlyIds(caregiverId);
-        print('🔍 INCIDENT: Found ${temporaryElderlyIds.length} temporary elderly IDs');
-        
-        if (temporaryElderlyIds.isNotEmpty) {
-          // Fetch temporary elderly details in chunks (max 30 per query due to Firestore limit)
-          for (int i = 0; i < temporaryElderlyIds.length; i += 30) {
-            final chunk = temporaryElderlyIds.skip(i).take(30).toList();
-            final chunkSnapshot = await _firestore
-                .collection('elderly')
-                .where(FieldPath.documentId, whereIn: chunk)
-                .get();
-
-            for (var doc in chunkSnapshot.docs) {
-              final data = doc.data();
-              // Filter out deceased elderly and only include those in the same house
-              if (data['house_id'] == houseId &&
-                  data['elderly_status'] != 'Deceased') {
-                // Check if this elderly is not already in the list (avoid duplicates)
-                final alreadyExists = elderlyDetails.any((e) => e['id'] == doc.id);
-                if (!alreadyExists) {
-                  elderlyDetails.add({
-                    'id': doc.id,
-                    'name':
-                        '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''} (TEMP)',
-                  });
-                  print('🔍 INCIDENT: Added temporary elderly: ${data['elderly_fname']} ${data['elderly_lname']}');
-                }
-              }
-            }
-          }
-
-          // Re-sort after adding temporary elderly
-          elderlyDetails.sort(
-            (a, b) => (a['name'] as String).compareTo(b['name'] as String),
-          );
-        }
-      } catch (e) {
-        print('🔴 INCIDENT: Error fetching temporary elderly: $e');
-        // Continue even if temporary fetch fails - regular elderly will still be shown
+      print('🔍 INCIDENT: Formatted ${elderlyDetails.length} elderly for dropdown');
+      if (isEmergencyCoverage) {
+        print('🚨 INCIDENT: All elderly shown are from EMERGENCY COVERAGE house: $houseId');
       }
 
       print('🔍 INCIDENT: Final elderly list count: ${elderlyDetails.length}');
@@ -1038,20 +1000,35 @@ class _IncidentScreenState extends State<IncidentScreen> {
                                 ),
                                 menuMaxHeight: 200,
                                 items: elderlyList.map((elderly) {
-                                  // Check if this elderly has (TEMP) in the name
+                                  // Check flags for emergency coverage and temporary assignment
                                   final elderlyName = elderly['name'] as String;
-                                  final isTemporary = elderlyName.contains('(TEMP)');
-                                  // Remove (TEMP) from display name
-                                  final displayName = elderlyName.replaceAll(' (TEMP)', '');
+                                  final isEmergency = elderly['is_emergency'] == true;
+                                  final isTemporary = elderly['is_temporary'] == true;
                                   
                                   return DropdownMenuItem<String>(
                                     value: elderly['id'],
                                     child: Row(
                                       children: [
                                         Expanded(
-                                          child: Text(displayName),
+                                          child: Text(elderlyName),
                                         ),
-                                        if (isTemporary)
+                                        // Red dot for emergency coverage (higher priority)
+                                        if (isEmergency)
+                                          Container(
+                                            width: 10,
+                                            height: 10,
+                                            margin: const EdgeInsets.only(left: 8),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 1,
+                                              ),
+                                            ),
+                                          )
+                                        // Orange dot for temporary assignment
+                                        else if (isTemporary)
                                           Container(
                                             width: 10,
                                             height: 10,

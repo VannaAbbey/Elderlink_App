@@ -116,6 +116,86 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         style: TextStyle(color: Color(0xFF22688E)),
                       ),
                     ),
+                    TextButton.icon(
+                      onPressed: () async {
+                        // Show confirmation dialog
+                        final bool? confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (BuildContext dialogContext) {
+                            return AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              title: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.delete_sweep,
+                                    color: Color(0xFFD32F2F),
+                                    size: 28,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Clear All Notifications',
+                                      style: TextStyle(
+                                        color: Color(0xFFD32F2F),
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              content: const Text(
+                                'Are you sure you want to delete all notifications? This action cannot be undone.',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.grey[600],
+                                  ),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                                  style: TextButton.styleFrom(
+                                    backgroundColor: const Color(0xFFD32F2F),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: const Text('Delete All'),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+
+                        // If user confirmed, delete all notifications
+                        if (confirmed == true) {
+                          final success = await _notificationService.deleteAllNotifications(currentUser.uid);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  success
+                                      ? 'All notifications cleared'
+                                      : 'Failed to clear notifications',
+                                ),
+                              ),
+                            );
+                          }
+                        }
+                      },
+                      icon: const Icon(Icons.delete_sweep, color: Colors.red),
+                      label: const Text(
+                        'Clear All',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
                   ],
                 ),
               ),

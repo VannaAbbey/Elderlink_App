@@ -395,8 +395,9 @@ class _HousesScreenState extends State<HousesScreen> {
                               'elderly_mobilityStatus': e['elderly_mobilityStatus'],
                               'elderly_dietNotes': e['elderly_dietNotes'],
                               'elderly_condition': e['elderly_condition'],
-                              // ⭐ IMPORTANT: Include temporary assignment flag
+                              // ⭐ IMPORTANT: Include temporary assignment and emergency coverage flags
                               'is_temporary_assignment': e['is_temporary_assignment'] ?? false,
+                              'is_emergency_coverage': e['is_emergency_coverage'] ?? false,
                               'temporary_assignment_note': e['temporary_assignment_note'],
                             })
                         .toList();

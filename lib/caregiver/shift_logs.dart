@@ -634,6 +634,81 @@ class _ShiftLogsScreenState extends State<ShiftLogsScreen> {
                 },
               ),
               
+              // Emergency Coverage Indicator
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('temporary_assignments')
+                    .where('to_user_id', isEqualTo: FirebaseAuth.instance.currentUser?.uid ?? '')
+                    .where('date', isEqualTo: DateFormat('yyyy-MM-dd').format(DateTime.now()))
+                    .where('assignment_type', isEqualTo: 'emergency_coverage')
+                    .where('status', isEqualTo: 'active')
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox.shrink();
+                  }
+
+                  if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3E0),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: const Color(0xFFFF9800),
+                          width: 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.orange.withOpacity(0.1),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.warning_amber_rounded,
+                            color: Color(0xFFFF9800),
+                            size: 28,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Emergency Coverage',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFE65100),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'You are currently working under emergency coverage and have been reassigned to a different house. Kindly contact your peers for further clarifications regarding your temporary shift duties.',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF5D4037),
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return const SizedBox.shrink();
+                },
+              ),
+              
               Expanded(
                 child: SingleChildScrollView(
                   child: FutureBuilder<Map<String, dynamic>?>(
