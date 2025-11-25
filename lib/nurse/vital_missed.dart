@@ -44,35 +44,85 @@ class _MissedVitalsTabState extends State<MissedVitalsTab> {
 
   Future<List<Map<String, dynamic>>> _getMissedVitals() async {
     try {
-      // Get missed vitals from activity logs where nurse_name matches current nurse
+      // STEP 1: Get current nurse ID
+      final nurseId = await _getNurseId();
+      if (nurseId == null) {
+        print('Could not find nurse ID for ${widget.nurseName}');
+        return [];
+      }
+
+      // STEP 2: Get missed vitals from activity logs (with stored elderly names)
+      final now = DateTime.now();
+      final cutoffTime = now.subtract(Duration(hours: 72)); // Last 3 days
+      final cutoffTimestamp = Timestamp.fromDate(cutoffTime);
+
+      print('🔍 Getting missed vitals for ${widget.nurseName}...');
+      print('🔍 Nurse ID: $nurseId');
+      print('🔍 House ID: ${widget.houseId}');
+      print('🔍 Cutoff timestamp: $cutoffTimestamp');
+
+      // Query activity logs for missed vitals (has stored elderly names)
+      // 🎯 ONLY show vitals that were originally PENDING (not already completed/missed)
       final missedLogsQuery = await _firestore
           .collection('vital_activity_logs')
           .where('house_id', isEqualTo: widget.houseId)
+          .where('nurse_id', isEqualTo: nurseId)
           .where('action_type', isEqualTo: 'vital_missed')
-          .where('nurse_name', isEqualTo: widget.nurseName)
+          .where('timestamp', isGreaterThanOrEqualTo: cutoffTimestamp)
+          .orderBy('timestamp', descending: true)
           .get();
+
+      print(
+        '🔍 Filtering missed logs to ONLY show originally PENDING vitals...',
+      );
+
+      print(
+        '🔍 Found ${missedLogsQuery.docs.length} missed vital logs for this nurse',
+      );
 
       final missedVitals = <Map<String, dynamic>>[];
 
       for (final logDoc in missedLogsQuery.docs) {
         final logData = logDoc.data();
 
+        // 🎯 CRITICAL: Only include vitals that were originally PENDING
+        final oldValue = logData['old_value'] as Map<String, dynamic>?;
+        final originalStatus = oldValue?['status'] as String?;
+
+        if (originalStatus != 'pending') {
+          print(
+            '⏭️ Skipping vital - was not originally PENDING (was: $originalStatus)',
+          );
+          continue;
+        }
+
+        // Use stored elderly name from activity log (no more "Unknown"!)
+        final elderlyName =
+            logData['elderly_name'] as String? ?? 'Unknown Elderly';
+        final elderlyId = logData['elderly_id'] as String?;
+        final vitalId = logData['vital_id'] as String?;
+
+        print(
+          '🏥 ✅ Found ORIGINALLY PENDING missed vital: $elderlyName (ID: $elderlyId)',
+        );
+
         missedVitals.add({
-          'assignment_id': logData['vital_id'],
-          'elderly_id': logData['elderly_id'],
-          'elderly_name': logData['elderly_name'],
+          'assignment_id': vitalId,
+          'elderly_id': elderlyId,
+          'elderly_name': elderlyName, // ✅ Uses stored name from activity log
           'elderly_profilePic': '',
           'house_id': logData['house_id'],
-          'last_vital': null, // Could be fetched if needed
+          'last_vital': null,
           'status': 'missed',
-          'missed_date': DateFormat(
-            'yyyy-MM-dd',
-          ).format((logData['timestamp'] as Timestamp).toDate()),
+          'missed_date': logData['assigned_date'],
           'missed_at': logData['timestamp'],
           'shift': logData['shift'],
-          'nurse_name': logData['nurse_name'],
+          'nurse_name': widget.nurseName,
+          'missed_reason': logData['remarks'] ?? 'Missed vital',
         });
       }
+
+      print('🔍 Found ${missedVitals.length} missed vitals for this nurse');
 
       // Sort by timestamp (most recent first)
       missedVitals.sort((a, b) {

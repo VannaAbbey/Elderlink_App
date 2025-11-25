@@ -66,6 +66,45 @@
         {"fieldPath": "shift", "order": "ASCENDING"},
         {"fieldPath": "days_assigned", "mode": "ARRAY_CONTAINS"}
       ]
+    },
+    {
+      "collectionGroup": "scheduled_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "scheduledFor", "order": "ASCENDING"},
+        {"fieldPath": "__name__", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vital_activity_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "action_type", "order": "ASCENDING"},
+        {"fieldPath": "nurse_name", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "ASCENDING"},
+        {"fieldPath": "__name__", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "house_id", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "__name__", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "__name__", "order": "ASCENDING"}
+      ]
     }
   ],
   "fieldOverrides": []

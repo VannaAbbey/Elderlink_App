@@ -7,7 +7,7 @@ import 'dart:async';
 import 'nurse_sidebar.dart';
 import 'notification_service.dart';
 import '../providers/auth_provider.dart' as my_auth;
-import 'activity_logs.dart';
+import '../widgets/nurse_widgets/nurse_notification_icon_button.dart';
 
 class IncidentReportScreen extends StatefulWidget {
   const IncidentReportScreen({super.key});
@@ -214,25 +214,7 @@ class _IncidentReportScreenState extends State<IncidentReportScreen> {
                           color: Color(0xFF00588E),
                         ),
                       ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ActivityLogsScreen(
-                                houseId: 'H001', // Default house
-                                nurseName:
-                                    '${Provider.of<my_auth.AuthProvider>(context, listen: false).userFirstName} ${Provider.of<my_auth.AuthProvider>(context, listen: false).userLastName}',
-                              ),
-                            ),
-                          );
-                        },
-                        child: const Icon(
-                          Icons.notifications,
-                          size: 30,
-                          color: Color(0xFF00588E),
-                        ),
-                      ),
+                      const NurseNotificationIconButton(),
                     ],
                   ),
                   const SizedBox(height: 16),

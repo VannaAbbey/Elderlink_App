@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
+import '../nurse/notification_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   // Update user profile in Firestore
@@ -28,8 +29,9 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   final AuthService _authService = AuthService();
-  
+
   User? _currentUser;
   Map<String, dynamic>? _userData;
   bool _isLoading = false;
@@ -53,7 +55,7 @@ class AuthProvider extends ChangeNotifier {
     _authService.authStateChanges.listen((User? user) async {
       print('DEBUG: Auth state changed - User: ${user?.email ?? 'null'}');
       _currentUser = user;
-      
+
       if (user != null) {
         // Load user data from Firestore when user signs in
         print('DEBUG: Loading user data for ${user.email}');
@@ -63,7 +65,7 @@ class AuthProvider extends ChangeNotifier {
         print('DEBUG: User signed out, clearing data');
         _userData = null;
       }
-      
+
       print('DEBUG: Notifying listeners...');
       notifyListeners();
     });
@@ -72,7 +74,7 @@ class AuthProvider extends ChangeNotifier {
   // Load user data from Firestore
   Future<void> _loadUserData() async {
     if (_currentUser == null) return;
-    
+
     try {
       print('DEBUG: Loading user data for ${_currentUser!.email}...');
       _isLoading = true;
@@ -80,19 +82,23 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
 
       // Add timeout to prevent infinite loading
-      _userData = await _authService.getUserData(_currentUser!.uid).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          print('DEBUG: Loading user data timed out');
-          throw Exception('Loading user data timed out after 10 seconds');
-        },
+      _userData = await _authService
+          .getUserData(_currentUser!.uid)
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              print('DEBUG: Loading user data timed out');
+              throw Exception('Loading user data timed out after 10 seconds');
+            },
+          );
+
+      print(
+        'DEBUG: User data loaded successfully. Role: ${_userData?['user_type'] ?? _userData?['role'] ?? 'unknown'}',
       );
-      
-      print('DEBUG: User data loaded successfully. Role: ${_userData?['user_type'] ?? _userData?['role'] ?? 'unknown'}');
     } catch (e) {
       _error = 'Failed to load user data: $e';
       print('DEBUG: Error loading user data: $e');
-      
+
       // Set empty user data to prevent infinite loading
       _userData = {};
     } finally {
@@ -116,6 +122,12 @@ class AuthProvider extends ChangeNotifier {
         email: email,
         password: password,
       );
+
+      // 🎯 AUTOMATIC FCM TOKEN MANAGEMENT ON LOGIN
+      if (result != null) {
+        await NotificationService.ensureFreshTokenOnLogin();
+        print('✅ AUTOMATIC: Fresh FCM token ensured for logged-in user');
+      }
 
       return result != null;
     } catch (e) {
@@ -222,6 +234,10 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
+      // 🔓 AUTOMATIC FCM TOKEN DEACTIVATION ON LOGOUT
+      await NotificationService.deactivateTokenOnLogout();
+      print('✅ AUTOMATIC: FCM token deactivated for logged-out user');
+
       await _authService.signOut();
       _userData = null;
     } catch (e) {
@@ -269,11 +285,13 @@ class AuthProvider extends ChangeNotifier {
   String get userFirstName {
     try {
       // Check new field name first
-      if (_userData?['user_fname'] != null && _userData!['user_fname'].toString().isNotEmpty) {
+      if (_userData?['user_fname'] != null &&
+          _userData!['user_fname'].toString().isNotEmpty) {
         return _userData!['user_fname'].toString();
       }
       // Fall back to old field name for existing users
-      if (_userData?['firstName'] != null && _userData!['firstName'].toString().isNotEmpty) {
+      if (_userData?['firstName'] != null &&
+          _userData!['firstName'].toString().isNotEmpty) {
         return _userData!['firstName'].toString();
       }
       // Fall back to Firebase display name
@@ -316,7 +334,8 @@ class AuthProvider extends ChangeNotifier {
   // Get user's last name (backward compatible)
   String get userLastName {
     // Check new field name first
-    if (_userData?['user_lname'] != null && _userData!['user_lname'].toString().isNotEmpty) {
+    if (_userData?['user_lname'] != null &&
+        _userData!['user_lname'].toString().isNotEmpty) {
       return _userData!['user_lname'];
     }
     // Fall back to old field name for existing users
@@ -333,7 +352,7 @@ class AuthProvider extends ChangeNotifier {
     return _userData?['email'] ?? _currentUser?.email ?? '';
   }
 
-  // Get user's birthday (backward compatible) - returns DateTime or null  
+  // Get user's birthday (backward compatible) - returns DateTime or null
   DateTime? get userBirthday {
     try {
       // Check new field name first (Timestamp)

@@ -625,6 +625,14 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     return user.uid;
   }
 
+  /// 🔧 UPDATED LOGIC: Get upcoming vitals with smart filtering
+  ///
+  /// NEW BEHAVIOR:
+  /// 1. Only shows vitals for current nurse's shift
+  /// 2. Excludes elderly who already had vitals completed TODAY by ANY shift
+  /// 3. Prevents duplicate work across shifts
+  /// 4. When nurse completes vital → disappears from their upcoming list
+  /// 5. Subsequent shifts won't see elderly that previous shift already completed
   Future<List<Map<String, dynamic>>> _getUpcomingVitals() async {
     try {
       final currentShift = _getCurrentShift();
@@ -737,6 +745,42 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       // Use only elderly in current house
       final filteredElderlyIds = elderlyInCurrentHouse;
 
+      // 🔧 SMART FILTERING: First check which elderly already had vitals completed today by ANY shift
+      final completedTodayElderlyIds = <String>{};
+
+      // Get all completed vitals for today to exclude from pending list
+      final completedTodayQuery = await _firestore
+          .collection('vitals')
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('status', isEqualTo: 'completed')
+          .where('elderly_id', whereIn: filteredElderlyIds.take(30).toList())
+          .get();
+
+      for (final doc in completedTodayQuery.docs) {
+        final data = doc.data();
+        final elderlyId = data['elderly_id'] as String?;
+        if (elderlyId != null) {
+          completedTodayElderlyIds.add(elderlyId);
+        }
+      }
+
+      // Filter out elderly who already completed vitals today
+      final elderlyNeedingVitals = filteredElderlyIds
+          .where((elderlyId) => !completedTodayElderlyIds.contains(elderlyId))
+          .toList();
+
+      print(
+        '🔍 Filtered elderly: ${filteredElderlyIds.length} assigned, ${completedTodayElderlyIds.length} already completed today, ${elderlyNeedingVitals.length} still need vitals',
+      );
+      print('📋 Completed today elderly IDs: $completedTodayElderlyIds');
+      print('📋 Elderly still needing vitals: $elderlyNeedingVitals');
+
+      if (elderlyNeedingVitals.isEmpty) {
+        print('✅ All elderly already have completed vitals today');
+        return [];
+      }
+
       // 🔧 OPTIMIZED: Query for pending vitals for CURRENT nurse's elderly only (in current house)
       // Use Firestore's full whereIn limit of 30 items instead of 10
       final vitalsQuery = await _firestore
@@ -747,7 +791,7 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           .where('status', isEqualTo: 'pending')
           .where(
             'elderly_id',
-            whereIn: filteredElderlyIds.take(30).toList(),
+            whereIn: elderlyNeedingVitals.take(30).toList(),
           ) // Firestore whereIn limit is 30
           .get();
 
@@ -755,20 +799,49 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       final allVitals = <QueryDocumentSnapshot>[];
       allVitals.addAll(vitalsQuery.docs);
 
-      // If we have more than 30 elderly, query in chunks
+      // Handle completed elderly in chunks too if needed
       if (filteredElderlyIds.length > 30) {
         for (var i = 30; i < filteredElderlyIds.length; i += 30) {
           final chunk = filteredElderlyIds.skip(i).take(30).toList();
           if (chunk.isNotEmpty) {
-            final chunkQuery = await _firestore
+            final chunkCompletedQuery = await _firestore
                 .collection('vitals')
                 .where('house_id', isEqualTo: widget.houseId)
                 .where('assigned_date', isEqualTo: today)
-                .where('shift', isEqualTo: currentShift)
-                .where('status', isEqualTo: 'pending')
+                .where('status', isEqualTo: 'completed')
                 .where('elderly_id', whereIn: chunk)
                 .get();
-            allVitals.addAll(chunkQuery.docs);
+
+            for (final doc in chunkCompletedQuery.docs) {
+              final data = doc.data();
+              final elderlyId = data['elderly_id'] as String?;
+              if (elderlyId != null) {
+                completedTodayElderlyIds.add(elderlyId);
+              }
+            }
+          }
+        }
+
+        // Re-filter with all completed elderly IDs
+        final elderlyNeedingVitalsChunked = filteredElderlyIds
+            .where((elderlyId) => !completedTodayElderlyIds.contains(elderlyId))
+            .toList();
+
+        // If we have more than 30 elderly needing vitals, query in chunks
+        if (elderlyNeedingVitalsChunked.length > 30) {
+          for (var i = 30; i < elderlyNeedingVitalsChunked.length; i += 30) {
+            final chunk = elderlyNeedingVitalsChunked.skip(i).take(30).toList();
+            if (chunk.isNotEmpty) {
+              final chunkQuery = await _firestore
+                  .collection('vitals')
+                  .where('house_id', isEqualTo: widget.houseId)
+                  .where('assigned_date', isEqualTo: today)
+                  .where('shift', isEqualTo: currentShift)
+                  .where('status', isEqualTo: 'pending')
+                  .where('elderly_id', whereIn: chunk)
+                  .get();
+              allVitals.addAll(chunkQuery.docs);
+            }
           }
         }
       }
@@ -781,7 +854,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       int completedCount = 0;
       int pendingCount = 0;
       for (final doc in allVitals) {
-        final data = doc.data() as Map<String, dynamic>;
+        final data = doc.data() as Map<String, dynamic>?;
+        if (data == null) continue; // Skip if data is null
         final status = data['status'];
         if (status == 'completed') {
           completedCount++;
@@ -806,8 +880,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
 
       // Filter out any completed vitals that somehow got through the query
       final filteredVitals = allVitals.where((doc) {
-        final data = doc.data() as Map<String, dynamic>;
-        return data['status'] == 'pending';
+        final data = doc.data() as Map<String, dynamic>?;
+        return data != null && data['status'] == 'pending';
       }).toList();
 
       if (filteredVitals.length != allVitals.length) {
@@ -840,8 +914,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       // Create nurse data map for quick lookup
       final nurseDataMap = <String, Map<String, dynamic>>{};
       for (final doc in nurseDocs) {
-        if (doc.exists) {
-          nurseDataMap[doc.id] = doc.data()!;
+        if (doc.exists && doc.data() != null) {
+          nurseDataMap[doc.id] = Map<String, dynamic>.from(doc.data()!);
         }
       }
 
@@ -849,7 +923,8 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
       seenElderlyIds.clear();
 
       for (final vitalDoc in filteredVitals) {
-        final vitalData = vitalDoc.data() as Map<String, dynamic>;
+        final vitalData = vitalDoc.data() as Map<String, dynamic>?;
+        if (vitalData == null) continue; // Skip if data is null
         final elderlyId = vitalData['elderly_id'];
 
         // 🔧 MODIFIED: No need to filter by nurse since we already filtered by elderly assigned to current nurse
@@ -1018,8 +1093,22 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     // Refresh the list if vitals were updated (removes from upcoming)
     if (result == true && mounted) {
       print('✅ Vitals updated successfully, refreshing upcoming list...');
+
+      // 🔴 BADGE FIX: Clear all caches to ensure immediate red badge update
+      _houseVitalsCache.clear();
+      _houseVitalsCacheTime.clear();
+
       await _refreshVitals();
-      print('✅ Upcoming list refresh completed');
+
+      // 🔴 BADGE FIX: Force widget rebuild to trigger badge count stream update
+      if (mounted) {
+        setState(() {
+          // This will cause the StreamBuilder in vital_monitoring.dart to rebuild
+          // and refresh the red badge count immediately
+        });
+      }
+
+      print('✅ Upcoming list refresh completed with badge update');
       // Optionally: trigger a callback/event to update completed tab if needed
     } else {
       print('ℹ️ Vitals update cancelled or failed, no refresh needed');
@@ -1099,11 +1188,17 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(),
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00588E)),
+            ),
             SizedBox(height: 16),
             Text(
               'Loading vitals...',
-              style: TextStyle(fontSize: 16, color: Colors.grey),
+              style: TextStyle(
+                fontSize: 16,
+                color: Color(0xFF00588E),
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),
@@ -1113,9 +1208,25 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
     // Show empty state if no assignments
     if (upcomingVitals.isEmpty) {
       return Center(
-        child: Text(
-          'No upcoming vitals',
-          style: TextStyle(fontSize: 16, color: Colors.grey),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.favorite_outline, size: 48, color: Colors.grey[400]),
+            SizedBox(height: 16),
+            Text(
+              'No upcoming vitals',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'All vitals are up to date',
+              style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            ),
+          ],
         ),
       );
     }
@@ -1164,7 +1275,27 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
           child: Stack(
             children: [
               if (_isLoading)
-                const Center(child: CircularProgressIndicator())
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Color(0xFF00588E),
+                        ),
+                      ),
+                      SizedBox(height: 16),
+                      Text(
+                        'Loading vitals...',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Color(0xFF00588E),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
               else
                 // Vitals List
                 pendingVitals.isEmpty
@@ -1173,13 +1304,26 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             SizedBox(height: 24),
-                            Icon(Icons.favorite, size: 64, color: Colors.grey),
+                            Icon(
+                              Icons.favorite_outline,
+                              size: 64,
+                              color: Colors.grey[400],
+                            ),
                             SizedBox(height: 16),
                             Text(
                               'No upcoming vitals',
                               style: TextStyle(
                                 fontSize: 18,
-                                color: Colors.grey,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            Text(
+                              'All vitals are up to date',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[500],
                               ),
                             ),
                           ],
@@ -1634,20 +1778,22 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
                 .trim();
         final elderlyHouseId = elderlyData['house_id'];
 
-        // Check if vitals were already completed today by ANY nurse (don't recreate if completed)
-        final completedTodayQuery = await _firestore
+        // 🔧 NEW LOGIC: Check if vitals were already completed today for THIS SPECIFIC SHIFT
+        // This allows multiple shifts to have assignments, but prevents duplicate assignments per shift
+        final completedThisShiftQuery = await _firestore
             .collection('vitals')
             .where('elderly_id', isEqualTo: elderlyId)
             .where('assigned_date', isEqualTo: today)
+            .where('shift', isEqualTo: shift) // 🔧 FIXED: Check specific shift
             .where('status', isEqualTo: 'completed')
             .limit(1)
             .get();
 
-        if (completedTodayQuery.docs.isNotEmpty) {
+        if (completedThisShiftQuery.docs.isNotEmpty) {
           print(
-            '⏭️ Skipping assignment creation for: $elderlyName - vitals already completed today',
+            '⏭️ Skipping assignment creation for: $elderlyName - vitals already completed for $shift shift today',
           );
-          continue; // Skip creating new assignment
+          continue; // Skip creating new assignment for THIS shift only
         }
 
         print(

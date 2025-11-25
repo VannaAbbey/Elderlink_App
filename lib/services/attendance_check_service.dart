@@ -154,7 +154,8 @@ class AttendanceCheckService {
         );
         final timeDifference = now.difference(yesterdayShiftStart);
         final isWithinWindow =
-            timeDifference.inMinutes >= 0 && timeDifference.inMinutes < 15;
+            timeDifference.inMinutes >= -30 &&
+            timeDifference.inMinutes < 60; // 30 min before to 1 hour after
 
         print(
           '🔍 ATTENDANCE: 3rd shift (continued from yesterday) starts at $yesterdayShiftStart',
@@ -162,22 +163,27 @@ class AttendanceCheckService {
         print(
           '🔍 ATTENDANCE: Time difference: ${timeDifference.inMinutes} minutes',
         );
-        print('🔍 ATTENDANCE: Within window: $isWithinWindow');
+        print(
+          '🔍 ATTENDANCE: Within window (30min before to 1hr after): $isWithinWindow',
+        );
 
         return isWithinWindow;
       }
 
-      // Check if current time is exactly at shift start or within 15 minutes AFTER
-      // Dialog should show from exactly 6:00 AM (not 5:59 AM)
+      // Check if current time is 30 minutes before shift start or within 1 hour after shift start
+      // Dialog should show from 30 minutes BEFORE shift time (e.g., 5:30 AM for 6:00 AM shift)
       final timeDifference = now.difference(shiftStart);
       final isWithinWindow =
-          timeDifference.inSeconds >= 0 && timeDifference.inMinutes < 15;
+          timeDifference.inMinutes >= -30 &&
+          timeDifference.inMinutes < 60; // 30 min before to 1 hour after
 
       print('🔍 ATTENDANCE: Shift starts at $shiftStart');
       print(
         '🔍 ATTENDANCE: Time difference: ${timeDifference.inMinutes} minutes ${timeDifference.inSeconds % 60} seconds',
       );
-      print('🔍 ATTENDANCE: Within window: $isWithinWindow');
+      print(
+        '🔍 ATTENDANCE: Within window (30min before to 1hr after): $isWithinWindow',
+      );
 
       return isWithinWindow;
     } catch (e) {
@@ -468,7 +474,7 @@ class AttendanceCheckService {
       final shiftStartHour = int.parse(timeParts[0]);
       final shiftStartMinute = int.parse(timeParts[1]);
 
-      // Calculate next shift start
+      // Calculate next shift start (dialog shows 30 minutes before)
       DateTime nextShiftStart = DateTime(
         now.year,
         now.month,
@@ -477,9 +483,12 @@ class AttendanceCheckService {
         shiftStartMinute,
       );
 
-      // If shift start has passed today, schedule for tomorrow
+      // Subtract 30 minutes to show dialog before shift starts
+      nextShiftStart = nextShiftStart.subtract(const Duration(minutes: 30));
+
+      // If dialog time has passed today, schedule for tomorrow
       if (nextShiftStart.isBefore(now) ||
-          nextShiftStart.difference(now).inMinutes >= 15) {
+          nextShiftStart.difference(now).inMinutes >= 60) {
         nextShiftStart = nextShiftStart.add(const Duration(days: 1));
       }
 
@@ -602,7 +611,8 @@ class AttendanceCheckDialog extends StatefulWidget {
 
 class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
   bool _isLoading = false;
-  int _remainingSeconds = 15 * 60; // Will be calculated based on actual time
+  int _remainingSeconds =
+      60 * 60; // Will be calculated based on actual time (1 hour)
   Timer? _countdownTimer;
   bool _showAbsentReason = false;
   String? _selectedReason;
@@ -716,8 +726,8 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
     final elapsedTime = now.difference(shiftStartTime);
     final elapsedSeconds = elapsedTime.inSeconds;
 
-    // Calculate remaining time (15 minutes = 900 seconds)
-    final totalSeconds = 15 * 60;
+    // Calculate remaining time (1 hour = 3600 seconds)
+    final totalSeconds = 60 * 60;
     _remainingSeconds = totalSeconds - elapsedSeconds;
 
     // Ensure it doesn't go negative
@@ -796,7 +806,7 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '⚠️ You did not respond within 15 minutes. Please contact your supervisor.',
+              '⚠️ You did not respond within 1 hour. Please contact your supervisor.',
               style: TextStyle(fontSize: 16),
             ),
             backgroundColor: Colors.red,
@@ -1054,7 +1064,7 @@ class _AttendanceCheckDialogState extends State<AttendanceCheckDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Please mark your attendance within 15 minutes',
+                'Please mark your attendance within 1 hour',
                 style: TextStyle(
                   fontSize: 12,
                   fontStyle: FontStyle.italic,

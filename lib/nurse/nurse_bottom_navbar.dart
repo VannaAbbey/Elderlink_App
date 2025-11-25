@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../main.dart' as main;
 
 class NurseBottomNavBar extends StatelessWidget {
   final int selectedIndex;
@@ -44,7 +43,7 @@ class NurseBottomNavBar extends StatelessWidget {
 
   Widget _navIcon(String assetPath, int index) {
     return GestureDetector(
-      onTap: main.EmergencyService.isModalOpen ? null : () => onNavTap(index),
+      onTap: () => onNavTap(index),
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(

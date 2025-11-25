@@ -132,9 +132,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
     if (picked != null && picked != _selectedDate) {
       final normalized = DateTime(picked.year, picked.month, picked.day);
       if (normalized != _selectedDate) {
+        print('🔍 📅 DATE CHANGED: From ${_selectedDate} to $normalized');
         setState(() {
           _selectedDate = normalized;
         });
+        print('🔍 📅 NEW SELECTED DATE SET: $_selectedDate');
         // Reload medications for the new date
         _loadUpcomingMedications(forceRefresh: true);
         _loadAssignedElderly();
@@ -628,6 +630,44 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       }
       print('✅ Nurse ID found: $nurseId');
 
+      // Get nurse name
+      String nurseName = 'Unknown Nurse';
+      try {
+        final nurseDoc = await _firestore
+            .collection('users')
+            .doc(nurseId)
+            .get();
+        if (nurseDoc.exists) {
+          final nurseData = nurseDoc.data() as Map<String, dynamic>;
+          nurseName =
+              '${nurseData['user_fname'] ?? ''} ${nurseData['user_lname'] ?? ''}'
+                  .trim();
+          if (nurseName.isEmpty) nurseName = 'Unknown Nurse';
+        }
+      } catch (e) {
+        print('❌ Error getting nurse name: $e');
+      }
+      print('✅ Nurse name: $nurseName');
+
+      // Get elderly name
+      String elderlyName = 'Unknown Elderly';
+      try {
+        final elderlyDoc = await _firestore
+            .collection('elderly')
+            .doc(elderlyId)
+            .get();
+        if (elderlyDoc.exists) {
+          final elderlyData = elderlyDoc.data() as Map<String, dynamic>;
+          elderlyName =
+              '${elderlyData['elderly_fname'] ?? ''} ${elderlyData['elderly_lname'] ?? ''}'
+                  .trim();
+          if (elderlyName.isEmpty) elderlyName = 'Unknown Elderly';
+        }
+      } catch (e) {
+        print('❌ Error getting elderly name: $e');
+      }
+      print('✅ Elderly name: $elderlyName');
+
       final workingDays = await _getNurseWorkingDays(nurseId);
       if (workingDays.isEmpty) {
         throw Exception('No working days found for nurse');
@@ -667,9 +707,11 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final medicationData = {
         'medication_id': '', // Will be set after creation
         'elderly_id': elderlyId,
+        'elderly_name': elderlyName, // ✅ Added elderly name
         'house_id': widget.houseId,
         'created_nurse_id': nurseId,
         'created_nurse': nurseId, // Add both fields for compatibility
+        'created_nurse_name': nurseName, // ✅ Added nurse name
         'medication_name': medicationName,
         'dosage': dosage,
         'repeat_interval': repeatInterval,
@@ -735,26 +777,41 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         }
       }
 
-      // Check if first intake time has already passed
+      // Check if ANY intake time has already passed today
       // If so, start the duration from tomorrow
       final now = DateTime.now();
       DateTime startDate = _selectedDate;
 
-      if (intakeTimes.isNotEmpty) {
-        final firstIntake = intakeTimes[0];
-        final firstIntakeDateTime = DateTime(
-          _selectedDate.year,
-          _selectedDate.month,
-          _selectedDate.day,
-          firstIntake.hour,
-          firstIntake.minute,
-        );
+      // Only check for past time if we're scheduling for today
+      final isSchedulingForToday =
+          _selectedDate.year == now.year &&
+          _selectedDate.month == now.month &&
+          _selectedDate.day == now.day;
 
-        if (firstIntakeDateTime.isBefore(now)) {
-          // Time has passed today, start from tomorrow
+      if (isSchedulingForToday && intakeTimes.isNotEmpty) {
+        // Check if ANY intake time has passed (not just the first)
+        bool anyTimePassed = false;
+        for (final intake in intakeTimes) {
+          final intakeDateTime = DateTime(
+            _selectedDate.year,
+            _selectedDate.month,
+            _selectedDate.day,
+            intake.hour,
+            intake.minute,
+          );
+
+          if (intakeDateTime.isBefore(now) ||
+              intakeDateTime.isAtSameMomentAs(now)) {
+            anyTimePassed = true;
+            break;
+          }
+        }
+
+        if (anyTimePassed) {
+          // Any time has passed today, start from tomorrow
           startDate = _selectedDate.add(Duration(days: 1));
           print(
-            '⏰ First intake time has passed. Starting medication from ${startDate.toString().split(' ')[0]}',
+            '⏰ Medication times have passed today (now: ${now.hour}:${now.minute}). Starting medication from ${startDate.toString().split(' ')[0]}',
           );
           print(
             '⏰ Duration: $durationDays days, will show on: ${List.generate(durationDays, (i) => startDate.add(Duration(days: i)).toString().split(' ')[0]).join(', ')}',
@@ -1114,55 +1171,18 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
           'days': 1,
         });
 
-        // Schedule notifications using timer-based approach (bypasses Android restrictions)
-        // Schedule notification 5 minutes before medication time
-        final notifyTime = finalTaskStart.subtract(Duration(minutes: 5));
-        if (notifyTime.isAfter(DateTime.now())) {
-          final timeUntilNotify = notifyTime.difference(DateTime.now());
-          final timer = Timer(timeUntilNotify, () async {
-            try {
-              await NotificationService.showMedicalTaskNotification(
-                taskId: ('${medicationId}_${takeNumber - 1}').hashCode
-                    .toString(),
-                title: 'Medication Reminder',
-                description: '$medName for $elderlyName in 5 minutes',
-                elderlyName: elderlyName,
-                time:
-                    '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
-              );
-              print(
-                '✅ Timer-based 5-minute medication reminder sent for: $medName at ${notifyTime.toString()}',
-              );
-            } catch (e) {
-              print('❌ Error sending 5-minute medication reminder: $e');
-            }
-          });
-          _activeMedicationTimers.add(timer);
-        }
-
-        // Schedule notification at exact medication time
-        if (finalTaskStart.isAfter(DateTime.now())) {
-          final timeUntilExact = finalTaskStart.difference(DateTime.now());
-          final exactTimer = Timer(timeUntilExact, () async {
-            try {
-              await NotificationService.showMedicalTaskNotification(
-                taskId: ('${medicationId}_${takeNumber - 1}_exact').hashCode
-                    .toString(),
-                title: 'Medication Time!',
-                description: 'Time for $medName for $elderlyName',
-                elderlyName: elderlyName,
-                time:
-                    '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
-              );
-              print(
-                '✅ Timer-based exact medication notification sent for: $medName at ${finalTaskStart.toString()}',
-              );
-            } catch (e) {
-              print('❌ Error sending exact medication notification: $e');
-            }
-          });
-          _activeMedicationTimers.add(exactTimer);
-        }
+        // ✅ FIXED: Removed duplicate client-side notifications
+        // Medication notifications are now handled ONLY by Firebase Cloud Functions:
+        // - scheduleMedicationNotifications: Creates scheduled_notifications when medication_takes are created
+        // - processMedicationNotifications: Sends FCM notifications (30-min reminder + exact-time)
+        // This prevents duplicate notifications and ensures reliable server-side delivery
+        print('✅ Medication notifications managed by Firebase Cloud Functions');
+        print(
+          '   - Server handles 30-min reminder and exact-time notifications',
+        );
+        print(
+          '   - Take: ${medicationId}_${takeNumber - 1} for $medName at $finalTaskStart',
+        );
       }
     } catch (e) {
       print('Error creating tasks for medication: $e');
@@ -1610,12 +1630,26 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final currentUser = FirebaseAuth.instance.currentUser;
       final currentUserId = currentUser?.uid;
 
+      print(
+        '🔍 DEBUG: Found ${medicationsQuery.docs.length} total active medications in house ${widget.houseId}',
+      );
+
       for (final doc in medicationsQuery.docs) {
         final data = doc.data() as Map<String, dynamic>;
         final elderlyId = data['elderly_id'] as String?;
-        if (elderlyId == null) continue;
+        print('🔍 DEBUG: Checking medication ${doc.id} for elderly $elderlyId');
 
-        if (!assignedElderlyIds.contains(elderlyId)) continue;
+        if (elderlyId == null) {
+          print('   ❌ Skipped: no elderly_id');
+          continue;
+        }
+
+        if (!assignedElderlyIds.contains(elderlyId)) {
+          print(
+            '   ❌ Skipped: elderly not in assigned list ($assignedElderlyIds)',
+          );
+          continue;
+        }
 
         final medicationShift = data['shift'] as String?;
         final repeatInterval = data['repeat_interval'] as String?;
@@ -1627,29 +1661,30 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
 
         // Check if medication is scheduled for current shift and day
         bool isScheduledForToday = false;
-        // If medication is Daily, it's scheduled every day for its designated shift
-        // Daily medications should appear EVERY day, not just once
+
+        // Daily medications should appear EVERY day in their designated shift
         if (repeatInterval == 'Daily') {
-          // For Daily medications, check if the shift matches
-          // This ensures the medication appears daily in the correct shift
           if (medicationShift == currentShift) {
             isScheduledForToday = true;
             print('🔍 Med ${doc.id}: Matched as Daily medication');
           }
         }
-        // Handle duration-based intervals (2 days, 3 days, 4 days, etc.)
-        // For these, we rely on medication_takes having explicit scheduled_date
-        // So just check if shift matches - the takes will be filtered by date later
+        // Handle duration-based intervals (2 days, 3 days, 7 days, etc.)
+        // For these medications, we need to check if ANY of their medication_takes match the selected date
         else if (repeatInterval != null &&
             repeatInterval.contains('days') &&
             repeatInterval != 'Daily') {
-          print('🔍 Med ${doc.id}: Duration-based medication');
-          // For duration meds, include if shift matches
-          // The actual date filtering happens when loading medication_takes
+          print(
+            '🔍 Med ${doc.id}: Duration-based medication ($repeatInterval) - checking for takes on selected date',
+          );
+
+          // For duration-based meds, check if there are any medication_takes for the selected date
           if (medicationShift == currentShift) {
+            // We'll include this medication and let the takes filtering determine visibility
+            // The key is that medication_takes should have proper scheduled_date for each day
             isScheduledForToday = true;
             print(
-              '✅ Med ${doc.id}: Shift matches, will check takes for scheduled_date',
+              '✅ Med ${doc.id}: Duration medication included (shift: $medicationShift), checking takes for date: ${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}',
             );
           }
         }
@@ -1800,25 +1835,13 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               ).firstMatch(repeatInterval);
               if (match != null) {
                 final durationDays = int.tryParse(match.group(1) ?? '1') ?? 1;
-                final createdAtTs = data['created_at'] as Timestamp?;
-                if (createdAtTs != null && medicationShift == currentShift) {
-                  final createdDate = createdAtTs.toDate();
-                  final daysSinceCreation = _selectedDate
-                      .difference(
-                        DateTime(
-                          createdDate.year,
-                          createdDate.month,
-                          createdDate.day,
-                        ),
-                      )
-                      .inDays;
-                  if (daysSinceCreation >= 0 &&
-                      daysSinceCreation < durationDays) {
-                    isScheduledForToday = true;
-                    print(
-                      '🎯   ✅ Duration med ($durationDays days, day $daysSinceCreation)',
-                    );
-                  }
+                // For duration-based medications, always include if shift matches
+                // Let the take filtering handle specific date matching
+                if (medicationShift == currentShift) {
+                  isScheduledForToday = true;
+                  print(
+                    '✅ Duration med ($durationDays days) included - shift matches. Take filtering will handle date matching.',
+                  );
                 }
               }
             }
@@ -1914,22 +1937,13 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               ).firstMatch(repeatInterval);
               if (match != null) {
                 final durationDays = int.tryParse(match.group(1) ?? '1') ?? 1;
-                final createdAtTs = data['created_at'] as Timestamp?;
-                if (createdAtTs != null && medicationShift == currentShift) {
-                  final createdDate = createdAtTs.toDate();
-                  final daysSinceCreation = _selectedDate
-                      .difference(
-                        DateTime(
-                          createdDate.year,
-                          createdDate.month,
-                          createdDate.day,
-                        ),
-                      )
-                      .inDays;
-                  if (daysSinceCreation >= 0 &&
-                      daysSinceCreation < durationDays) {
-                    isScheduledForToday = true;
-                  }
+                // For duration-based medications, always include if shift matches
+                // Let the take filtering handle specific date matching
+                if (medicationShift == currentShift) {
+                  isScheduledForToday = true;
+                  print(
+                    '✅ Duration med ($durationDays days) included - shift matches. Take filtering will handle date matching.',
+                  );
                 }
               }
             }
@@ -1978,7 +1992,23 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         '🔍 DEBUG: currentShift=$currentShift, currentDay=$currentDay, selectedDate=$_selectedDate',
       );
 
+      // Special debugging for Nov 26
+      if (_selectedDate.month == 11 && _selectedDate.day == 26) {
+        print(
+          '🚨 NOV 26 DEBUG: Found ${medicationIds.length} medication IDs: $medicationIds',
+        );
+        print('🚨 NOV 26 DEBUG: medsToInclude count: ${medsToInclude.length}');
+        for (final med in medsToInclude) {
+          print(
+            '🚨 NOV 26 DEBUG: Med "${med['medication_name']}" repeat="${med['repeat_interval']}" shift="${med['shift']}"',
+          );
+        }
+      }
+
       if (medicationIds.isEmpty) {
+        print(
+          '❌ NO MEDICATIONS FOUND for $_selectedDate - returning empty list',
+        );
         if (mounted) {
           setState(() {
             _upcomingMedications = [];
@@ -1987,6 +2017,8 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         }
         return;
       }
+
+      print('🔍 DEBUG: Fetching takes for medications: $medicationIds');
 
       // Fetch Medication_Takes for these medications in parallel batches of 10 (Firestore limit)
       final List<Future<QuerySnapshot>> takesFutures = [];
@@ -1998,7 +2030,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final future = _firestore
             .collection('medication_takes')
             .where('medication_id', whereIn: batch)
-            .where('status', isEqualTo: 'pending')
+            .where('status', whereIn: ['pending'])
             .get();
         takesFutures.add(future);
       }
@@ -2006,6 +2038,20 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final List<QueryDocumentSnapshot> allTakesDocs = [];
       for (final snapshot in takesSnapshots) {
         allTakesDocs.addAll(snapshot.docs);
+      }
+
+      print('🔍 DEBUG: Found ${allTakesDocs.length} pending takes total');
+
+      // Debug: Print all takes found
+      for (final takeDoc in allTakesDocs) {
+        final takeData = takeDoc.data() as Map<String, dynamic>;
+        final medId = takeData['medication_id'];
+        final scheduledDate = takeData['scheduled_date'];
+        final scheduledTime = takeData['scheduled_time'];
+        final status = takeData['status'];
+        print(
+          '🔍   Take ${takeDoc.id}: med=$medId, date=$scheduledDate, time=$scheduledTime, status=$status',
+        );
       }
 
       // Group takes by medication_id and include all takes for assigned medications
@@ -2025,8 +2071,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         final bool isRecentById = _recentlyCreatedMedIds.contains(medId);
         final bool isFromPreviousShift =
             takeData['from_previous_shift'] == true;
-        final String? missedByNurseId =
-            takeData['missed_by_nurse_id'] as String?;
         final String? missedByNurseName =
             takeData['missed_by_nurse_name'] as String?;
 
@@ -2047,20 +2091,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
               shouldInclude = true;
             } else if (scheduledTimeStr != null) {
               // Parse scheduled time and include only if it's not already past
-              final parts = scheduledTimeStr.split(':');
-              int h = 0;
-              int min = 0;
-              if (parts.isNotEmpty) h = int.tryParse(parts[0]) ?? 0;
-              if (parts.length > 1) min = int.tryParse(parts[1]) ?? 0;
-              final scheduledDateTime = DateTime(
-                _selectedDate.year,
-                _selectedDate.month,
-                _selectedDate.day,
-                h,
-                min,
-              );
-              // Show take if scheduled time is now or later
-              // Modified: Always include pending medications so nurses can manually mark them as completed or missed
+              // Always include pending medications so nurses can manually mark them as completed or missed
               shouldInclude = true;
             } else {
               shouldInclude = false;
@@ -2179,75 +2210,112 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
         }).toList();
 
         // Filter takes to only include those scheduled for the selected date.
-        // If a take has an explicit 'scheduled_date' (set for Once meds), use
-        // that date; otherwise assume the take is scheduled on the currently
-        // selected date and combine with its scheduled_time.
+        // ENHANCED FOR 7-DAY MEDICATION TROUBLESHOOTING
+        final selectedDateOnly = DateTime(
+          _selectedDate.year,
+          _selectedDate.month,
+          _selectedDate.day,
+        );
+
+        // Special debugging for Nov 26
+        if (_selectedDate.month == 11 && _selectedDate.day == 26) {
+          print(
+            '🚨 NOV 26 TAKE FILTER: Processing ${activeTakes.length} active takes for medication "${m['medication_name']}"',
+          );
+          for (final take in activeTakes) {
+            final scheduledDate = take['scheduled_date'] as Timestamp?;
+            if (scheduledDate != null) {
+              final d = scheduledDate.toDate();
+              print(
+                '🚨 NOV 26 TAKE: Take ${take['take_number']} scheduled for ${d.year}-${d.month}-${d.day}',
+              );
+            } else {
+              print(
+                '🚨 NOV 26 TAKE: Take ${take['take_number']} has NO scheduled_date (Daily med)',
+              );
+            }
+          }
+        }
+
         final filteredTakes = activeTakes.where((take) {
           final scheduledTimeStr = take['scheduled_time'] as String?;
           if (scheduledTimeStr == null) return false;
           final timeParts = scheduledTimeStr.split(':');
           if (timeParts.length < 2) return false;
-          final hour = int.tryParse(timeParts[0]) ?? 0;
-          final minute = int.tryParse(timeParts[1]) ?? 0;
 
           final takeScheduledDateTs = take['scheduled_date'] as Timestamp?;
           DateTime scheduledDateForTake;
-          if (takeScheduledDateTs != null) {
+          bool hasExplicitDate = takeScheduledDateTs != null;
+
+          if (hasExplicitDate) {
             final d = takeScheduledDateTs.toDate();
-            scheduledDateForTake = DateTime(
-              d.year,
-              d.month,
-              d.day,
-              hour,
-              minute,
+            scheduledDateForTake = DateTime(d.year, d.month, d.day);
+            print(
+              '🔍     Take ${take['take_number']} has explicit scheduled_date: ${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} at $scheduledTimeStr',
             );
           } else {
-            scheduledDateForTake = DateTime(
-              _selectedDate.year,
-              _selectedDate.month,
-              _selectedDate.day,
-              hour,
-              minute,
+            scheduledDateForTake = selectedDateOnly;
+            print(
+              '🔍     Take ${take['take_number']} has no scheduled_date (Daily med), using selected: ${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')} at $scheduledTimeStr',
             );
           }
 
-          // Only compare the date portion — user expects to see takes scheduled
-          // for the selected calendar day regardless of current time of day.
-          return scheduledDateForTake.year == _selectedDate.year &&
-              scheduledDateForTake.month == _selectedDate.month &&
-              scheduledDateForTake.day == _selectedDate.day;
+          // For duration-based medications (7 days, etc.), we must match the exact scheduled_date
+          // For Daily medications, scheduled_date is null and they appear on any selected date
+          final matches = scheduledDateForTake.isAtSameMomentAs(
+            selectedDateOnly,
+          );
+
+          if (matches) {
+            print(
+              '✅     MATCHED: Take ${take['take_number']} for ${scheduledDateForTake.year}-${scheduledDateForTake.month.toString().padLeft(2, '0')}-${scheduledDateForTake.day.toString().padLeft(2, '0')} matches selected ${selectedDateOnly.year}-${selectedDateOnly.month.toString().padLeft(2, '0')}-${selectedDateOnly.day.toString().padLeft(2, '0')}',
+            );
+          } else {
+            print(
+              '❌     NO MATCH: Take ${take['take_number']} scheduled for ${scheduledDateForTake.year}-${scheduledDateForTake.month.toString().padLeft(2, '0')}-${scheduledDateForTake.day.toString().padLeft(2, '0')} ≠ selected ${selectedDateOnly.year}-${selectedDateOnly.month.toString().padLeft(2, '0')}-${selectedDateOnly.day.toString().padLeft(2, '0')}',
+            );
+          }
+
+          return matches;
         }).toList();
 
-        // Check if ALL intake times have passed for TODAY (not future/past dates)
-        final isToday =
-            _selectedDate.year == now.year &&
-            _selectedDate.month == now.month &&
-            _selectedDate.day == now.day;
-
-        if (isToday && filteredTakes.isNotEmpty) {
-          final allTimesPassed = filteredTakes.every((take) {
-            final scheduledTimeStr = take['scheduled_time'] as String?;
-            if (scheduledTimeStr == null) return false;
-            final timeParts = scheduledTimeStr.split(':');
-            if (timeParts.length < 2) return false;
-            final hour = int.tryParse(timeParts[0]) ?? 0;
-            final minute = int.tryParse(timeParts[1]) ?? 0;
-            final scheduledTime = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              hour,
-              minute,
+        // 🔍 ENHANCED DEBUG: Print detailed summary for 7-day medication troubleshooting
+        final medicationName = m['medication_name'] ?? 'Unknown Med';
+        final repeatInterval = m['repeat_interval'] ?? 'Unknown';
+        if (filteredTakes.isNotEmpty) {
+          print(
+            '📋 ✅ Medication "$medicationName" ($repeatInterval) has ${filteredTakes.length} takes for ${selectedDateOnly.toString().split(' ')[0]}:',
+          );
+          for (final take in filteredTakes) {
+            final takeDate = take['scheduled_date'] as Timestamp?;
+            final dateStr = takeDate != null
+                ? takeDate.toDate().toString().split(' ')[0]
+                : 'null (Daily)';
+            print(
+              '      ✓ Take ${take['take_number']} at ${take['scheduled_time']} (scheduled: $dateStr, status: ${take['status']})',
             );
-            return now.isAfter(scheduledTime) ||
-                now.isAtSameMomentAs(scheduledTime);
-          });
-
-          // If all times have passed today, skip this medication for today
-          if (allTimesPassed) {
-            continue;
+          }
+        } else {
+          print(
+            '⚠️  ❌ Medication "$medicationName" ($repeatInterval) has NO takes for ${selectedDateOnly.toString().split(' ')[0]}',
+          );
+          if (activeTakes.isNotEmpty) {
+            print('      Available takes for this medication:');
+            for (final take in activeTakes) {
+              final takeDate = take['scheduled_date'] as Timestamp?;
+              final dateStr = takeDate != null
+                  ? takeDate.toDate().toString().split(' ')[0]
+                  : 'null (Daily)';
+              print(
+                '        - Take ${take['take_number']} at ${take['scheduled_time']} (scheduled: $dateStr, status: ${take['status']})',
+              );
+            }
           }
         }
+
+        // Keep medications visible regardless of time - they should only disappear when marked as completed or missed
+        // The MedicationMissedMonitorService will automatically mark them as missed after 1 hour
+        // The nurse can still manually complete or mark as missed before that
 
         // Sort takes by scheduled time (earliest first). For medications
         // assigned to the 3rd shift (22:00-06:00) treat times between
@@ -2559,7 +2627,7 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                     ),
                     SizedBox(height: 16),
 
-                    // Medication Name
+                    // Medication Name - Enhanced Searchable Combo Box
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -2579,56 +2647,200 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
                                 color: Color(0xFF00588E),
                               ),
                             ),
+                            SizedBox(width: 4),
+                            Icon(Icons.search, color: Colors.green, size: 16),
                           ],
                         ),
                         SizedBox(height: 8),
                         SizedBox(
                           width: MediaQuery.of(context).size.width * 0.9,
-                          height: 50,
-                          child: DropdownButtonFormField<String>(
-                            value: selectedMedicationTemp,
-                            decoration: InputDecoration(
-                              hintText: 'Select medication',
-                              filled: true,
-                              fillColor: Color.fromARGB(255, 222, 241, 246),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(30),
-                                borderSide: BorderSide(
-                                  color: Colors.white,
-                                  width: 1.5,
-                                ),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(30),
-                                borderSide: BorderSide(
-                                  color: Colors.white,
-                                  width: 1.5,
-                                ),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(30),
-                                borderSide: BorderSide(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                              ),
-                              contentPadding: EdgeInsets.only(
-                                left: 12,
-                                top: 12,
-                                bottom: 12,
-                                right: 12,
-                              ),
-                            ),
-                            items: commonMedications.map((medication) {
-                              return DropdownMenuItem<String>(
-                                value: medication,
-                                child: Text(medication),
-                              );
-                            }).toList(),
-                            onChanged: (String? value) {
+                          child: Autocomplete<String>(
+                            optionsBuilder:
+                                (TextEditingValue textEditingValue) {
+                                  if (textEditingValue.text.isEmpty) {
+                                    return commonMedications;
+                                  }
+                                  return commonMedications.where((medication) {
+                                    return medication.toLowerCase().contains(
+                                      textEditingValue.text.toLowerCase(),
+                                    );
+                                  });
+                                },
+                            onSelected: (String selection) {
                               setDialogState(() {
-                                selectedMedicationTemp = value;
+                                selectedMedicationTemp = selection;
                               });
+                            },
+                            fieldViewBuilder:
+                                (
+                                  context,
+                                  controller,
+                                  focusNode,
+                                  onEditingComplete,
+                                ) {
+                                  // Initialize with selected value
+                                  if (selectedMedicationTemp != null &&
+                                      controller.text !=
+                                          selectedMedicationTemp) {
+                                    controller.text = selectedMedicationTemp!;
+                                  }
+                                  return Container(
+                                    height: 50,
+                                    child: TextFormField(
+                                      controller: controller,
+                                      focusNode: focusNode,
+                                      onEditingComplete: onEditingComplete,
+                                      decoration: InputDecoration(
+                                        hintText:
+                                            '🔍 Type or select medication',
+                                        filled: true,
+                                        fillColor: Color.fromARGB(
+                                          255,
+                                          222,
+                                          241,
+                                          246,
+                                        ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            30,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.white,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            30,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.white,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            30,
+                                          ),
+                                          borderSide: BorderSide(
+                                            color: Colors.white,
+                                            width: 2,
+                                          ),
+                                        ),
+                                        contentPadding: EdgeInsets.only(
+                                          left: 12,
+                                          top: 12,
+                                          bottom: 12,
+                                          right: 12,
+                                        ),
+                                        suffixIcon: Icon(
+                                          Icons.search,
+                                          color: Color(0xFF00588E),
+                                        ),
+                                      ),
+                                      onChanged: (value) {
+                                        setDialogState(() {
+                                          selectedMedicationTemp =
+                                              value.isNotEmpty ? value : null;
+                                        });
+                                      },
+                                    ),
+                                  );
+                                },
+                            optionsViewBuilder: (context, onSelected, options) {
+                              return Align(
+                                alignment: Alignment.topLeft,
+                                child: Material(
+                                  elevation: 8.0,
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxHeight: 250,
+                                      maxWidth:
+                                          MediaQuery.of(context).size.width *
+                                          0.9,
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.grey.shade300,
+                                        ),
+                                      ),
+                                      child: ListView.builder(
+                                        padding: EdgeInsets.zero,
+                                        shrinkWrap: true,
+                                        itemCount: options.length,
+                                        itemBuilder: (context, index) {
+                                          final option = options.elementAt(
+                                            index,
+                                          );
+                                          return InkWell(
+                                            onTap: () => onSelected(option),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            child: Container(
+                                              padding: EdgeInsets.symmetric(
+                                                horizontal: 16,
+                                                vertical: 14,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                border: Border(
+                                                  bottom: BorderSide(
+                                                    color: Colors.grey.shade200,
+                                                    width: 0.5,
+                                                  ),
+                                                ),
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Container(
+                                                    padding: EdgeInsets.all(6),
+                                                    decoration: BoxDecoration(
+                                                      color: Color(
+                                                        0xFF00588E,
+                                                      ).withOpacity(0.1),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            6,
+                                                          ),
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.medication,
+                                                      size: 16,
+                                                      color: Color(0xFF00588E),
+                                                    ),
+                                                  ),
+                                                  SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: Text(
+                                                      option,
+                                                      style: TextStyle(
+                                                        fontSize: 15,
+                                                        color: Colors.black87,
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Icon(
+                                                    Icons.add_circle_outline,
+                                                    size: 18,
+                                                    color: Color(
+                                                      0xFF00588E,
+                                                    ).withOpacity(0.6),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
                             },
                           ),
                         ),
@@ -3444,11 +3656,6 @@ class _UpcomingMedicationsTabState extends State<UpcomingMedicationsTab>
       final currentTime = DateTime.now();
       final currentShift = _getCurrentShift();
       final currentHour = currentTime.hour;
-      final today = DateTime(
-        currentTime.year,
-        currentTime.month,
-        currentTime.day,
-      );
 
       print(
         '🔍 _checkForMissedMedications: Checking at ${DateFormat('HH:mm:ss').format(currentTime)}',

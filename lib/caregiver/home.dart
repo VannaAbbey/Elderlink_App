@@ -338,12 +338,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     });
 
     // Start periodic attendance check after first frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      AttendanceCheckService.startPeriodicAttendanceCheck(context, () {
-        // Callback when attendance is marked
-        print('✅ CAREGIVER: Attendance marked');
-      });
-    });
+    // Global attendance service is now handled by AuthWrapper
+    // No need for local attendance initialization
   }
 
   @override

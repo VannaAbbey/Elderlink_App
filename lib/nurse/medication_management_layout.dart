@@ -5,6 +5,7 @@ import 'medication_upcoming.dart';
 import 'medication_completed.dart';
 import 'medication_missed.dart';
 import 'nurse_sidebar.dart';
+import '../widgets/nurse_widgets/nurse_notification_icon_button.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
@@ -621,14 +622,7 @@ class _MedicationManagementLayoutState extends State<MedicationManagementLayout>
                             onPressed: () => _scanPrescription(context),
                             tooltip: 'Scan Prescription',
                           ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.notifications,
-                              color: Color(0xFF00588E),
-                            ),
-                            iconSize: 30,
-                            onPressed: widget.onBellPressed,
-                          ),
+                          const NurseNotificationIconButton(),
                         ],
                       ),
                     ],

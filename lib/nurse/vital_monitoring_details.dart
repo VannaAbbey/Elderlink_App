@@ -102,14 +102,26 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
       'vital_id': vitalId,
       'elderly_id': widget.elderlyId,
       'elderly_name': widget.elderlyName,
-      'assignment_id': oldData?['assignment_id'] ?? '',
-      'action_type': 'vital_updated',
       'nurse_id': nurseId,
       'nurse_name': nurseName,
-      'timestamp': FieldValue.serverTimestamp(),
-      'old_values': oldData ?? {},
-      'new_values': newVitals,
+      'house_id': oldData?['house_id'] ?? '',
+      'shift': oldData?['shift'] ?? '',
+      'assigned_date': oldData?['assigned_date'] ?? '',
+      'action_type':
+          'vital_completed', // 🆕 Use completed instead of updated for consistency
+      'old_value': {'status': 'pending'}, // Standardized field name
+      'new_value': {
+        // Standardized field name
+        'status': 'completed',
+        'blood_pressure': draft.bloodPressureController.text,
+        'pulse_rate': draft.pulseRateController.text,
+        'oxygen_saturation': draft.o2SatController.text,
+        'temperature': draft.temperatureController.text,
+        'respiratory_rate': draft.respiratoryRateController.text,
+        'vital_remarks': draft.remarksController.text,
+      },
       'remarks': draft.remarksController.text,
+      'timestamp': FieldValue.serverTimestamp(),
     };
     batch.set(
       FirebaseFirestore.instance.collection('vital_activity_logs').doc(),

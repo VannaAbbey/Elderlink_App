@@ -334,7 +334,7 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                                             ),
                                             if (vital['completed_at'] != null)
                                               Text(
-                                                'Completed: ${DateFormat('MMM dd, yyyy HH:mm').format((vital['completed_at'] as Timestamp).toDate())}',
+                                                'Completed: ${DateFormat('MMM dd, yyyy h:mm a').format((vital['completed_at'] as Timestamp).toDate())}',
                                                 style: TextStyle(
                                                   fontSize: 12,
                                                   color: Colors.grey[700],

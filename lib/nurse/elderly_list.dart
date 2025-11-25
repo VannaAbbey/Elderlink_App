@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'elderly_profile.dart';
+import 'infirmary_transfer_selection.dart';
 
 class ElderlyListScreen extends StatefulWidget {
   final String houseId;
@@ -218,20 +219,92 @@ class _ElderlyListScreenState extends State<ElderlyListScreen> {
 
                   const SizedBox(height: 20),
 
-                  Container(
-                    height: 45,
-                    decoration: BoxDecoration(
-                      color: const Color(
-                        0xFFD8F4FF,
-                      ), // light blue background for full bar
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    child: Row(
-                      children: [
-                        _buildSegmentedButton("Alive", isLeft: true),
-                        _buildSegmentedButton("Deceased", isLeft: false),
-                      ],
-                    ),
+                  // Status segmented control and Infirmary button
+                  Row(
+                    children: [
+                      // Segmented control for Alive/Deceased
+                      Expanded(
+                        flex: 2,
+                        child: Container(
+                          height: 45,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD8F4FF),
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                          child: Row(
+                            children: [
+                              _buildSegmentedButton("Alive", isLeft: true),
+                              _buildSegmentedButton("Deceased", isLeft: false),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 12),
+
+                      // Infirmary Transfer button
+                      Expanded(
+                        flex: 1,
+                        child: GestureDetector(
+                          onTap: selectedStatus == 'Alive'
+                              ? () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          InfirmaryTransferSelectionScreen(
+                                            houseId: widget.houseId,
+                                            houseName: widget.houseName,
+                                          ),
+                                    ),
+                                  );
+                                }
+                              : null,
+                          child: Container(
+                            height: 45,
+                            decoration: BoxDecoration(
+                              color: selectedStatus == 'Alive'
+                                  ? const Color(0xFF00588E)
+                                  : Colors.grey[300],
+                              borderRadius: BorderRadius.circular(22.5),
+                              boxShadow: selectedStatus == 'Alive'
+                                  ? [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.15),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ]
+                                  : [],
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.local_hospital,
+                                  color: selectedStatus == 'Alive'
+                                      ? Colors.white
+                                      : Colors.grey[600],
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  "Infirmary",
+                                  style: TextStyle(
+                                    fontFamily: "Poppins",
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                    color: selectedStatus == 'Alive'
+                                        ? Colors.white
+                                        : Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
 
                   const SizedBox(height: 20),

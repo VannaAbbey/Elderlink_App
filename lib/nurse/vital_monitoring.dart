@@ -6,8 +6,9 @@ import 'package:intl/intl.dart';
 import 'vital_upcoming.dart';
 import 'vital_completed.dart';
 import 'vital_missed.dart';
-import 'activity_logs.dart';
 import 'nurse_sidebar.dart';
+import '../services/daily_reset_service.dart';
+import '../widgets/nurse_widgets/nurse_notification_icon_button.dart';
 
 /// =============================
 /// Vital Monitoring Screen
@@ -108,6 +109,21 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
       }
     });
     _loadNurseData();
+
+    // 🆕 FEATURE 4: Initialize comprehensive vital monitoring system
+    _initializeVitalSystem();
+  }
+
+  // 🆕 FEATURE 4: Initialize comprehensive vital monitoring system with real-time sync
+  Future<void> _initializeVitalSystem() async {
+    try {
+      await DailyResetService.startComprehensiveMonitoring();
+      print(
+        '✅ Comprehensive vital monitoring with real-time schedule sync initialized',
+      );
+    } catch (e) {
+      print('❌ Error initializing vital monitoring system: $e');
+    }
   }
 
   @override
@@ -138,18 +154,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
   }
 
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
-
-  void _onBellPressed() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ActivityLogsScreen(
-          houseId: selectedHouseId ?? 'H001',
-          nurseName: nurseName,
-        ),
-      ),
-    );
-  }
 
   /// Fetch Houses
   Future<List<Map<String, dynamic>>> fetchHouses() async {
@@ -197,8 +201,12 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
 
   // Build the Upcoming tab with red circle count
   Widget _buildUpcomingTabWithCount(Map<String, dynamic> house, bool selected) {
+    // 🔴 FIXED: Use cached count as initial data to prevent badge disappearing
+    final cachedCount = _getCachedBadgeCount(house['house_id']);
+
     return StreamBuilder<int>(
       stream: _getUpcomingVitalsCountStream(house['house_id']),
+      initialData: cachedCount, // Use cached count so badge appears immediately
       builder: (context, snapshot) {
         int count = snapshot.data ?? 0;
 
@@ -253,7 +261,34 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
     );
   }
 
-  // Get stream for upcoming vitals count (only pending vitals)
+  // 🔴 CACHED: Store badge counts to survive tab switches
+  static final Map<String, int> _badgeCache = {};
+  static final Map<String, DateTime> _badgeCacheTime = {};
+
+  // Get cached badge count (instant, survives tab switches)
+  int _getCachedBadgeCount(String houseId) {
+    final currentShift = _getCurrentShift();
+    final today = _getTodayDateString();
+    final cacheKey = '${houseId}_${currentShift}_$today';
+
+    final cachedCount = _badgeCache[cacheKey];
+    final cacheTime = _badgeCacheTime[cacheKey];
+
+    // Return cached count if it's less than 10 seconds old
+    if (cachedCount != null && cacheTime != null) {
+      final age = DateTime.now().difference(cacheTime).inSeconds;
+      if (age < 10) {
+        print(
+          '🔴 Badge CACHE HIT: Returning cached count $cachedCount for $cacheKey',
+        );
+        return cachedCount;
+      }
+    }
+
+    return 0; // Default if no valid cache
+  }
+
+  // Get stream for upcoming vitals count (reactive to schedule changes)
   Stream<int> _getUpcomingVitalsCountStream(String houseId) {
     // Get current shift and day
     final currentShift = _getCurrentShift();
@@ -267,74 +302,133 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
       return Stream.value(0);
     }
 
-    // Query elderly_assignments to get assigned elderly, then filter by house and vitals status
-    return _firestore
-        .collection('elderly_assignments')
-        .where('user_type', isEqualTo: 'nurse')
-        .where('user_id', isEqualTo: user.uid)
-        .where('is_current', isEqualTo: true)
-        .where('house_id', arrayContains: houseId)
-        .where('shift', isEqualTo: currentShift)
-        .where('day', isEqualTo: currentDay)
-        .snapshots()
-        .asyncMap((snapshot) async {
-          if (snapshot.docs.isEmpty) return 0;
+    print(
+      '🔴 Badge Stream: Setting up for house $houseId, shift $currentShift, day $currentDay, date $today',
+    );
 
-          // Collect all elderly IDs from all assignment documents
-          final allElderlyIds = <String>[];
-          for (final doc in snapshot.docs) {
-            final elderlyIds = List<String>.from(
-              doc.data()['elderly_ids'] ?? [],
-            );
-            allElderlyIds.addAll(elderlyIds);
+    // Create stream that emits cached value first, then real-time updates
+    return Stream.periodic(
+      const Duration(seconds: 3), // Slightly faster for responsiveness
+      (_) => DateTime.now(),
+    ).asyncMap((_) async {
+      print(
+        '🔄 Badge: Checking for updates (schedule changes, vital completions)',
+      );
+
+      // Fetch current vitals
+      final vitalsSnapshot = await _firestore
+          .collection('vitals')
+          .where('house_id', isEqualTo: houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+      print(
+        '🔄 Badge: Processing ${vitalsSnapshot.docs.length} vitals, checking assignments',
+      );
+
+      // 🆕 UPDATED: Get current nurse assignments (supports both old and new collection structure)
+      var assignmentQuery = await _firestore
+          .collection('assignments')
+          .where('nurse_id', isEqualTo: user.uid)
+          .where('house_id', isEqualTo: houseId)
+          .where('shift', isEqualTo: currentShift)
+          .get();
+
+      // Fallback to old structure if new one is empty
+      if (assignmentQuery.docs.isEmpty) {
+        assignmentQuery = await _firestore
+            .collection('elderly_assignments')
+            .where('user_type', isEqualTo: 'nurse')
+            .where('user_id', isEqualTo: user.uid)
+            .where('is_current', isEqualTo: true)
+            .where('house_id', arrayContains: houseId)
+            .where('shift', isEqualTo: currentShift)
+            .where('day', isEqualTo: currentDay)
+            .get();
+      }
+
+      if (assignmentQuery.docs.isEmpty) {
+        print('🔴 Badge Stream: No assignments found for nurse');
+        return 0;
+      }
+
+      // Collect all elderly IDs assigned to this nurse in this house
+      final assignedElderlyIds = <String>[];
+      for (final doc in assignmentQuery.docs) {
+        final elderlyIds = List<String>.from(doc.data()['elderly_ids'] ?? []);
+        assignedElderlyIds.addAll(elderlyIds);
+      }
+
+      if (assignedElderlyIds.isEmpty) {
+        print('🔴 Badge Stream: No elderly assigned to nurse');
+        return 0;
+      }
+
+      print(
+        '🔴 Badge Stream: Nurse assigned to ${assignedElderlyIds.length} elderly: $assignedElderlyIds',
+      );
+
+      // 🔴 EXACT UPCOMING TAB LOGIC: Filter elderly by actual house location first
+      // Get elderly documents to check which ones are actually in current house
+      final elderlyDocs = await Future.wait(
+        assignedElderlyIds.map(
+          (id) => _firestore.collection('elderly').doc(id).get(),
+        ),
+      );
+
+      // Filter elderly that belong to the specific house (same as upcoming tab)
+      final elderlyInCurrentHouse = <String>[];
+      for (final elderlyDoc in elderlyDocs) {
+        if (elderlyDoc.exists) {
+          final elderlyHouseId = elderlyDoc.data()?['house_id'];
+          if (elderlyHouseId == houseId) {
+            elderlyInCurrentHouse.add(elderlyDoc.id);
           }
+        }
+      }
 
-          if (allElderlyIds.isEmpty) return 0;
+      print(
+        '🔴 Badge: ${elderlyInCurrentHouse.length} elderly in current house out of ${assignedElderlyIds.length} assigned',
+      );
 
-          // ⚡ OPTIMIZATION: Batch fetch all elderly documents at once
-          final elderlyDocs = await Future.wait(
-            allElderlyIds.map(
-              (id) => _firestore.collection('elderly').doc(id).get(),
-            ),
-          );
+      // Check completed vitals for elderly in current house (same as upcoming tab)
+      final completedTodayElderlyIds = <String>{};
+      final completedTodayQuery = await _firestore
+          .collection('vitals')
+          .where('house_id', isEqualTo: houseId)
+          .where('assigned_date', isEqualTo: today)
+          .where('status', isEqualTo: 'completed')
+          .where('elderly_id', whereIn: elderlyInCurrentHouse.take(30).toList())
+          .get();
 
-          // Filter elderly that belong to the specific house
-          final elderlyInHouse = <String>[];
-          for (final elderlyDoc in elderlyDocs) {
-            if (elderlyDoc.exists) {
-              final elderlyHouseId = elderlyDoc.data()?['house_id'];
-              if (elderlyHouseId == houseId) {
-                elderlyInHouse.add(elderlyDoc.id);
-              }
-            }
-          }
+      for (final doc in completedTodayQuery.docs) {
+        final data = doc.data();
+        final elderlyId = data['elderly_id'] as String?;
+        if (elderlyId != null) {
+          completedTodayElderlyIds.add(elderlyId);
+        }
+      }
 
-          if (elderlyInHouse.isEmpty) return 0;
+      // Badge Count = Elderly in house - Already completed (exact upcoming tab logic)
+      final elderlyNeedingVitals = elderlyInCurrentHouse
+          .where((elderlyId) => !completedTodayElderlyIds.contains(elderlyId))
+          .toList();
 
-          // ⚡ Check vitals status: Count only elderly WITHOUT completed vitals today
-          final vitalQueries = await Future.wait(
-            elderlyInHouse.map(
-              (elderlyId) => _firestore
-                  .collection('vitals')
-                  .where('elderly_id', isEqualTo: elderlyId)
-                  .where('assigned_date', isEqualTo: today)
-                  .where('status', isEqualTo: 'completed')
-                  .limit(1)
-                  .get(),
-            ),
-          );
+      final badgeCount = elderlyNeedingVitals.length;
 
-          // Count elderly who DON'T have completed vitals (pending vitals)
-          int pendingCount = 0;
-          for (int i = 0; i < elderlyInHouse.length; i++) {
-            if (vitalQueries[i].docs.isEmpty) {
-              // No completed vital = still pending
-              pendingCount++;
-            }
-          }
+      // 🔴 CACHE: Store badge count to survive tab switches
+      final cacheKey = '${houseId}_${currentShift}_$today';
+      _badgeCache[cacheKey] = badgeCount;
+      _badgeCacheTime[cacheKey] = DateTime.now();
 
-          return pendingCount;
-        });
+      print(
+        '🔴 Badge EXACT MATCH: ${elderlyInCurrentHouse.length} in house - ${completedTodayElderlyIds.length} completed = $badgeCount badge count',
+      );
+      print('🔴 Badge completed today: $completedTodayElderlyIds');
+      print('🔴 Badge needing vitals: $elderlyNeedingVitals');
+      print('🔴 Badge CACHED: Stored count $badgeCount for key $cacheKey');
+      return badgeCount;
+    });
   }
 
   // Get current shift
@@ -366,37 +460,6 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
       return DateFormat('yyyy-MM-dd').format(previousDay);
     }
     return DateFormat('yyyy-MM-dd').format(now);
-  }
-
-  // Get nurse ID directly from Firebase Auth (more reliable than name-based lookup)
-  Future<String?> _getNurseId() async {
-    final user = FirebaseAuth.instance.currentUser;
-    return user?.uid;
-  }
-
-  // Check if nurse is assigned to current shift
-  Future<bool> _isNurseAssignedToCurrentShift() async {
-    final nurseId = await _getNurseId();
-    if (nurseId == null) return false;
-
-    final currentShift = _getCurrentShift();
-    final currentDay = _getCurrentDay();
-
-    try {
-      final shiftQuery = await _firestore
-          .collection('house_shift_assignments')
-          .where('user_id', isEqualTo: nurseId)
-          .where('user_type', isEqualTo: 'nurse')
-          .where('is_current', isEqualTo: true)
-          .where('shift', isEqualTo: currentShift)
-          .where('days_assigned', arrayContains: currentDay)
-          .get();
-
-      return shiftQuery.docs.isNotEmpty;
-    } catch (e) {
-      print('❌ Error checking shift assignment: $e');
-      return false;
-    }
   }
 
   @override
@@ -441,14 +504,38 @@ class _VitalMonitoringScreenState extends State<VitalMonitoringScreen>
                           ),
                         ),
                       ),
+                      // 🔧 DEBUG: Manual trigger button for missed vitals check
                       IconButton(
                         icon: const Icon(
-                          Icons.notifications,
-                          color: Color(0xFF00588E),
+                          Icons.refresh,
+                          color: Colors.orange,
+                          size: 24,
                         ),
-                        iconSize: 30,
-                        onPressed: _onBellPressed,
+                        onPressed: () async {
+                          print(
+                            '🔄 Manual trigger: Checking for missed vitals...',
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Checking for missed vitals...'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                          await DailyResetService.forceCheckMissedVitals();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Check completed! Pull down to refresh.',
+                              ),
+                              duration: Duration(seconds: 2),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        },
+                        tooltip: 'Check for missed vitals',
                       ),
+                      // Nurse Notification Bell Icon for Leave Requests
+                      const NurseNotificationIconButton(),
                     ],
                   ),
                 ),

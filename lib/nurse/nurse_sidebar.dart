@@ -4,6 +4,8 @@ import '../providers/auth_provider.dart' as app_auth;
 import 'edit_profile.dart';
 import 'leave_form.dart';
 import 'health_analytics_selector.dart';
+import 'activity_logs.dart';
+import 'infirmary_view.dart';
 
 class NurseSidebar extends StatelessWidget {
   final bool isSidebarOpen;
@@ -118,6 +120,22 @@ class NurseSidebar extends StatelessWidget {
                     },
                   ),
                   ListTile(
+                    leading: Icon(
+                      Icons.local_hospital,
+                      color: Color(0xFF00588E),
+                    ),
+                    title: Text('Infirmary Management'),
+                    onTap: () {
+                      toggleSidebar();
+                      Navigator.push(
+                        parentContext,
+                        MaterialPageRoute(
+                          builder: (context) => const InfirmaryViewScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
                     leading: Icon(Icons.request_page, color: Color(0xFF00588E)),
                     title: Text('Request Leave'),
                     onTap: () {
@@ -126,6 +144,26 @@ class NurseSidebar extends StatelessWidget {
                         parentContext,
                         MaterialPageRoute(
                           builder: (context) => const LeaveForm(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.history, color: Color(0xFF00588E)),
+                    title: Text('Activity Logs'),
+                    onTap: () {
+                      toggleSidebar();
+                      // Import will be added at the top
+                      Navigator.push(
+                        parentContext,
+                        MaterialPageRoute(
+                          builder: (context) => ActivityLogsScreen(
+                            houseId: 'H001', // Default house
+                            nurseName: Provider.of<app_auth.AuthProvider>(
+                              parentContext,
+                              listen: false,
+                            ).userFirstName,
+                          ),
                         ),
                       );
                     },

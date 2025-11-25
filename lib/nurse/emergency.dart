@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'nurse_sidebar.dart';
 import 'package:intl/intl.dart';
 import '../providers/auth_provider.dart' as my_auth;
-import 'activity_logs.dart';
+import '../widgets/nurse_widgets/nurse_notification_icon_button.dart';
 
 class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
@@ -126,25 +126,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           color: Color(0xFF00588E),
                         ),
                       ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ActivityLogsScreen(
-                                houseId: 'H001', // Default house
-                                nurseName:
-                                    '${Provider.of<my_auth.AuthProvider>(context, listen: false).userFirstName} ${Provider.of<my_auth.AuthProvider>(context, listen: false).userLastName}',
-                              ),
-                            ),
-                          );
-                        },
-                        child: const Icon(
-                          Icons.notifications,
-                          color: Color(0xFF00588E),
-                          size: 30,
-                        ),
-                      ),
+                      const NurseNotificationIconButton(),
                     ],
                   ),
                   const SizedBox(height: 16),

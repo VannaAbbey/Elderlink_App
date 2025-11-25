@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../main.dart'; // For EmergencyService
+import '../main.dart' as main; // For EmergencyService
 
 class EmergencyScreenModal extends StatelessWidget {
   final String alertId;
@@ -22,149 +22,174 @@ class EmergencyScreenModal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: Colors.white, // light red
-      title: Column(
-        children: const [
-          Icon(Icons.warning_amber_rounded, color: Colors.red, size: 50),
-          SizedBox(height: 5),
-          Text(
-            'Emergency Alert',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: Color(0xFF00588e),
-              fontSize: 25,
+    return WillPopScope(
+      onWillPop: () async => false, // Prevent back button dismissal
+      child: AlertDialog(
+        backgroundColor: Colors.white,
+        contentPadding: EdgeInsets.zero,
+        insetPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical:
+              100, // NEVER HIDE BOTTOM NAV - 100px space at top and bottom
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 48),
+            SizedBox(height: 8),
+            Text(
+              'Emergency Alert',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF00588e),
+                fontSize: 22,
+              ),
             ),
-          ),
-        ],
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 10),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // House Name
+                _InfoRow(icon: Icons.home, label: 'House', value: houseName),
+                const SizedBox(height: 8),
 
-          // House Name
-          _InfoRow(icon: Icons.home, label: 'House', value: houseName),
-          const SizedBox(height: 5),
+                // Date & Time
+                _InfoRow(
+                  icon: Icons.access_time,
+                  label: 'Date & Time',
+                  value: alertTimestamp,
+                ),
+                const SizedBox(height: 8),
 
-          // Date & Time
-          _InfoRow(
-            icon: Icons.access_time,
-            label: 'Date & Time',
-            value: alertTimestamp,
-          ),
-          const SizedBox(height: 5),
+                // Reporting Caregiver
+                _InfoRow(
+                  icon: Icons.person,
+                  label: 'Caregiver',
+                  value: caregiverName,
+                ),
+                const SizedBox(height: 12),
 
-          // Reporting Caregiver
-          _InfoRow(
-            icon: Icons.person,
-            label: 'Reporting Caregiver',
-            value: caregiverName,
-          ),
-          const SizedBox(height: 10),
-
-          // Description with blue container
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.description, color: Color(0xFF00588e), size: 25),
-                  SizedBox(width: 8),
-                  Text(
-                    'Description:',
-                    style: TextStyle(
-                      color: Color(0xFF00588e),
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                    ),
+                // Description Section
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color.fromARGB(255, 205, 227, 246),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color.fromARGB(255, 205, 227, 246),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Emergency Type as first line
-                    Text(
-                      emergencyType.isNotEmpty
-                          ? emergencyType
-                          : 'Emergency Alert',
-                      style: const TextStyle(
-                        color: Colors.black,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Emergency Type
+                      Row(
+                        children: const [
+                          Icon(
+                            Icons.warning,
+                            color: Color(0xFF00588e),
+                            size: 20,
+                          ),
+                          SizedBox(width: 6),
+                          Text(
+                            'Emergency Type:',
+                            style: TextStyle(
+                              color: Color(0xFF00588e),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Additional Information label
-                    const Text(
-                      'Additional Information:',
-                      style: TextStyle(
-                        color: Color(0xFF00588e),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                      const SizedBox(height: 4),
+                      Text(
+                        emergencyType.isNotEmpty
+                            ? emergencyType
+                            : 'Emergency Alert',
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    // Additional Information value
-                    Text(
-                      alertDescription.isNotEmpty &&
-                              alertDescription != 'No description'
-                          ? alertDescription
-                          : 'No additional information provided',
-                      style: const TextStyle(color: Colors.black, fontSize: 16),
-                    ),
-                  ],
+
+                      // Additional Information (only if exists)
+                      if (alertDescription.isNotEmpty &&
+                          alertDescription != 'No description' &&
+                          alertDescription != 'Emergency alert received') ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: const [
+                            Icon(
+                              Icons.info_outline,
+                              color: Color(0xFF00588e),
+                              size: 20,
+                            ),
+                            SizedBox(width: 6),
+                            Text(
+                              'Additional Info:',
+                              style: TextStyle(
+                                color: Color(0xFF00588e),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          alertDescription,
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      actionsAlignment: MainAxisAlignment.center,
-      actions: [
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF00588e),
-            shape: const StadiumBorder(),
-            padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 12),
-          ),
-          onPressed: () async {
-            try {
-              // Update Firestore to mark alert as viewed
-              await FirebaseFirestore.instance
-                  .collection('emergency_alert')
-                  .doc(alertId)
-                  .update({'alert_viewed': true});
-
-              print('✅ Alert marked as viewed in DB');
-            } catch (e) {
-              print('❌ Failed to update alert_viewed: $e');
-            }
-
-            // Stop the alarm & close modal
-            EmergencyService.stopAlarm();
-            Navigator.of(context).pop();
-          },
-          child: const Text(
-            'Mark as Viewed',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: Colors.white,
-              fontSize: 14,
+              ],
             ),
           ),
         ),
-      ],
+        actions: [
+          Center(
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00588e),
+                foregroundColor: Colors.white,
+                shape: const StadiumBorder(),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 30,
+                  vertical: 12,
+                ),
+              ),
+              onPressed: () async {
+                try {
+                  await FirebaseFirestore.instance
+                      .collection('emergency_alert')
+                      .doc(alertId)
+                      .update({'alert_viewed': true});
+                  print('✅ Alert marked as viewed');
+                } catch (e) {
+                  print('❌ Failed to update alert: $e');
+                }
+                main.EmergencyService.stopAlarm();
+                Navigator.of(context).pop();
+              },
+              child: const Text(
+                'Mark as Viewed',
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

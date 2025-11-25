@@ -1,7 +1,7 @@
 // lib/nurse/vitals_monitoring_layout.dart
 import 'package:flutter/material.dart';
 import 'vital_monitoring_details.dart';
-import 'activity_logs.dart';
+import '../widgets/nurse_widgets/nurse_notification_icon_button.dart';
 import 'nurse_sidebar.dart';
 
 class VitalMonitoringLayout extends StatefulWidget {
@@ -92,27 +92,8 @@ class _VitalMonitoringLayoutState extends State<VitalMonitoringLayout> {
                           ),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.notifications,
-                          color: Color(0xFF00588E),
-                        ),
-                        iconSize: 30,
-                        tooltip: "Activity Logs",
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ActivityLogsScreen(
-                                houseId:
-                                    widget.selectedHouseId ??
-                                    'H001', // Default to first house if none selected
-                                nurseName: widget.nurseName,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                      const NurseNotificationIconButton(),
+                      // Notification bell now handles leave request notifications
                     ],
                   ),
                   const SizedBox(height: 15),

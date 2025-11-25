@@ -771,16 +771,26 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
 
       // 🔧 FIXED: Prepare activity log data using assignment ID
       final activityLogData = {
-        'assignment_id': widget.assignmentId,
+        'vital_id': widget
+            .assignmentId, // Use vital ID instead of assignment_id for consistency
         'elderly_id': widget.elderlyId,
+        'elderly_name': widget.elderlyName,
+        'nurse_id': _currentNurseId ?? 'Unknown',
+        'nurse_name': widget.nurseName ?? 'Unknown Nurse',
         'house_id': widget.houseId,
         'shift': _getCurrentShift(),
-        'action_type': 'vital_completed',
-        'nurse_id': _currentNurseId ?? 'Unknown',
-        'timestamp': Timestamp.fromDate(now),
-        'old_values': {},
-        'new_values': vitalValues,
+        'assigned_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'action_type': 'vital_completed', // 🆕 ONLY LOG COMPLETED VITALS
+        'old_value': {
+          'status': 'pending',
+        }, // Changed from old_values to old_value
+        'new_value': {
+          // Changed from new_values to new_value
+          'status': 'completed',
+          ...vitalValues,
+        },
         'remarks': _notesController.text.trim(),
+        'timestamp': Timestamp.fromDate(now),
       };
 
       print('💾 Starting batch write operation...');
@@ -793,7 +803,10 @@ class _VitalUpdateScreenState extends State<VitalUpdateScreen> {
           .collection('vitals')
           .doc(widget.assignmentId)
           .get();
-      final assignmentData = assignmentDoc.exists ? assignmentDoc.data()! : {};
+      final assignmentData =
+          assignmentDoc.exists && assignmentDoc.data() != null
+          ? Map<String, dynamic>.from(assignmentDoc.data()!)
+          : <String, dynamic>{};
 
       // Prepare update data with essential fields only
       final updateData = <String, dynamic>{

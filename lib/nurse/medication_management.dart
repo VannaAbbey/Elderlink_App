@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'medication_management_layout.dart';
-import 'activity_logs.dart';
 
 /// =============================
 /// Medication Management Screen
@@ -123,15 +122,8 @@ class _MedicationManagementScreenState
   void toggleSidebar() => setState(() => isSidebarOpen = !isSidebarOpen);
 
   void _onBellPressed() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ActivityLogsScreen(
-          houseId: selectedHouseId ?? 'H001', // Use selected house or default
-          nurseName: nurseName,
-        ),
-      ),
-    );
+    // Bell press is now handled by NurseNotificationIconButton widget
+    // This method is kept for compatibility but functionality moved to notification system
   }
 
   /// Fetch Houses

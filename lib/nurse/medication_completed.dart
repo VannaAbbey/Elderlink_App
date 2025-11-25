@@ -22,11 +22,18 @@ class CompletedMedicationsTab extends StatefulWidget {
 class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   late DateTime _selectedDate;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _selectedDate = widget.selectedDate ?? DateTime.now();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _selectDate(BuildContext context) async {
@@ -167,13 +174,31 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                       }).toList()..sort((a, b) {
                         final aData = a.data() as Map<String, dynamic>;
                         final bData = b.data() as Map<String, dynamic>;
-                        final aTime = (aData['timestamp'] as Timestamp)
-                            .toDate();
-                        final bTime = (bData['timestamp'] as Timestamp)
-                            .toDate();
-                        return bTime.compareTo(
-                          aTime,
-                        ); // Descending order (newest first)
+                        final aTimeStr =
+                            aData['scheduled_time'] as String? ?? '00:00';
+                        final bTimeStr =
+                            bData['scheduled_time'] as String? ?? '00:00';
+
+                        // Parse time strings (format: "HH:mm") and sort by scheduled time (oldest to current)
+                        final aTimeParts = aTimeStr.split(':');
+                        final bTimeParts = bTimeStr.split(':');
+
+                        final aHour = int.tryParse(aTimeParts[0]) ?? 0;
+                        final aMinute = aTimeParts.length > 1
+                            ? (int.tryParse(aTimeParts[1]) ?? 0)
+                            : 0;
+                        final bHour = int.tryParse(bTimeParts[0]) ?? 0;
+                        final bMinute = bTimeParts.length > 1
+                            ? (int.tryParse(bTimeParts[1]) ?? 0)
+                            : 0;
+
+                        // Convert to minutes for comparison
+                        final aMinutes = aHour * 60 + aMinute;
+                        final bMinutes = bHour * 60 + bMinute;
+
+                        return aMinutes.compareTo(
+                          bMinutes,
+                        ); // Ascending order (oldest to current)
                       });
 
                   print(
@@ -231,6 +256,8 @@ class _CompletedMedicationsTabState extends State<CompletedMedicationsTab> {
                       ); // Trigger rebuild to refresh StreamBuilder
                     },
                     child: ListView.builder(
+                      controller: _scrollController,
+                      physics: const ClampingScrollPhysics(),
                       padding: EdgeInsets.symmetric(vertical: 8),
                       itemCount: completedLogs.length,
                       itemBuilder: (context, index) {

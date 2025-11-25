@@ -5,6 +5,7 @@ import '../providers/cg_providers/absence_provider.dart';
 import '../services/cg_services/leave_notification_listener.dart';
 import '../services/cg_services/missed_task_monitor_service.dart';
 import '../services/medication_missed_monitor_service.dart';
+import '../main.dart' as main;
 import '../auth/get_started.dart';
 import '../caregiver/home.dart';
 import '../nurse/home.dart';
@@ -21,6 +22,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   bool _leaveListenerInitialized = false;
   bool _missedTaskMonitorInitialized = false;
   bool _emergencyListenerInitialized = false;
+  bool _attendanceInitialized = false;
 
   @override
   Widget build(BuildContext context) {
@@ -32,10 +34,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
           _leaveListenerInitialized = false; // Reset leave listener flag
           _missedTaskMonitorInitialized =
               false; // Reset missed task monitor flag
+          _attendanceInitialized = false; // Reset attendance flag
 
           // Stop all background services on logout
           MissedTaskMonitorService().stopMonitoring();
           LeaveNotificationListener().dispose();
+          main.GlobalAttendanceService.stopAttendanceCheck();
 
           return const GetStartedPage();
         }
@@ -113,6 +117,20 @@ class _AuthWrapperState extends State<AuthWrapper> {
             );
             await LeaveNotificationListener().initialize();
             print('✅ LeaveNotificationListener initialized successfully');
+          });
+        }
+
+        // Initialize global attendance service for caregivers and nurses
+        if (userId != null &&
+            !_attendanceInitialized &&
+            (userRole == 'caregiver' || userRole == 'nurse')) {
+          _attendanceInitialized = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            print(
+              '📋 Initializing Global Attendance Service for $userRole: $userId',
+            );
+            await main.GlobalAttendanceService.initializeAttendanceCheck();
+            print('✅ Global Attendance Service initialized successfully');
           });
         }
 
