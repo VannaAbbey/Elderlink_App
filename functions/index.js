@@ -4,6 +4,13 @@ const admin = require('firebase-admin');
 admin.initializeApp();
 const db = admin.firestore();
 
+// Load medication notification handlers (separate file)
+try {
+  require('./med_notifications');
+} catch (e) {
+  console.warn('Could not load med_notifications.js', e);
+}
+
 // Runs hourly. For each current house_shift_assignment check if the shift end
 // time is within 2 hours. If so, check for pending vitals for that shift and
 // send a single FCM reminder to the assigned nurse. Record sent reminders in
@@ -563,18 +570,14 @@ exports.scheduleMedicationNotifications = onDocumentCreated(
       console.log(`🔔 Scheduling notifications for: ${notificationDateTime.toLocaleString('en-US', { timeZone: 'Asia/Manila' })} PHT`);
       
       // Calculate notification times
-      const thirtyMinutesBefore = new Date(notificationDateTime.getTime() - 30 * 60 * 1000);
-      const twentyMinutesBefore = new Date(notificationDateTime.getTime() - 20 * 60 * 1000);
       const exactTime = notificationDateTime;
-      
+
       // Get current Philippines time for comparison
       const phpCurrentTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
-      
+
       console.log(`⏰ Current PHP time: ${phpCurrentTime.toLocaleString()}`);
-      console.log(`⏰ 30-min warning time: ${thirtyMinutesBefore.toLocaleString()}`);
-      console.log(`⏰ 20-min warning time: ${twentyMinutesBefore.toLocaleString()}`);
       console.log(`⏰ Exact time: ${exactTime.toLocaleString()}`);
-      
+
       // Check for existing notifications to prevent duplicates
       const existingNotifications = await admin.firestore()
         .collection('scheduled_notifications')
@@ -587,49 +590,7 @@ exports.scheduleMedicationNotifications = onDocumentCreated(
         return { success: true, message: 'Notifications already exist for this take' };
       }
 
-      // Only schedule if times are in the future (using Philippines time)
-      
-      // Schedule 30-minute early notification
-      if (thirtyMinutesBefore > phpCurrentTime) {
-        await admin.firestore().collection('scheduled_notifications').add({
-          type: 'medication_30min_warning',
-          takeId: takeId,
-          medicationId: takeData.medication_id,
-          nurseId: nurseId,
-          elderlyName: elderlyName,
-          medicationName: medicationData.medication_name,
-          dosage: medicationData.dosage,
-          scheduledTime: scheduledTime,
-          scheduledFor: admin.firestore.Timestamp.fromDate(thirtyMinutesBefore),
-          status: 'pending',
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-        console.log(`✅ Scheduled 30-min warning for: ${thirtyMinutesBefore.toLocaleString()}`);
-      } else {
-        console.log(`⏰ Skipping 30-min warning (time already passed): ${thirtyMinutesBefore.toLocaleString()}`);
-      }
-      
-      // Schedule 20-minute early notification
-      if (twentyMinutesBefore > phpCurrentTime) {
-        await admin.firestore().collection('scheduled_notifications').add({
-          type: 'medication_20min_warning',
-          takeId: takeId,
-          medicationId: takeData.medication_id,
-          nurseId: nurseId,
-          elderlyName: elderlyName,
-          medicationName: medicationData.medication_name,
-          dosage: medicationData.dosage,
-          scheduledTime: scheduledTime,
-          scheduledFor: admin.firestore.Timestamp.fromDate(twentyMinutesBefore),
-          status: 'pending',
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-        console.log(`✅ Scheduled 20-min warning for: ${twentyMinutesBefore.toLocaleString()}`);
-      } else {
-        console.log(`⏰ Skipping 20-min warning (time already passed): ${twentyMinutesBefore.toLocaleString()}`);
-      }
-      
-      // Schedule exact time notification
+      // Only schedule exact time notification (do not schedule early warnings)
       if (exactTime > phpCurrentTime) {
         await admin.firestore().collection('scheduled_notifications').add({
           type: 'medication_exact_time',
@@ -687,6 +648,15 @@ exports.processMedicationNotifications = onScheduleV2('every 1 minutes', async (
       console.log(`🏠 Type: ${notification.type}`);
       
       try {
+        // Skip early medication warnings (30/20/5 minutes) — do not send these for medication
+        if (notification.type === 'medication_30min_warning' || notification.type === 'medication_20min_warning' || notification.type === 'medication_5min') {
+          console.log(`Skipping early medication notification ${notificationDoc.id} (type=${notification.type})`);
+          await notificationDoc.ref.update({
+            status: 'skipped',
+            skippedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          continue;
+        }
         // Get nurse FCM token
         const tokenDoc = await admin.firestore()
           .collection('fcm_tokens')

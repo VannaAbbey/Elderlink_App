@@ -247,31 +247,12 @@ exports.scheduleMedicationNotifications = onDocumentCreated(
       console.log(`Scheduling notifications for: ${notificationDateTime}`);
       
       // Calculate notification times
-      const thirtyMinutesBefore = new Date(notificationDateTime.getTime() - 30 * 60 * 1000);
       const exactTime = notificationDateTime;
-      
-      // Only schedule if times are in the future
+
+      // Only schedule if time is in the future
       const now = new Date();
-      
-      // Schedule 30-minute early notification
-      if (thirtyMinutesBefore > now) {
-        await admin.firestore().collection('scheduled_notifications').add({
-          type: 'medication_30min_warning',
-          takeId: takeId,
-          medicationId: takeData.medication_id,
-          nurseId: nurseId,
-          elderlyName: elderlyName,
-          medicationName: medicationData.medication_name,
-          dosage: medicationData.dosage,
-          scheduledTime: scheduledTime,
-          scheduledFor: admin.firestore.Timestamp.fromDate(thirtyMinutesBefore),
-          status: 'pending',
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-        console.log(`Scheduled 30-min warning for: ${thirtyMinutesBefore}`);
-      }
-      
-      // Schedule exact time notification
+
+      // Schedule exact time notification only (do NOT schedule 30-minute early warnings)
       if (exactTime > now) {
         await admin.firestore().collection('scheduled_notifications').add({
           type: 'medication_exact_time',
@@ -317,6 +298,15 @@ exports.processMedicationNotifications = onScheduleV2('every 1 minutes', async (
       const notification = notificationDoc.data();
       
       try {
+        // Skip 30-minute (or any 5-minute) medication warnings — do not send for medication
+        if (notification.type === 'medication_30min_warning' || notification.type === 'medication_5min') {
+          console.log(`Skipping medication early-warning notification ${notificationDoc.id} (type=${notification.type})`);
+          await notificationDoc.ref.update({
+            status: 'skipped',
+            skippedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          continue;
+        }
         // Get nurse FCM token
         const tokenDoc = await admin.firestore()
           .collection('fcm_tokens')

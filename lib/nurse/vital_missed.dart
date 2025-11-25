@@ -33,7 +33,10 @@ class _VitalMissedState extends State<VitalMissed> {
     return DateFormat('yyyy-MM-dd').format(now);
   }
 
-  Future<Set<String>> _getAssignedElderlyIds(String nurseId, String shift) async {
+  Future<Set<String>> _getAssignedElderlyIds(
+    String nurseId,
+    String shift,
+  ) async {
     final day = DateFormat('EEEE').format(DateTime.now());
     final Set<String> elderlyIds = {};
     try {
@@ -69,14 +72,17 @@ class _VitalMissedState extends State<VitalMissed> {
       return;
     }
 
-    await for (final snapshot in _firestore
-        .collection('vitals_daily')
-        .where('house_id', isEqualTo: widget.houseId)
-        .where('assigned_date', isEqualTo: today)
-        .where('any_missed', isEqualTo: true)
-        .snapshots()) {
-
-      final assignedElderly = await _getAssignedElderlyIds(nurseId, currentShift);
+    await for (final snapshot
+        in _firestore
+            .collection('vitals_daily')
+            .where('house_id', isEqualTo: widget.houseId)
+            .where('assigned_date', isEqualTo: today)
+            .where('any_missed', isEqualTo: true)
+            .snapshots()) {
+      final assignedElderly = await _getAssignedElderlyIds(
+        nurseId,
+        currentShift,
+      );
 
       final List<Map<String, dynamic>> missedVitals = [];
 
@@ -88,7 +94,8 @@ class _VitalMissedState extends State<VitalMissed> {
         final shiftStatus = data['shift_status'] as Map<String, dynamic>?;
         if (shiftStatus == null || shiftStatus[currentShift] == null) continue;
 
-        final currentShiftData = shiftStatus[currentShift] as Map<String, dynamic>;
+        final currentShiftData =
+            shiftStatus[currentShift] as Map<String, dynamic>;
         if (currentShiftData['status'] == 'missed') {
           missedVitals.add({
             'vitals_id': doc.id,
@@ -97,15 +104,20 @@ class _VitalMissedState extends State<VitalMissed> {
             'house_id': data['house_id'],
             'assigned_date': data['assigned_date'],
             'shift': currentShift,
-            'missed_reason': currentShiftData['missed_reason'] ?? 'No reason provided',
+            'missed_reason':
+                currentShiftData['missed_reason'] ?? 'No reason provided',
             'marked_at': currentShiftData['marked_at'],
           });
         }
       }
 
       missedVitals.sort((a, b) {
-        final aTime = a['marked_at'] != null ? (a['marked_at'] as Timestamp).toDate() : DateTime.now();
-        final bTime = b['marked_at'] != null ? (b['marked_at'] as Timestamp).toDate() : DateTime.now();
+        final aTime = a['marked_at'] != null
+            ? (a['marked_at'] as Timestamp).toDate()
+            : DateTime.now();
+        final bTime = b['marked_at'] != null
+            ? (b['marked_at'] as Timestamp).toDate()
+            : DateTime.now();
         return bTime.compareTo(aTime);
       });
 
@@ -133,7 +145,11 @@ class _VitalMissedState extends State<VitalMissed> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.check_circle_outline, size: 64, color: Colors.grey[400]),
+                Icon(
+                  Icons.check_circle_outline,
+                  size: 64,
+                  color: Colors.grey[400],
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'No missed vitals for ${_getCurrentShift()} shift',
@@ -158,26 +174,65 @@ class _VitalMissedState extends State<VitalMissed> {
 
   Widget _buildMissedCard(Map<String, dynamic> vital) {
     final markedTime = vital['marked_at'] != null
-        ? DateFormat('MMM dd, yyyy hh:mm a').format((vital['marked_at'] as Timestamp).toDate())
+        ? DateFormat(
+            'MMM dd, yyyy hh:mm a',
+          ).format((vital['marked_at'] as Timestamp).toDate())
         : 'Unknown';
 
+    // Match Upcoming/Completed visuals: same bg color, elderly name color,
+    // show only formatted date (remove Shift label) and increase vertical size
+    String dateText = vital['assigned_date'] ?? '';
+    try {
+      if (vital['assigned_date'] != null) {
+        final parsed = DateFormat('yyyy-MM-dd').parse(vital['assigned_date']);
+        dateText = DateFormat('MMM. d, yyyy').format(parsed);
+      }
+    } catch (e) {
+      // leave raw
+    }
+
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+      color: const Color(0xFFD8F4FF),
       elevation: 2,
       child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 18,
+          horizontal: 16,
+        ),
         leading: const CircleAvatar(
           backgroundColor: Colors.red,
           child: Icon(Icons.close, color: Colors.white),
         ),
-        title: Text(vital['elderly_name'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(
+          vital['elderly_name'] ?? 'Unknown',
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF00588E), // elderly name blue
+          ),
+        ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 4),
-            Text('Shift: ${vital['shift']}'),
-            Text('Marked as missed: $markedTime'),
-            if (vital['missed_reason'] != null && vital['missed_reason'].toString().isNotEmpty)
-              Text('Reason: ${vital['missed_reason']}', style: const TextStyle(fontStyle: FontStyle.italic)),
+            const SizedBox(height: 6),
+            Text(
+              'Date: $dateText',
+              style: const TextStyle(color: Colors.black),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Marked as missed: $markedTime',
+              style: TextStyle(color: Colors.grey[800]),
+            ),
+            if (vital['missed_reason'] != null &&
+                vital['missed_reason'].toString().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6.0),
+                child: Text(
+                  'Reason: ${vital['missed_reason']}',
+                  style: const TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ),
           ],
         ),
         isThreeLine: true,
@@ -198,17 +253,33 @@ class _VitalMissedState extends State<VitalMissed> {
             _buildDetailRow('Elderly ID', vital['elderly_id']),
             _buildDetailRow('Shift', vital['shift']),
             _buildDetailRow('Date', vital['assigned_date']),
-            _buildDetailRow('Marked At', vital['marked_at'] != null ? DateFormat('MMM dd, yyyy hh:mm a').format((vital['marked_at'] as Timestamp).toDate()) : 'Unknown'),
+            _buildDetailRow(
+              'Marked At',
+              vital['marked_at'] != null
+                  ? DateFormat(
+                      'MMM dd, yyyy hh:mm a',
+                    ).format((vital['marked_at'] as Timestamp).toDate())
+                  : 'Unknown',
+            ),
             const Divider(),
-            const Text('Reason:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Reason:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             Text(vital['missed_reason'] ?? 'No reason provided'),
             const SizedBox(height: 16),
-            const Text('This vital can still be completed in the Upcoming tab during subsequent shifts.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            const Text(
+              'This vital can still be completed in the Upcoming tab during subsequent shifts.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -220,7 +291,13 @@ class _VitalMissedState extends State<VitalMissed> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 100, child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w500))),
+          SizedBox(
+            width: 100,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ),
           Expanded(child: Text(value?.toString() ?? 'N/A')),
         ],
       ),

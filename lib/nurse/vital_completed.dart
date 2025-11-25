@@ -148,24 +148,32 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
         ? (vital['completed_at'] as Timestamp).toDate()
         : null;
 
+    // Match Upcoming card visuals: same bg color, name color and date format
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
+      color: const Color(0xFFD8F4FF), // same light-blue background
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
         leading: CircleAvatar(
           backgroundColor: Colors.green.shade100,
           child: Icon(Icons.check_circle, color: Colors.green.shade700),
         ),
         title: Text(
           vital['elderly_name'] ?? 'Unknown',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Color(0xFF00588E), // elderly name blue
+          ),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 4),
-            if (completedAt != null)
+            if (completedAt != null) ...[
+              const SizedBox(height: 6),
               Row(
                 children: [
                   Icon(Icons.access_time, size: 14, color: Colors.grey[600]),
@@ -176,6 +184,7 @@ class _CompletedVitalsTabState extends State<CompletedVitalsTab> {
                   ),
                 ],
               ),
+            ],
           ],
         ),
         children: [

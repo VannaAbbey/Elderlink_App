@@ -700,19 +700,48 @@ class _UpcomingVitalsTabState extends State<UpcomingVitalsTab>
   Widget _buildVitalCard(Map<String, dynamic> vital) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
+      color: const Color(
+        0xFFD8F4FF,
+      ), // Match medication container blue (UI-only)
       child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 20.0,
+          horizontal: 16.0,
+        ),
         leading: CircleAvatar(
+          radius: 26,
           backgroundColor: Colors.orange,
           child: const Icon(Icons.pending, color: Colors.white),
         ),
         title: Text(
           vital['elderly_name'] ?? 'Unknown',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Color(0xFF00588E), // make elderly name blue
+          ),
         ),
-        subtitle: Text(
-          'Shift: ${vital['shift']} | Date: ${vital['assigned_date']}',
+        // UI change: remove Shift label, show only formatted date (e.g. "Nov. 25, 2025")
+        subtitle: Builder(
+          builder: (context) {
+            final assigned = vital['assigned_date'] as String?;
+            String dateText = assigned ?? '';
+            try {
+              if (assigned != null && assigned.isNotEmpty) {
+                final parsed = DateFormat('yyyy-MM-dd').parse(assigned);
+                dateText = DateFormat('MMM. d, yyyy').format(parsed);
+              }
+            } catch (e) {
+              // keep raw value on parse failure
+            }
+
+            return Text(
+              'Date: $dateText',
+              style: const TextStyle(color: Colors.black),
+            );
+          },
         ),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 18),
         onTap: () {
           Navigator.push(
             context,
