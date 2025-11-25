@@ -1,447 +1,229 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'vital_update_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-class MissedVitalsTab extends StatefulWidget {
+class VitalMissed extends StatefulWidget {
   final String houseId;
-  final String? nurseName;
 
-  const MissedVitalsTab({
-    super.key,
-    required this.houseId,
-    required this.nurseName,
-  });
+  const VitalMissed({super.key, required this.houseId});
 
   @override
-  State<MissedVitalsTab> createState() => _MissedVitalsTabState();
+  State<VitalMissed> createState() => _VitalMissedState();
 }
 
-class _MissedVitalsTabState extends State<MissedVitalsTab> {
+class _VitalMissedState extends State<VitalMissed> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  Future<String?> _getNurseId() async {
-    try {
-      final nameParts = widget.nurseName?.split(' ') ?? [];
-      if (nameParts.length < 2) return null;
-
-      final firstName = nameParts[0];
-      final lastName = nameParts[1];
-
-      final userQuery = await _firestore
-          .collection('users')
-          .where('user_fname', isEqualTo: firstName)
-          .where('user_lname', isEqualTo: lastName)
-          .where('user_type', isEqualTo: 'nurse')
-          .get();
-
-      return userQuery.docs.isNotEmpty ? userQuery.docs.first.id : null;
-    } catch (e) {
-      print('Error getting nurse ID: $e');
-      return null;
-    }
+  String _getCurrentShift() {
+    final hour = DateTime.now().hour;
+    if (hour >= 6 && hour < 14) return '1st';
+    if (hour >= 14 && hour < 22) return '2nd';
+    return '3rd';
   }
 
-  Future<List<Map<String, dynamic>>> _getMissedVitals() async {
+  // For early-morning hours consider previous day's assigned_date
+  String _getTodayDateString() {
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    if (currentHour >= 0 && currentHour < 6) {
+      final previousDay = now.subtract(const Duration(days: 1));
+      return DateFormat('yyyy-MM-dd').format(previousDay);
+    }
+    return DateFormat('yyyy-MM-dd').format(now);
+  }
+
+  Future<Set<String>> _getAssignedElderlyIds(String nurseId, String shift) async {
+    final day = DateFormat('EEEE').format(DateTime.now());
+    final Set<String> elderlyIds = {};
     try {
-      // STEP 1: Get current nurse ID
-      final nurseId = await _getNurseId();
-      if (nurseId == null) {
-        print('Could not find nurse ID for ${widget.nurseName}');
-        return [];
-      }
-
-      // STEP 2: Get missed vitals from activity logs (with stored elderly names)
-      final now = DateTime.now();
-      final cutoffTime = now.subtract(Duration(hours: 72)); // Last 3 days
-      final cutoffTimestamp = Timestamp.fromDate(cutoffTime);
-
-      print('🔍 Getting missed vitals for ${widget.nurseName}...');
-      print('🔍 Nurse ID: $nurseId');
-      print('🔍 House ID: ${widget.houseId}');
-      print('🔍 Cutoff timestamp: $cutoffTimestamp');
-
-      // Query activity logs for missed vitals (has stored elderly names)
-      // 🎯 ONLY show vitals that were originally PENDING (not already completed/missed)
-      final missedLogsQuery = await _firestore
-          .collection('vital_activity_logs')
-          .where('house_id', isEqualTo: widget.houseId)
-          .where('nurse_id', isEqualTo: nurseId)
-          .where('action_type', isEqualTo: 'vital_missed')
-          .where('timestamp', isGreaterThanOrEqualTo: cutoffTimestamp)
-          .orderBy('timestamp', descending: true)
+      final assignmentsSnapshot = await _firestore
+          .collection('elderly_assignments')
+          .where('user_id', isEqualTo: nurseId)
+          .where('user_type', isEqualTo: 'nurse')
+          .where('is_current', isEqualTo: true)
+          .where('day', isEqualTo: day)
+          .where('shift', isEqualTo: shift)
           .get();
 
-      print(
-        '🔍 Filtering missed logs to ONLY show originally PENDING vitals...',
-      );
+      for (final doc in assignmentsSnapshot.docs) {
+        final data = doc.data();
+        final ids = List<String>.from(data['elderly_ids'] ?? []);
+        elderlyIds.addAll(ids);
+      }
+    } catch (e) {
+      // keep app running; return empty set on error
+      print(' [_getAssignedElderlyIds] Error: $e');
+    }
+    return elderlyIds;
+  }
 
-      print(
-        '🔍 Found ${missedLogsQuery.docs.length} missed vital logs for this nurse',
-      );
+  Stream<List<Map<String, dynamic>>> _getMissedVitalsStream() async* {
+    final currentShift = _getCurrentShift();
+    final today = _getTodayDateString();
 
-      final missedVitals = <Map<String, dynamic>>[];
+    final user = FirebaseAuth.instance.currentUser;
+    final nurseId = user?.uid;
+    if (nurseId == null) {
+      yield <Map<String, dynamic>>[];
+      return;
+    }
 
-      for (final logDoc in missedLogsQuery.docs) {
-        final logData = logDoc.data();
+    await for (final snapshot in _firestore
+        .collection('vitals_daily')
+        .where('house_id', isEqualTo: widget.houseId)
+        .where('assigned_date', isEqualTo: today)
+        .where('any_missed', isEqualTo: true)
+        .snapshots()) {
 
-        // 🎯 CRITICAL: Only include vitals that were originally PENDING
-        final oldValue = logData['old_value'] as Map<String, dynamic>?;
-        final originalStatus = oldValue?['status'] as String?;
+      final assignedElderly = await _getAssignedElderlyIds(nurseId, currentShift);
 
-        if (originalStatus != 'pending') {
-          print(
-            '⏭️ Skipping vital - was not originally PENDING (was: $originalStatus)',
-          );
-          continue;
+      final List<Map<String, dynamic>> missedVitals = [];
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final elderlyId = data['elderly_id'] as String?;
+        if (elderlyId == null || !assignedElderly.contains(elderlyId)) continue;
+
+        final shiftStatus = data['shift_status'] as Map<String, dynamic>?;
+        if (shiftStatus == null || shiftStatus[currentShift] == null) continue;
+
+        final currentShiftData = shiftStatus[currentShift] as Map<String, dynamic>;
+        if (currentShiftData['status'] == 'missed') {
+          missedVitals.add({
+            'vitals_id': doc.id,
+            'elderly_id': elderlyId,
+            'elderly_name': data['elderly_name'],
+            'house_id': data['house_id'],
+            'assigned_date': data['assigned_date'],
+            'shift': currentShift,
+            'missed_reason': currentShiftData['missed_reason'] ?? 'No reason provided',
+            'marked_at': currentShiftData['marked_at'],
+          });
         }
-
-        // Use stored elderly name from activity log (no more "Unknown"!)
-        final elderlyName =
-            logData['elderly_name'] as String? ?? 'Unknown Elderly';
-        final elderlyId = logData['elderly_id'] as String?;
-        final vitalId = logData['vital_id'] as String?;
-
-        print(
-          '🏥 ✅ Found ORIGINALLY PENDING missed vital: $elderlyName (ID: $elderlyId)',
-        );
-
-        missedVitals.add({
-          'assignment_id': vitalId,
-          'elderly_id': elderlyId,
-          'elderly_name': elderlyName, // ✅ Uses stored name from activity log
-          'elderly_profilePic': '',
-          'house_id': logData['house_id'],
-          'last_vital': null,
-          'status': 'missed',
-          'missed_date': logData['assigned_date'],
-          'missed_at': logData['timestamp'],
-          'shift': logData['shift'],
-          'nurse_name': widget.nurseName,
-          'missed_reason': logData['remarks'] ?? 'Missed vital',
-        });
       }
 
-      print('🔍 Found ${missedVitals.length} missed vitals for this nurse');
-
-      // Sort by timestamp (most recent first)
       missedVitals.sort((a, b) {
-        final aTimestamp = a['missed_at'] as Timestamp?;
-        final bTimestamp = b['missed_at'] as Timestamp?;
-
-        if (aTimestamp == null && bTimestamp == null) return 0;
-        if (aTimestamp == null) return 1;
-        if (bTimestamp == null) return -1;
-
-        return bTimestamp.compareTo(aTimestamp); // Descending order
+        final aTime = a['marked_at'] != null ? (a['marked_at'] as Timestamp).toDate() : DateTime.now();
+        final bTime = b['marked_at'] != null ? (b['marked_at'] as Timestamp).toDate() : DateTime.now();
+        return bTime.compareTo(aTime);
       });
 
-      return missedVitals;
-    } catch (e) {
-      print('Error getting missed vitals: $e');
-      return [];
-    }
-  }
-
-  Future<void> _markAsCompleted(Map<String, dynamic> elderlyInfo) async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VitalUpdateScreen(
-          assignmentId: elderlyInfo['assignment_id'],
-          elderlyId: elderlyInfo['elderly_id'],
-          elderlyName: elderlyInfo['elderly_name'],
-          nurseName: widget.nurseName,
-          houseId: widget.houseId,
-        ),
-      ),
-    );
-
-    // Refresh the list if vitals were updated
-    if (result == true && mounted) {
-      setState(() {});
+      yield missedVitals;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Main Content
-        Expanded(
-          child: Stack(
-            children: [
-              FutureBuilder<List<Map<String, dynamic>>>(
-                future: _getMissedVitals(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _getMissedVitalsStream(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-                  if (snapshot.hasError) {
-                    return Center(child: Text('Error: ${snapshot.error}'));
-                  }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
 
-                  final missedVitals = snapshot.data ?? [];
+        final missedVitals = snapshot.data ?? [];
 
-                  if (missedVitals.isEmpty) {
-                    return RefreshIndicator(
-                      onRefresh: () async {
-                        setState(() {});
-                      },
-                      child: ListView(
-                        children: [
-                          SizedBox(
-                            height: MediaQuery.of(context).size.height - 200,
-                            child: Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.check_circle_outline,
-                                    size: 64,
-                                    color: Colors.grey,
-                                  ),
-                                  SizedBox(height: 16),
-                                  Text(
-                                    'No missed vitals today',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                  SizedBox(height: 8),
-                                  Text(
-                                    'Missed assignments from previous shifts will appear in your upcoming vitals',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey[600],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
+        if (missedVitals.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.check_circle_outline, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  'No missed vitals for ${_getCurrentShift()} shift',
+                  style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          );
+        }
 
-                  return RefreshIndicator(
-                    onRefresh: () async {
-                      setState(() {});
-                    },
-                    child: ListView.builder(
-                      padding: EdgeInsets.only(bottom: 80),
-                      itemCount: missedVitals.length,
-                      itemBuilder: (context, index) {
-                        final elderlyInfo = missedVitals[index];
-                        final lastVital =
-                            elderlyInfo['last_vital'] as Map<String, dynamic>?;
+        return ListView.builder(
+          itemCount: missedVitals.length,
+          padding: const EdgeInsets.all(8),
+          itemBuilder: (context, index) {
+            final vital = missedVitals[index];
+            return _buildMissedCard(vital);
+          },
+        );
+      },
+    );
+  }
 
-                        return Card(
-                          margin: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          child: Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Elderly Name
-                                Row(
-                                  children: [
-                                    CircleAvatar(
-                                      backgroundColor: const Color(0xFF00588E),
-                                      child:
-                                          elderlyInfo['elderly_profilePic']
-                                                  ?.isNotEmpty ==
-                                              true
-                                          ? ClipOval(
-                                              child: Image.network(
-                                                elderlyInfo['elderly_profilePic'],
-                                                fit: BoxFit.cover,
-                                              ),
-                                            )
-                                          : Icon(
-                                              Icons.person,
-                                              color: Colors.white,
-                                            ),
-                                    ),
-                                    SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        elderlyInfo['elderly_name'] ??
-                                            'Unknown',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFF00588E),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: 12),
+  Widget _buildMissedCard(Map<String, dynamic> vital) {
+    final markedTime = vital['marked_at'] != null
+        ? DateFormat('MMM dd, yyyy hh:mm a').format((vital['marked_at'] as Timestamp).toDate())
+        : 'Unknown';
 
-                                // Missed Status
-                                Container(
-                                  padding: EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: Colors.red.withOpacity(0.3),
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                    color: Colors.red.withOpacity(0.1),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.cancel,
-                                        color: Colors.red,
-                                        size: 24,
-                                      ),
-                                      SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'VITALS MISSED',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 16,
-                                                color: Colors.red,
-                                              ),
-                                            ),
-                                            SizedBox(height: 4),
-                                            Text(
-                                              'No vitals recorded today',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.grey[700],
-                                              ),
-                                            ),
-                                            Text(
-                                              'Assigned to: ${elderlyInfo['assigned_nurse_id'] ?? 'Unknown'}',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.grey[700],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Column(
-                                        children: [
-                                          ElevatedButton(
-                                            onPressed: () =>
-                                                _markAsCompleted(elderlyInfo),
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: Colors.red,
-                                              foregroundColor: Colors.white,
-                                              padding: EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 8,
-                                              ),
-                                            ),
-                                            child: Text(
-                                              'Update Now',
-                                              style: TextStyle(fontSize: 12),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-
-                                // Last vital info if available
-                                if (lastVital != null) ...[
-                                  SizedBox(height: 12),
-                                  Text(
-                                    'Last recorded vitals:',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.grey[700],
-                                    ),
-                                  ),
-                                  SizedBox(height: 8),
-                                  Container(
-                                    padding: EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: Colors.grey.withOpacity(0.3),
-                                      ),
-                                      borderRadius: BorderRadius.circular(8),
-                                      color: Colors.grey.withOpacity(0.1),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                'BP: ${lastVital['blood_pressure'] ?? 'N/A'}',
-                                              ),
-                                            ),
-                                            Expanded(
-                                              child: Text(
-                                                'Pulse: ${lastVital['pulse_rate'] ?? 'N/A'}',
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        SizedBox(height: 4),
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                'O₂: ${lastVital['o2_sat'] ?? 'N/A'}%',
-                                              ),
-                                            ),
-                                            Expanded(
-                                              child: Text(
-                                                'Temp: ${lastVital['temperature'] ?? 'N/A'}°C',
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        SizedBox(height: 4),
-                                        Text(
-                                          'RR: ${lastVital['respiratory_rate'] ?? 'N/A'}',
-                                        ),
-                                        if (lastVital['vital_record_at'] !=
-                                            null)
-                                          Text(
-                                            'Recorded: ${DateFormat('MMM dd, yyyy HH:mm').format((lastVital['vital_record_at'] as Timestamp).toDate())}',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      elevation: 2,
+      child: ListTile(
+        leading: const CircleAvatar(
+          backgroundColor: Colors.red,
+          child: Icon(Icons.close, color: Colors.white),
         ),
-      ],
+        title: Text(vital['elderly_name'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text('Shift: ${vital['shift']}'),
+            Text('Marked as missed: $markedTime'),
+            if (vital['missed_reason'] != null && vital['missed_reason'].toString().isNotEmpty)
+              Text('Reason: ${vital['missed_reason']}', style: const TextStyle(fontStyle: FontStyle.italic)),
+          ],
+        ),
+        isThreeLine: true,
+        onTap: () => _showMissedDetailsDialog(vital),
+      ),
+    );
+  }
+
+  void _showMissedDetailsDialog(Map<String, dynamic> vital) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Missed Vital - ${vital['elderly_name']}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow('Elderly ID', vital['elderly_id']),
+            _buildDetailRow('Shift', vital['shift']),
+            _buildDetailRow('Date', vital['assigned_date']),
+            _buildDetailRow('Marked At', vital['marked_at'] != null ? DateFormat('MMM dd, yyyy hh:mm a').format((vital['marked_at'] as Timestamp).toDate()) : 'Unknown'),
+            const Divider(),
+            const Text('Reason:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(vital['missed_reason'] ?? 'No reason provided'),
+            const SizedBox(height: 16),
+            const Text('This vital can still be completed in the Upcoming tab during subsequent shifts.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, dynamic value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 100, child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w500))),
+          Expanded(child: Text(value?.toString() ?? 'N/A')),
+        ],
+      ),
     );
   }
 }

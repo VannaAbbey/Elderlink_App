@@ -407,7 +407,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
 
       // 🆕 ENHANCED: Query for comprehensive logs including missed tasks from previous shifts
       Query query = _firestore
-          .collection('vital_activity_logs')
+          .collection('vitals_activity_logs')
           .where(
             'timestamp',
             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
@@ -420,7 +420,7 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
       if (_selectedElderlyVitals != null &&
           _selectedElderlyVitals!.isNotEmpty) {
         query = _firestore
-            .collection('vital_activity_logs')
+            .collection('vitals_activity_logs')
             .where('elderly_id', isEqualTo: _selectedElderlyVitals)
             .where(
               'timestamp',
@@ -982,12 +982,35 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
         activity['type'] == 'completed_from_previous';
     final isMissedFromPrevious = activity['type'] == 'missed_from_previous';
 
+    // Determine display label/icon/color. For auto-marked missed entries
+    // (created by system/daily reset), override the badge in the UI only
+    // to show a red "Missed" label without modifying stored data.
+    bool isAutoMissed = false;
+    try {
+      final nurseNameField = (activity['nurse_name'] as String?) ?? '';
+      final autoFlag = activity['auto_marked'] as bool?;
+      final sourceField = (activity['source'] as String?) ?? '';
+      final createdBy = (activity['created_by'] as String?) ?? '';
+
+      if (actionType.toLowerCase() == 'vital_missed' &&
+          (nurseNameField.toLowerCase() == 'system' ||
+              autoFlag == true ||
+              sourceField.toLowerCase() == 'system' ||
+              createdBy.toLowerCase() == 'system')) {
+        isAutoMissed = true;
+      }
+    } catch (e) {
+      // ignore and treat as non-auto
+      isAutoMissed = false;
+    }
+
     final actionColor = isFromPreviousShift
         ? (isMissedFromPrevious ? Colors.red.shade700 : Colors.blue.shade600)
-        : _getVitalActionColor(actionType);
+        : (isAutoMissed ? Colors.red : _getVitalActionColor(actionType));
+
     final actionIcon = isFromPreviousShift
         ? (isMissedFromPrevious ? Icons.warning : Icons.history)
-        : _getVitalActionIcon(actionType);
+        : (isAutoMissed ? Icons.cancel : _getVitalActionIcon(actionType));
     final message = _formatVitalActivityMessage(activity);
     final dateFormat = DateFormat('MMM dd, yyyy');
     final timeFormat = DateFormat('h:mm a');
@@ -1097,9 +1120,14 @@ class _ActivityLogsScreenState extends State<ActivityLogsScreen>
                         Icon(actionIcon, color: Colors.white, size: 14),
                         const SizedBox(width: 4),
                         Text(
+                          // UI-only override for auto-marked missed entries:
+                          // show 'Missed' (red badge) in the UI but keep the
+                          // underlying activity log unchanged.
                           isFromPreviousShift
                               ? (isMissedFromPrevious ? 'MISSED' : 'COMPLETED')
-                              : _getVitalActionLabel(actionType),
+                              : (isAutoMissed
+                                    ? 'Missed'
+                                    : _getVitalActionLabel(actionType)),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,

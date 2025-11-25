@@ -19,6 +19,7 @@ import '../main.dart' as main;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
 import '../services/attendance_check_service.dart';
+import '../services/vitals_daily_auto_creator.dart';
 
 class NurseHomeScreen extends StatefulWidget {
   const NurseHomeScreen({super.key});
@@ -185,6 +186,10 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Auto-check/create vitals_daily documents when nurse logs in
+    VitalsDailyAutoCreator.ensureVitalsDailyExist();
+
     _confettiController = ConfettiController(
       duration: const Duration(seconds: 2),
     );

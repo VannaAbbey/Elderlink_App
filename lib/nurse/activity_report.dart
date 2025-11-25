@@ -299,7 +299,7 @@ class ActivityReport {
 
     try {
       final querySnapshot = await _firestore
-          .collection('vital_activity_logs')
+          .collection('vitals_activity_logs')
           .get();
 
       for (final doc in querySnapshot.docs) {

@@ -54,9 +54,7 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
       final nurseDoc = await _firestore.collection('users').doc(user.uid).get();
       if (nurseDoc.exists && mounted) {
         setState(() {
-          _currentNurseName =
-              '${nurseDoc.data()?['firstName'] ?? ''} ${nurseDoc.data()?['lastName'] ?? ''}'
-                  .trim();
+          _currentNurseName = '${nurseDoc.data()?['firstName'] ?? ''} ${nurseDoc.data()?['lastName'] ?? ''}'.trim();
         });
       }
     }
@@ -86,9 +84,9 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
     if (!confirmed) return;
 
     if (_currentNurseId == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('User not authenticated')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User not authenticated')),
+      );
       return;
     }
 
@@ -123,7 +121,7 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
         'updated_at': now,
       });
 
-      await logVitalAction(
+      await VitalLogger().logVitalAction(
         vitalsId: vitalsDocId,
         elderlyId: widget.elderlyId,
         elderlyName: widget.elderlyName,
@@ -133,8 +131,7 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
         nurseId: _currentNurseId,
         nurseName: _currentNurseName,
         newValue: newVitalValues,
-        remarks:
-            'Vitals updated from monitoring details for $currentShift shift',
+        remarks: 'Vitals updated from monitoring details for $currentShift shift',
       );
 
       if (mounted) {
@@ -160,6 +157,18 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
   }
 
   Future<bool> _showConfirmationDialog() async {
+      isSaving = false;
+      draft.clear();
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Vital record updated successfully.")),
+      );
+    }
+  }
+
+  Future<bool> _showConfirmationDialog() async {
     bool isChecked = false;
     return await showDialog<bool>(
           context: context,
@@ -174,22 +183,19 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
                     Text(
                       "You are about to update vital records for ${widget.elderlyName}. "
                       "This action will be logged for auditing purposes.\n\n"
-                      "Reporting Nurse: ${_currentNurseName ?? 'Unknown'}",
+                      "Reporting Nurse: $nurseName",
                     ),
                     const SizedBox(height: 12),
                     Row(
                       children: [
                         Checkbox(
                           value: isChecked,
-                          onChanged: (val) {
-                            setState(() {
-                              isChecked = val ?? false;
-                            });
-                          },
+                          onChanged: (val) =>
+                              setState(() => isChecked = val ?? false),
                         ),
                         const Expanded(
                           child: Text(
-                            "I confirm that all entered data is accurate.",
+                            "I acknowledge that the information provided is accurate and complete.",
                           ),
                         ),
                       ],
@@ -200,13 +206,21 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text("Cancel"),
+                  child: const Text(
+                    "Cancel",
+                    style: TextStyle(color: Colors.red),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: isChecked
                       ? () => Navigator.of(context).pop(true)
                       : null,
-                  child: const Text("Confirm"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isChecked
+                        ? const Color(0xFF00588E)
+                        : Colors.grey,
+                  ),
+                  child: const Text("Submit"),
                 ),
               ],
             ),
@@ -218,9 +232,6 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final vitalsDocId = '${widget.elderlyId}_$today';
-
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -235,33 +246,44 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
         backgroundColor: Colors.white,
         elevation: 1,
       ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: _firestore
-            .collection("vitals_daily")
-            .doc(vitalsDocId)
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("vitals")
+            .where("elderly_id", isEqualTo: widget.elderlyId)
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (!snapshot.hasData || !snapshot.data!.exists) {
-            return const Center(
-              child: Text(
-                "No vitals record for today.\nVitals will be auto-created at midnight.",
-                textAlign: TextAlign.center,
-              ),
-            );
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text("No vitals found"));
           }
 
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-          final vitalValues =
-              data['vital_values'] as Map<String, dynamic>? ?? {};
-          final shiftStatus =
-              data['shift_status'] as Map<String, dynamic>? ?? {};
+          final vitals = snapshot.data!.docs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['vital_id'] = doc.id;
+            return data;
+          }).toList();
 
-          // Load current vital values into form
-          draft.loadFromData(vitalValues);
+          vitals.sort((a, b) {
+            final tA =
+                (a['vital_record_at'] as Timestamp?)?.toDate() ??
+                DateTime(2000);
+            final tB =
+                (b['vital_record_at'] as Timestamp?)?.toDate() ??
+                DateTime(2000);
+            return tB.compareTo(tA);
+          });
+
+          final latestVital = vitals.first;
+
+          draft.loadFromData(latestVital);
+
+          final verified = latestVital['vital_verify'] == true;
+          final recordTime =
+              (latestVital['vital_record_at'] as Timestamp?)?.toDate() ??
+              DateTime.now();
 
           return Padding(
             padding: const EdgeInsets.all(16),
@@ -269,39 +291,6 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
               key: _formKey,
               child: ListView(
                 children: [
-                  // Show shift statuses
-                  Card(
-                    color: Colors.blue.shade50,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "Shift Status",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          _buildShiftStatusRow(
-                            '1st Shift (6AM-2PM)',
-                            shiftStatus['1st'],
-                          ),
-                          _buildShiftStatusRow(
-                            '2nd Shift (2PM-10PM)',
-                            shiftStatus['2nd'],
-                          ),
-                          _buildShiftStatusRow(
-                            '3rd Shift (10PM-6AM)',
-                            shiftStatus['3rd'],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
                   _buildTextField(
                     "Blood Pressure",
                     draft.bloodPressureController,
@@ -336,13 +325,31 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
                     isNumber: true,
                   ),
                   const SizedBox(height: 12),
-                  _buildTextField("Notes", draft.remarksController, "Optional"),
+                  _buildTextField(
+                    "Remarks",
+                    draft.remarksController,
+                    "Optional",
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text("Verified: "),
+                      Icon(
+                        verified ? Icons.check_circle : Icons.cancel,
+                        color: verified ? Colors.green : Colors.red,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        "Recorded at: ${DateFormat.yMMMd().add_jm().format(recordTime)}",
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 24),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: !isSaving
-                          ? () => updateVital(vitalsDocId)
+                          ? () => updateVital(latestVital['vital_id'])
                           : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: !isSaving
@@ -369,42 +376,6 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
     );
   }
 
-  Widget _buildShiftStatusRow(String label, dynamic shiftData) {
-    String status = 'pending';
-    Color statusColor = Colors.orange;
-    IconData statusIcon = Icons.pending;
-
-    if (shiftData != null && shiftData is Map) {
-      status = shiftData['status'] ?? 'pending';
-      if (status == 'completed') {
-        statusColor = Colors.green;
-        statusIcon = Icons.check_circle;
-      } else if (status == 'missed') {
-        statusColor = Colors.red;
-        statusIcon = Icons.cancel;
-      }
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(child: Text(label)),
-          Icon(statusIcon, color: statusColor, size: 20),
-          const SizedBox(width: 4),
-          Text(
-            status.toUpperCase(),
-            style: TextStyle(
-              color: statusColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildTextField(
     String label,
     TextEditingController controller,
@@ -416,6 +387,9 @@ class _VitalDetailScreenState extends State<VitalDetailScreen>
       keyboardType: isNumber ? TextInputType.number : TextInputType.text,
       validator: (val) {
         if (val == null || val.trim().isEmpty) return "Required";
+        if (isNumber && double.tryParse(val) == null) {
+          return "Enter a valid number";
+        }
         return null;
       },
       decoration: InputDecoration(
@@ -437,12 +411,13 @@ class VitalDraft {
   final TextEditingController remarksController = TextEditingController();
 
   void loadFromData(Map<String, dynamic> data) {
-    bloodPressureController.text = data["blood_pressure"]?.toString() ?? "";
-    pulseRateController.text = data["pulse_rate"]?.toString() ?? "";
-    o2SatController.text = data["oxygen_saturation"]?.toString() ?? "";
-    temperatureController.text = data["temperature"]?.toString() ?? "";
-    respiratoryRateController.text = data["respiratory_rate"]?.toString() ?? "";
-    remarksController.text = data["notes"]?.toString() ?? "";
+    bloodPressureController.text = data["blood_pressure"] ?? "";
+    pulseRateController.text = (data["pulse_rate"] ?? "").toString();
+    o2SatController.text = (data["o2_sat"] ?? "").toString();
+    temperatureController.text = (data["temperature"] ?? "").toString();
+    respiratoryRateController.text = (data["respiratory_rate"] ?? "")
+        .toString();
+    remarksController.text = data["vital_remarks"] ?? "";
   }
 
   void clear() {

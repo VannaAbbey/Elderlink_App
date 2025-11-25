@@ -15,6 +15,7 @@ import 'houses.dart';
 import '../services/cg_services/house_service.dart';
 import 'emergency_handler.dart';
 import '../services/attendance_check_service.dart';
+import '../services/vitals_daily_auto_creator.dart';
 
 void main() {
   runApp(
@@ -38,18 +39,20 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final caregiverId = authProvider.currentUser?.uid;
     if (caregiverId == null) return null;
-    
+
     print('🏠 HOME: Getting assigned house for caregiver: $caregiverId');
     final houseService = HouseService();
     final house = await houseService.getAssignedHouseForCaregiver(caregiverId);
-    
+
     if (house != null) {
       print('🏠 HOME: Retrieved house: ${house['house_name']}');
-      print('🏠 HOME: Is emergency coverage: ${house['is_emergency_coverage']}');
+      print(
+        '🏠 HOME: Is emergency coverage: ${house['is_emergency_coverage']}',
+      );
     } else {
       print('🏠 HOME: No house assignment found');
     }
-    
+
     return house;
   }
 
@@ -343,6 +346,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Auto-check/create vitals_daily documents when caregiver logs in
+    VitalsDailyAutoCreator.ensureVitalsDailyExist();
+
     Future.microtask(() {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       authProvider.refreshUserData();
@@ -1199,9 +1206,12 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                           Consumer<AbsenceProvider>(
                                             builder: (context, absenceProvider, child) {
                                               // Show emergency coverage status first (highest priority)
-                                              if (absenceProvider.hasEmergencyCoverage) {
+                                              if (absenceProvider
+                                                  .hasEmergencyCoverage) {
                                                 return Container(
-                                                  padding: const EdgeInsets.all(16),
+                                                  padding: const EdgeInsets.all(
+                                                    16,
+                                                  ),
                                                   decoration: BoxDecoration(
                                                     gradient: LinearGradient(
                                                       colors: [
@@ -1209,31 +1219,46 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                                         Colors.red[600]!,
                                                       ],
                                                       begin: Alignment.topLeft,
-                                                      end: Alignment.bottomRight,
+                                                      end:
+                                                          Alignment.bottomRight,
                                                     ),
-                                                    borderRadius: BorderRadius.circular(12),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
                                                     border: Border.all(
                                                       color: Colors.red[800]!,
                                                       width: 3,
                                                     ),
                                                     boxShadow: [
                                                       BoxShadow(
-                                                        color: Colors.red.withOpacity(0.3),
+                                                        color: Colors.red
+                                                            .withOpacity(0.3),
                                                         blurRadius: 8,
-                                                        offset: const Offset(0, 4),
+                                                        offset: const Offset(
+                                                          0,
+                                                          4,
+                                                        ),
                                                       ),
                                                     ],
                                                   ),
                                                   child: Row(
                                                     children: [
                                                       Container(
-                                                        padding: const EdgeInsets.all(8),
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              8,
+                                                            ),
                                                         decoration: BoxDecoration(
                                                           color: Colors.white,
-                                                          borderRadius: BorderRadius.circular(8),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                8,
+                                                              ),
                                                         ),
                                                         child: const Icon(
-                                                          Icons.warning_amber_rounded,
+                                                          Icons
+                                                              .warning_amber_rounded,
                                                           color: Colors.red,
                                                           size: 40,
                                                         ),
@@ -1241,33 +1266,52 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                                       const SizedBox(width: 12),
                                                       Expanded(
                                                         child: Column(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
                                                           children: [
                                                             const Text(
                                                               '🚨 EMERGENCY COVERAGE',
                                                               style: TextStyle(
                                                                 fontSize: 16,
-                                                                fontWeight: FontWeight.bold,
-                                                                color: Colors.white,
-                                                                letterSpacing: 0.5,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                color: Colors
+                                                                    .white,
+                                                                letterSpacing:
+                                                                    0.5,
                                                               ),
                                                             ),
-                                                            const SizedBox(height: 4),
+                                                            const SizedBox(
+                                                              height: 4,
+                                                            ),
                                                             Text(
                                                               'You are temporarily assigned to a different house today',
                                                               style: const TextStyle(
                                                                 fontSize: 13,
-                                                                color: Colors.white,
-                                                                fontWeight: FontWeight.w500,
+                                                                color: Colors
+                                                                    .white,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w500,
                                                               ),
                                                             ),
-                                                            const SizedBox(height: 2),
+                                                            const SizedBox(
+                                                              height: 2,
+                                                            ),
                                                             Text(
                                                               'All functions are redirected to this house',
                                                               style: TextStyle(
                                                                 fontSize: 11,
-                                                                color: Colors.white.withOpacity(0.9),
-                                                                fontStyle: FontStyle.italic,
+                                                                color: Colors
+                                                                    .white
+                                                                    .withOpacity(
+                                                                      0.9,
+                                                                    ),
+                                                                fontStyle:
+                                                                    FontStyle
+                                                                        .italic,
                                                               ),
                                                             ),
                                                           ],
@@ -1277,9 +1321,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                                   ),
                                                 );
                                               }
-                                              
+
                                               // Show absence status if absent
-                                              if (absenceProvider.isAbsentToday) {
+                                              if (absenceProvider
+                                                  .isAbsentToday) {
                                                 return Container(
                                                   padding: const EdgeInsets.all(
                                                     16,

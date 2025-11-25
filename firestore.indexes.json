@@ -1,38 +1,55 @@
 {
   "indexes": [
     {
-      "collectionGroup": "vitals",
+      "collectionGroup": "vitals_daily",
       "queryScope": "COLLECTION",
       "fields": [
         {"fieldPath": "house_id", "order": "ASCENDING"},
         {"fieldPath": "assigned_date", "order": "ASCENDING"},
-        {"fieldPath": "shift", "order": "ASCENDING"},
-        {"fieldPath": "status", "order": "ASCENDING"},
-        {"fieldPath": "elderly_id", "order": "ASCENDING"}
+        {"fieldPath": "any_completed", "order": "ASCENDING"}
       ]
     },
     {
-      "collectionGroup": "vitals",
+      "collectionGroup": "vitals_daily",
       "queryScope": "COLLECTION",
       "fields": [
-        {"fieldPath": "assigned_nurse_id", "order": "ASCENDING"},
         {"fieldPath": "house_id", "order": "ASCENDING"},
         {"fieldPath": "assigned_date", "order": "ASCENDING"},
-        {"fieldPath": "shift", "order": "ASCENDING"},
-        {"fieldPath": "status", "order": "ASCENDING"},
-        {"fieldPath": "recorded_at", "order": "DESCENDING"},
-        {"fieldPath": "__name__", "order": "DESCENDING"}
+        {"fieldPath": "any_missed", "order": "ASCENDING"}
       ]
     },
     {
-      "collectionGroup": "vitals",
+      "collectionGroup": "vitals_daily",
       "queryScope": "COLLECTION",
       "fields": [
-        {"fieldPath": "house_id", "order": "ASCENDING"},
         {"fieldPath": "assigned_date", "order": "ASCENDING"},
-        {"fieldPath": "status", "order": "ASCENDING"},
-        {"fieldPath": "updated_at", "order": "DESCENDING"},
-        {"fieldPath": "__name__", "order": "DESCENDING"}
+        {"fieldPath": "house_id", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals_activity_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "elderly_id", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals_activity_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "vitals_id", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "vitals_activity_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "action_type", "order": "ASCENDING"},
+        {"fieldPath": "assigned_date", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
       ]
     },
     {
@@ -73,36 +90,6 @@
       "fields": [
         {"fieldPath": "status", "order": "ASCENDING"},
         {"fieldPath": "scheduledFor", "order": "ASCENDING"},
-        {"fieldPath": "__name__", "order": "ASCENDING"}
-      ]
-    },
-    {
-      "collectionGroup": "vital_activity_logs",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath": "house_id", "order": "ASCENDING"},
-        {"fieldPath": "action_type", "order": "ASCENDING"},
-        {"fieldPath": "nurse_name", "order": "ASCENDING"},
-        {"fieldPath": "timestamp", "order": "ASCENDING"},
-        {"fieldPath": "__name__", "order": "ASCENDING"}
-      ]
-    },
-    {
-      "collectionGroup": "vitals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath": "house_id", "order": "ASCENDING"},
-        {"fieldPath": "status", "order": "ASCENDING"},
-        {"fieldPath": "assigned_date", "order": "ASCENDING"},
-        {"fieldPath": "__name__", "order": "ASCENDING"}
-      ]
-    },
-    {
-      "collectionGroup": "vitals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath": "status", "order": "ASCENDING"},
-        {"fieldPath": "assigned_date", "order": "ASCENDING"},
         {"fieldPath": "__name__", "order": "ASCENDING"}
       ]
     }

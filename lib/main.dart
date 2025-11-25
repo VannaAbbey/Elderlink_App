@@ -24,6 +24,7 @@ import 'nurse/notification_service.dart';
 import 'services/cg_services/task_reminder_service.dart';
 import 'services/cg_services/missed_task_monitor_service.dart';
 import 'services/attendance_check_service.dart';
+import 'services/vitals_daily_auto_creator.dart';
 import 'package:workmanager/workmanager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -1601,6 +1602,16 @@ void main() async {
   print('🔧 Initializing Global Attendance Service...');
   await GlobalAttendanceService.initializeAttendanceCheck();
   print('✅ Global Attendance Service initialized');
+
+  // Auto-create vitals_daily documents on app startup
+  print('🔧 Checking/Creating vitals_daily documents...');
+  VitalsDailyAutoCreator.ensureVitalsDailyExist()
+      .then((_) {
+        print('✅ VitalsDaily auto-creation completed');
+      })
+      .catchError((e) {
+        print('❌ VitalsDaily auto-creation failed: $e');
+      });
 
   runApp(
     MultiProvider(

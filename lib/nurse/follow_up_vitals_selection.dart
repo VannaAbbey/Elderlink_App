@@ -32,33 +32,7 @@ class _FollowUpVitalsSelectionScreenState
   }
 
   String _getTodayDateString() {
-    final now = DateTime.now();
-    final currentHour = now.hour;
-
-    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
-    // we need to use the previous day's date for assignments
-    if (currentHour >= 0 && currentHour < 6) {
-      final previousDay = now.subtract(Duration(days: 1));
-      return DateFormat('yyyy-MM-dd').format(previousDay);
-    }
-
-    // For all other times, use current date
-    return DateFormat('yyyy-MM-dd').format(now);
-  }
-
-  String _getCurrentDay() {
-    final now = DateTime.now();
-    final currentHour = now.hour;
-
-    // For third shift (10pm-6am), if it's after midnight (0:00-5:59),
-    // we need to look at the previous day's assignments
-    if (currentHour >= 0 && currentHour < 6) {
-      final previousDay = now.subtract(Duration(days: 1));
-      return DateFormat('EEEE').format(previousDay);
-    }
-
-    // For all other times, use current day
-    return DateFormat('EEEE').format(now);
+    return DateFormat('yyyy-MM-dd').format(DateTime.now());
   }
 
   @override
@@ -84,81 +58,6 @@ class _FollowUpVitalsSelectionScreenState
     return userQuery.docs.isNotEmpty ? userQuery.docs.first.id : null;
   }
 
-  // 🔧 OPTIMIZATION: Helper method to fetch elderly names in parallel
-  Future<Map<String, String>> _fetchElderlyNames(Set<String> elderlyIds) async {
-    final elderlyNamesCache = <String, String>{};
-
-    if (elderlyIds.isEmpty) return elderlyNamesCache;
-
-    // Split into chunks of 30 (Firestore limit for whereIn)
-    final chunks = <List<String>>[];
-    final idsList = elderlyIds.toList();
-    for (var i = 0; i < idsList.length; i += 30) {
-      final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
-      chunks.add(idsList.sublist(i, end));
-    }
-
-    // Fetch all chunks in parallel
-    final futures = chunks.map(
-      (chunk) => _firestore
-          .collection('elderly')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get(),
-    );
-
-    final results = await Future.wait(futures);
-
-    for (final result in results) {
-      for (final doc in result.docs) {
-        final data = doc.data();
-        final fullName =
-            '${data['elderly_fname'] ?? ''} ${data['elderly_lname'] ?? ''}'
-                .trim();
-        elderlyNamesCache[doc.id] = fullName.isNotEmpty ? fullName : 'Unknown';
-      }
-    }
-
-    return elderlyNamesCache;
-  }
-
-  // 🔧 OPTIMIZATION: Helper method to fetch nurse names in parallel
-  Future<Map<String, String>> _fetchNurseNames(Set<String> nurseIds) async {
-    final nurseNamesCache = <String, String>{};
-
-    if (nurseIds.isEmpty) return nurseNamesCache;
-
-    // Split into chunks of 30 (Firestore limit for whereIn)
-    final chunks = <List<String>>[];
-    final idsList = nurseIds.toList();
-    for (var i = 0; i < idsList.length; i += 30) {
-      final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
-      chunks.add(idsList.sublist(i, end));
-    }
-
-    // Fetch all chunks in parallel
-    final futures = chunks.map(
-      (chunk) => _firestore
-          .collection('users')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get(),
-    );
-
-    final results = await Future.wait(futures);
-
-    for (final result in results) {
-      for (final doc in result.docs) {
-        final data = doc.data();
-        final fullName =
-            '${data['user_fname'] ?? ''} ${data['user_lname'] ?? ''}'.trim();
-        nurseNamesCache[doc.id] = fullName.isNotEmpty
-            ? fullName
-            : 'Unknown Nurse';
-      }
-    }
-
-    return nurseNamesCache;
-  }
-
   Future<void> _loadAssignedElderly() async {
     try {
       setState(() {
@@ -166,251 +65,78 @@ class _FollowUpVitalsSelectionScreenState
       });
 
       final nurseId = await _getNurseId();
-      if (nurseId == null) return;
+      if (nurseId == null) {
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
 
       final today = _getTodayDateString();
+      final currentShift = _getCurrentShift();
 
-      print('🔍 Loading ALL assigned elderly for follow-up (any shift)...');
+      print('🔍 Loading elderly for follow-up...');
       print('Nurse: ${widget.nurseName} ($nurseId)');
       print('House: ${widget.houseId}');
       print('Date: $today');
+      print('Current Shift: $currentShift');
 
-      // 🔧 OPTIMIZATION: Run initial queries in parallel
-      final currentDay = _getCurrentDay();
-      final currentShift = _getCurrentShift();
+      // Query vitals_daily for today in this house
+      final vitalsQuery = await _firestore
+          .collection('vitals_daily')
+          .where('house_id', isEqualTo: widget.houseId)
+          .where('assigned_date', isEqualTo: today)
+          .get();
 
-      final [allVitalsQuery, nurseElderlyQuery] = await Future.wait([
-        // Get ALL vitals for today in this house (any nurse, any shift)
-        _firestore
-            .collection('vitals')
-            .where('house_id', isEqualTo: widget.houseId)
-            .where('assigned_date', isEqualTo: today)
-            .get(),
-        // Get ALL elderly assigned to current nurse from elderly_assignments collection
-        _firestore
-            .collection('elderly_assignments')
-            .where('user_id', isEqualTo: nurseId)
-            .where('user_type', isEqualTo: 'nurse')
-            .where('is_current', isEqualTo: true)
-            .where('shift', isEqualTo: currentShift)
-            .where('day', isEqualTo: currentDay)
-            .get(),
-      ]);
-
-      print('📋 Found ${allVitalsQuery.docs.length} total vitals for today');
-
-      // 🔧 OPTIMIZATION: Process nurse assignments more efficiently
-      final nurseAssignedElderlyIds = <String>{};
-      for (final doc in nurseElderlyQuery.docs) {
-        final assignmentData = doc.data();
-        final elderlyIds = List<String>.from(
-          assignmentData['elderly_ids'] ?? [],
-        );
-        nurseAssignedElderlyIds.addAll(elderlyIds);
-      }
-
-      print('🔍 Assigned elderly IDs: $nurseAssignedElderlyIds');
-
-      // 🔧 OPTIMIZATION: Early exit if no assignments
-      if (nurseAssignedElderlyIds.isEmpty) {
-        setState(() {
-          _assignedElderly = [];
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // � OPTIMIZATION: Filter elderly by house and fetch names in parallel
-      final filteredElderlyIds = <String>{};
-
-      // Split into chunks of 30 (Firestore limit for whereIn)
-      final chunks = <List<String>>[];
-      final idsList = nurseAssignedElderlyIds.toList();
-      for (var i = 0; i < idsList.length; i += 30) {
-        final end = (i + 30 < idsList.length) ? i + 30 : idsList.length;
-        chunks.add(idsList.sublist(i, end));
-      }
-
-      // 🔧 OPTIMIZATION: Fetch elderly data in parallel chunks
-      final elderlyFutures = chunks.map(
-        (chunk) => _firestore
-            .collection('elderly')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .where('house_id', isEqualTo: widget.houseId)
-            .get(),
-      );
-
-      final elderlyChunks = await Future.wait(elderlyFutures);
-
-      for (final chunk in elderlyChunks) {
-        for (final doc in chunk.docs) {
-          filteredElderlyIds.add(doc.id);
-        }
-      }
-
-      print(
-        '🔍 Filtered elderly IDs for house ${widget.houseId}: $filteredElderlyIds',
-      );
-
-      // 🔧 OPTIMIZATION: Early exit if no elderly in this house
-      if (filteredElderlyIds.isEmpty) {
-        setState(() {
-          _assignedElderly = [];
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // Use filtered IDs instead of all assigned IDs
-      final finalAssignedElderlyIds = filteredElderlyIds;
-
-      // 🔧 OPTIMIZATION: Pre-fetch nurse names while processing elderly names
-      final nurseIdsToFetch = <String>{};
-      for (final vitalDoc in allVitalsQuery.docs) {
-        final vitalData = vitalDoc.data();
-        final assignedNurseId = vitalData['assigned_nurse_id'];
-        final updatedByNurseId = vitalData['updated_by_nurse_id'];
-        final recordedBy = vitalData['recorded_by'];
-
-        if (assignedNurseId != null) nurseIdsToFetch.add(assignedNurseId);
-        if (updatedByNurseId != null) nurseIdsToFetch.add(updatedByNurseId);
-        if (recordedBy != null) nurseIdsToFetch.add(recordedBy);
-      }
-
-      // 🔧 OPTIMIZATION: Fetch elderly and nurse names in parallel
-      final [elderlyNamesCache, nurseNamesCache] = await Future.wait([
-        _fetchElderlyNames(finalAssignedElderlyIds),
-        _fetchNurseNames(nurseIdsToFetch),
-      ]);
-
-      print('📋 Elderly names cache populated: $elderlyNamesCache');
-      print('👩‍⚕️ Nurse names cache populated: $nurseNamesCache');
+      print('📋 Found ${vitalsQuery.docs.length} vitals_daily documents');
 
       final elderlyList = <Map<String, dynamic>>[];
 
-      // 🔧 OPTIMIZATION: Process vitals more efficiently
-      final elderlyLatestVitals = <String, Map<String, dynamic>>{};
-
-      for (final vitalDoc in allVitalsQuery.docs) {
+      for (final vitalDoc in vitalsQuery.docs) {
         final vitalData = vitalDoc.data();
         final elderlyId = vitalData['elderly_id'];
+        final elderlyName = vitalData['elderly_name'] ?? 'Unknown';
+        final shiftStatus =
+            vitalData['shift_status'] as Map<String, dynamic>? ?? {};
+        final vitalValues =
+            vitalData['vital_values'] as Map<String, dynamic>? ?? {};
 
-        // Only process if this elderly is assigned to current nurse
-        if (!finalAssignedElderlyIds.contains(elderlyId)) {
-          continue;
+        // Check if ANY shift has been completed (has vital values)
+        bool hasCompletedShift = false;
+        String? completedShift;
+        Map<String, dynamic>? completedShiftStatus;
+
+        for (final shift in ['1st', '2nd', '3rd']) {
+          final shiftData = shiftStatus[shift] as Map<String, dynamic>?;
+          if (shiftData != null && shiftData['status'] == 'completed') {
+            hasCompletedShift = true;
+            completedShift = shift;
+            completedShiftStatus = shiftData;
+            break; // Take the first completed shift found
+          }
         }
 
-        // 🔧 FIXED: Get elderly name from vitals data first, then from cache if not available
-        String elderlyName = vitalData['elderly_name'] ?? '';
-        if (elderlyName.isEmpty || elderlyName == 'Unknown') {
-          elderlyName = elderlyNamesCache[elderlyId] ?? 'Unknown';
-        }
+        // Can follow up if ANY shift has been completed
+        final canFollowUp = hasCompletedShift;
 
-        print(
-          '📋 Processing vital: $elderlyName ($elderlyId) - Status: ${vitalData['status']} - Nurse: ${vitalData['assigned_nurse_id'] ?? 'Unknown'}',
-        );
-
-        print('   ✅ Including - assigned to current nurse');
-
-        // Get completion timestamp to find most recent vital
-        final completedAt = vitalData['completed_at'];
-        final createdAt = vitalData['created_at'];
-
-        // Use completed_at if available, otherwise created_at for sorting
-        final timestamp = completedAt ?? createdAt;
-
-        if (!elderlyLatestVitals.containsKey(elderlyId) ||
-            (timestamp != null &&
-                elderlyLatestVitals[elderlyId]!['timestamp'] == null) ||
-            (timestamp != null &&
-                elderlyLatestVitals[elderlyId]!['timestamp'] != null &&
-                timestamp.compareTo(
-                      elderlyLatestVitals[elderlyId]!['timestamp'],
-                    ) >
-                    0)) {
-          elderlyLatestVitals[elderlyId] = {
-            'elderly_id': elderlyId,
-            'elderly_name': elderlyName,
-            'assignment_id': vitalDoc.id,
-            'status': vitalData['status'],
-            'assigned_nurse_id': vitalData['assigned_nurse_id'],
-            'assigned_nurse_name':
-                nurseNamesCache[vitalData['assigned_nurse_id']] ??
-                'Unknown Nurse',
-            'updated_by_nurse_id': vitalData['updated_by_nurse_id'],
-            'shift': vitalData['shift'],
-            'timestamp': timestamp,
-            'vitals_data': {
-              'blood_pressure': vitalData['blood_pressure'],
-              'pulse_rate': vitalData['pulse_rate'],
-              'oxygen_saturation': vitalData['oxygen_saturation'],
-              'temperature': vitalData['temperature'],
-              'respiratory_rate': vitalData['respiratory_rate'],
-              'completed_at': vitalData['completed_at'],
-              'recorded_by_name':
-                  vitalData['recorded_by_name'] ??
-                  nurseNamesCache[vitalData['assigned_nurse_id']] ??
-                  nurseNamesCache[vitalData['updated_by_nurse_id']] ??
-                  nurseNamesCache[vitalData['recorded_by']] ??
-                  'Unknown Nurse',
-            },
-          };
-        }
-      }
-
-      // 🔧 STEP 3: Build the final elderly list - include ALL assigned elderly
-      for (final elderlyId in finalAssignedElderlyIds) {
-        final elderlyName = elderlyNamesCache[elderlyId] ?? 'Unknown';
-        print('🔍 Processing elderly $elderlyId: cached name = "$elderlyName"');
-
-        // Check if this elderly has vitals data
-        final elderlyData = elderlyLatestVitals[elderlyId];
-
-        if (elderlyData != null) {
-          // Elderly has vitals - use existing logic
-          final status = elderlyData['status'];
-          final vitalsData = elderlyData['vitals_data'] as Map<String, dynamic>;
-          final hasAnyVitals = vitalsData['completed_at'] != null;
-          final canFollowUp = hasAnyVitals;
-
-          print(
-            '🔍 Building elderly item (with vitals): $elderlyName - Status: $status - HasVitals: $hasAnyVitals - CanFollowUp: $canFollowUp',
-          );
-
-          elderlyList.add({
-            'elderly_id': elderlyId,
-            'elderly_name': elderlyName,
-            'assignment_id': elderlyData['assignment_id'],
-            'status': status,
-            'previous_vitals': hasAnyVitals ? vitalsData : null,
-            'can_follow_up': canFollowUp,
-            'completed_by_nurse':
-                vitalsData['recorded_by_name'] ?? 'Unknown Nurse',
-            'completed_in_shift': elderlyData['shift'],
-          });
-        } else {
-          // Elderly has no vitals yet - show as pending
-          print(
-            '🔍 Building elderly item (no vitals): $elderlyName - Status: pending - CanFollowUp: false',
-          );
-
-          elderlyList.add({
-            'elderly_id': elderlyId,
-            'elderly_name': elderlyName,
-            'assignment_id': null,
-            'status': 'pending',
-            'previous_vitals': null,
-            'can_follow_up': false,
-            'completed_by_nurse': 'None',
-            'completed_in_shift': 'N/A',
-          });
-        }
+        elderlyList.add({
+          'elderly_id': elderlyId,
+          'elderly_name': elderlyName,
+          'vitals_id': vitalDoc.id,
+          'assigned_date': today,
+          'can_follow_up': canFollowUp,
+          'completed_shift': completedShift ?? 'N/A',
+          'completed_by_nurse':
+              completedShiftStatus?['completed_by_nurse_name'] ?? 'None',
+          'previous_vitals': canFollowUp ? vitalValues : null,
+          'shift_status': shiftStatus,
+        });
       }
 
       // Sort: completed vitals first (eligible for follow-up), then pending
       elderlyList.sort((a, b) {
         if (a['can_follow_up'] != b['can_follow_up']) {
-          return a['can_follow_up'] ? -1 : 1; // completed first
+          return a['can_follow_up'] ? -1 : 1;
         }
         return a['elderly_name'].compareTo(b['elderly_name']);
       });
@@ -420,13 +146,7 @@ class _FollowUpVitalsSelectionScreenState
         _isLoading = false;
       });
 
-      print('✅ Loaded ${elderlyList.length} elderly for follow-up selection');
-      print('📋 Elderly list details:');
-      for (final elderly in elderlyList) {
-        print(
-          '   - ${elderly['elderly_name']} (${elderly['elderly_id']}) - Can follow up: ${elderly['can_follow_up']}',
-        );
-      }
+      print('✅ Loaded ${elderlyList.length} elderly for follow-up');
     } catch (e) {
       print('❌ Error loading assigned elderly: $e');
       setState(() {
@@ -436,75 +156,24 @@ class _FollowUpVitalsSelectionScreenState
   }
 
   Future<void> _recordFollowUpVitals(Map<String, dynamic> elderlyInfo) async {
-    // Create a new follow-up assignment
-    final now = DateTime.now();
-    final currentShift = _getCurrentShift();
-    final today = _getTodayDateString();
-    final nurseId = await _getNurseId();
-
-    if (nurseId == null) return;
-
-    try {
-      // Create new follow-up assignment
-      final followUpAssignmentRef = await _firestore.collection('vitals').add({
-        'elderly_id': elderlyInfo['elderly_id'],
-        'elderly_name': elderlyInfo['elderly_name'],
-        'assigned_nurse_id': nurseId,
-        'assigned_nurse_name': widget.nurseName ?? 'Unknown',
-        'house_id': widget.houseId,
-        'assigned_date': today,
-        'shift': currentShift,
-        'status': 'pending',
-        'created_at': Timestamp.fromDate(now),
-
-        // 🆕 FOLLOW-UP METADATA: Track that this is a follow-up
-        'is_follow_up': true,
-        'previous_assignment_id': elderlyInfo['assignment_id'],
-        'previous_vitals': elderlyInfo['previous_vitals'],
-        'follow_up_reason': 'Additional monitoring requested by nurse',
-
-        // Vital fields (null until recorded)
-        'blood_pressure': null,
-        'pulse_rate': null,
-        'oxygen_saturation': null,
-        'temperature': null,
-        'respiratory_rate': null,
-        'remarks': null,
-        'completed_at': null,
-        'recorded_by': null,
-        'recorded_by_name': null,
-      });
-
-      print('✅ Created follow-up assignment: ${followUpAssignmentRef.id}');
-
-      // Navigate to vitals recording screen with follow-up context
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => VitalUpdateScreen(
-            assignmentId: followUpAssignmentRef.id,
-            elderlyId: elderlyInfo['elderly_id'],
-            elderlyName: elderlyInfo['elderly_name'],
-            nurseName: widget.nurseName,
-            houseId: widget.houseId,
-          ),
+    // Navigate to VitalUpdateScreen to record follow-up vitals
+    // The vitals_daily document already exists, we're just updating it for current shift
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VitalUpdateScreen(
+          vitalsId: elderlyInfo['vitals_id'],
+          elderlyId: elderlyInfo['elderly_id'],
+          elderlyName: elderlyInfo['elderly_name'],
+          assignedDate: elderlyInfo['assigned_date'],
+          houseId: widget.houseId,
         ),
-      );
+      ),
+    );
 
-      if (result == true && mounted) {
-        // Return success to refresh the main list
-        Navigator.pop(context, true);
-      }
-    } catch (e) {
-      print('❌ Error creating follow-up assignment: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error creating follow-up: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    if (result == true && mounted) {
+      // Refresh the list
+      _loadAssignedElderly();
     }
   }
 
@@ -549,7 +218,7 @@ class _FollowUpVitalsSelectionScreenState
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'No elderly assigned to you for this shift',
+                    'No elderly vitals available for follow-up',
                     style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                   ),
                 ],
@@ -586,7 +255,7 @@ class _FollowUpVitalsSelectionScreenState
                       ),
                       SizedBox(height: 8),
                       Text(
-                        'Select an elderly to record follow-up vitals. You can record follow-ups for ANY elderly assigned to you, even if their vitals were completed by other nurses from previous shifts.',
+                        'Select an elderly to record follow-up vitals. You can record follow-ups for elderly who have completed vitals in any previous shift.',
                         style: TextStyle(
                           fontSize: 14,
                           color: Color(0xFF00588E),
@@ -657,7 +326,7 @@ class _FollowUpVitalsSelectionScreenState
                                           ),
                                           child: Text(
                                             canFollowUp
-                                                ? '✅ Completed by ${elderlyInfo['completed_by_nurse'] ?? 'Unknown'} (${elderlyInfo['completed_in_shift'] ?? 'Unknown'} shift)'
+                                                ? '✅ Completed by ${elderlyInfo['completed_by_nurse'] ?? 'Unknown'} (${elderlyInfo['completed_shift'] ?? 'Unknown'} shift)'
                                                 : '⏳ Vitals Pending',
                                             style: TextStyle(
                                               fontSize: 12,
@@ -765,15 +434,6 @@ class _FollowUpVitalsSelectionScreenState
                                               ),
                                             ),
                                         ],
-                                      ),
-                                      SizedBox(height: 8),
-                                      Text(
-                                        'Recorded by: ${previousVitals['recorded_by_name']} • ${_formatTimestamp(previousVitals['completed_at'])}',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.grey[500],
-                                          fontWeight: FontWeight.w500,
-                                        ),
                                       ),
                                     ],
                                   ),

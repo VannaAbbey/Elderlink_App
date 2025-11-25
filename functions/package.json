@@ -1,6 +1,7 @@
 {
-  "name": "functions",
-  "description": "Cloud Functions for Firebase",
+  "name": "shift-reminder-functions",
+  "version": "1.0.0",
+  "description": "Cloud Functions for Firebase - shift reminders",
   "scripts": {
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
@@ -9,12 +10,12 @@
     "logs": "firebase functions:log"
   },
   "engines": {
-    "node": "22"
+    "node": "20"
   },
   "main": "index.js",
   "dependencies": {
-    "firebase-admin": "^13.6.0",
-    "firebase-functions": "^7.0.0"
+    "firebase-admin": "^11.10.0",
+    "firebase-functions": "^4.3.0"
   },
   "devDependencies": {
     "firebase-functions-test": "^3.1.0"

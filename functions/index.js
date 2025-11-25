@@ -1,8 +1,192 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+
+admin.initializeApp();
+const db = admin.firestore();
+
+// Runs hourly. For each current house_shift_assignment check if the shift end
+// time is within 2 hours. If so, check for pending vitals for that shift and
+// send a single FCM reminder to the assigned nurse. Record sent reminders in
+// `shift_notifications_sent` to avoid duplicates.
+exports.scheduledShiftReminder = functions.pubsub
+  .schedule('every 1 hours')
+  .onRun(async (context) => {
+    try {
+      const now = new Date();
+      const todayDayName = now.toLocaleDateString('en-US', { weekday: 'long' });
+      const todayDateString = now.toISOString().slice(0, 10); // yyyy-mm-dd
+
+      const assignmentsSnapshot = await db
+        .collection('house_shift_assignments')
+        .where('is_current', '==', true)
+        .where('days_assigned', 'array-contains', todayDayName)
+        .get();
+
+      console.log(`Found ${assignmentsSnapshot.size} shift assignments for ${todayDayName}`);
+
+      for (const doc of assignmentsSnapshot.docs) {
+        const data = doc.data();
+        const assignmentId = doc.id;
+        const shift = data.shift || null; // '1st'|'2nd'|'3rd'
+        const userId = data.user_id || null; // nurse id
+        const houseId = data.house_id || null;
+
+        if (!shift || !userId || !houseId) continue;
+
+        // Determine shift end time and compute notification time (end - 2 hours)
+        let endHour = null;
+        let endMinute = 0;
+        if (data.end_time) {
+          // Expecting something like '22:00' or '06:00'
+          const parts = data.end_time.split(':');
+          endHour = parseInt(parts[0], 10);
+          endMinute = parts[1] ? parseInt(parts[1], 10) : 0;
+        } else {
+          // fallback by shift end times (authoritative): 1st=14:00, 2nd=22:00, 3rd=06:00
+          if (shift === '1st') {
+            endHour = 14; // 14:00
+          } else if (shift === '2nd') {
+            endHour = 22; // 22:00
+          } else {
+            endHour = 6; // 06:00 (next day for 3rd)
+          }
+        }
+
+        // Build shift end Date (handle 3rd shift crossing midnight)
+        let shiftEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endHour, endMinute, 0);
+        if (shift === '3rd') {
+          // 3rd shift end is next calendar day at endHour
+          shiftEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, endHour, endMinute, 0);
+        }
+
+        // Notification time = shiftEnd - 2 hours
+        const notificationTime = new Date(shiftEnd.getTime() - 2 * 60 * 60 * 1000);
+
+        // We run hourly; trigger only if current time is within the notification hour window
+        // i.e. now >= notificationTime && now < notificationTime + 1 hour
+        const oneHour = 60 * 60 * 1000;
+        if (!(now.getTime() >= notificationTime.getTime() && now.getTime() < notificationTime.getTime() + oneHour)) {
+          // Not the notification window for this shift
+          continue;
+        }
+
+        // Check if we've already sent notification for this assignment+date+shift
+        const sentDocId = `${assignmentId}_${todayDateString}_${shift}`;
+        const sentRef = db.collection('shift_notifications_sent').doc(sentDocId);
+        const sentSnap = await sentRef.get();
+        if (sentSnap.exists) {
+          console.log(`Reminder already sent for ${sentDocId}, skipping.`);
+          continue;
+        }
+
+        // Query vitals_daily for this house and date and check for pending vitals for this shift
+        const vitalsSnapshot = await db
+          .collection('vitals_daily')
+          .where('house_id', '==', houseId)
+          .where('assigned_date', '==', todayDateString)
+          .get();
+
+        let pendingCount = 0;
+        for (const vdoc of vitalsSnapshot.docs) {
+          const vdata = vdoc.data();
+          const shiftStatus = vdata.shift_status || {};
+          const sData = shiftStatus[shift];
+          if (!sData) continue;
+          const status = sData.status || null;
+          const assignedNurseId = sData.assigned_nurse_id || null;
+
+          // If shift_status.assigned_nurse_id is present, prefer it; otherwise fall back to assignment userId
+          const relevantNurseId = assignedNurseId || userId;
+          if (relevantNurseId === userId && status === 'pending') {
+            pendingCount += 1;
+          }
+        }
+
+        if (pendingCount <= 0) {
+          console.log(`No pending vitals for assignment ${assignmentId} (shift ${shift}), skipping.`);
+          // Still create a small record to prevent checking repeatedly in the last 2 hours? No — skip.
+          continue;
+        }
+
+        // Check attendance for this nurse for today+shift. If an attendance record exists
+        // and `is_present === false`, the nurse is absent and should NOT receive the reminder.
+        try {
+          const attendanceQuery = await db
+            .collection('attendance')
+            .where('user_id', '==', userId)
+            .where('date', '==', todayDateString)
+            .where('shift', '==', shift)
+            .limit(1)
+            .get();
+
+          if (!attendanceQuery.empty) {
+            const att = attendanceQuery.docs[0].data();
+            if (att.is_present === false) {
+              console.log(`User ${userId} is marked absent for ${todayDateString} ${shift} — skipping reminder.`);
+              continue;
+            }
+          }
+        } catch (attErr) {
+          console.warn('Attendance check failed, proceeding with caution', attErr);
+        }
+
+        // Get user's FCM token
+        const userSnap = await db.collection('users').doc(userId).get();
+        if (!userSnap.exists) {
+          console.log(`User ${userId} not found, skipping notification.`);
+          continue;
+        }
+        const userData = userSnap.data() || {};
+        const fcmToken = userData.fcm_token || userData.fcmToken || null;
+        if (!fcmToken) {
+          console.log(`No FCM token for user ${userId}, skipping.`);
+          continue;
+        }
+
+        // Compose a simple reminder message (do not include counts per requirement)
+        const message = {
+          token: fcmToken,
+          notification: {
+            title: 'Shift Reminder',
+            body: 'You have 2 hours to record remaining vitals in your shift.',
+          },
+          android: {
+            priority: 'high',
+          },
+          apns: {
+            headers: {
+              'apns-priority': '10'
+            }
+          }
+        };
+
+        try {
+          await admin.messaging().send(message);
+          console.log(`Sent reminder to ${userId} for assignment ${assignmentId} (pending=${pendingCount})`);
+          // Record that we sent a reminder for this assignment+date+shift
+          await sentRef.set({
+            assignment_id: assignmentId,
+            user_id: userId,
+            house_id: houseId,
+            shift: shift,
+            date: todayDateString,
+            sent_at: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (err) {
+          console.error('Error sending FCM message', err);
+        }
+      }
+
+      return null;
+    } catch (err) {
+      console.error('scheduledShiftReminder error', err);
+      return null;
+    }
+  });
 const {onDocumentCreated, onSchedule} = require('firebase-functions/v2/firestore');
 const {setGlobalOptions} = require('firebase-functions/v2');
 const {onSchedule: onScheduleV2} = require('firebase-functions/v2/scheduler');
-const admin = require('firebase-admin');
-admin.initializeApp();
+// `admin` was initialized above; reuse the existing admin instance
 
 // Set region for all functions
 setGlobalOptions({region: 'asia-southeast1'});
@@ -624,572 +808,213 @@ exports.cleanupOldNotifications = onScheduleV2('every 24 hours', async (event) =
   }
 });
 
-// Check for pending vitals and send reminder 2 hours before shift ends (runs every 30 minutes)
-exports.checkPendingVitalsReminder = onScheduleV2('every 30 minutes', async (event) => {
-  try {
-    console.log('Checking for pending vitals reminders...');
-    
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' });
-    
-    // Define shift end times and reminder times (2 hours before)
-    const shifts = [
-      { name: '1st', endHour: 14, reminderHour: 12 }, // 2:00 PM end, remind at 12:00 PM
-      { name: '2nd', endHour: 22, reminderHour: 20 }, // 10:00 PM end, remind at 8:00 PM
-      { name: '3rd', endHour: 6, reminderHour: 4 }    // 6:00 AM end, remind at 4:00 AM
-    ];
-    
-    for (const shift of shifts) {
-      // Check if current time matches reminder time for this shift
-      if (currentHour === shift.reminderHour) {
-        console.log(`Processing ${shift.name} shift reminder at ${currentHour}:00`);
-        
-        // Get all active nurses for this shift
-        const shiftAssignments = await admin.firestore()
-          .collection('house_shift_assignments')
-          .where('shift', '==', shift.name)
-          .where('status', '==', 'active')
-          .where('is_current', '==', true)
-          .get();
-          
-        console.log(`Found ${shiftAssignments.size} active ${shift.name} shift assignments`);
-        
-        for (const assignmentDoc of shiftAssignments.docs) {
-          const assignment = assignmentDoc.data();
-          const nurseId = assignment.user_id;
-          const houseId = assignment.house_id;
-          
-          // Check if nurse is assigned today
-          const daysAssigned = assignment.days_assigned || [];
-          if (!daysAssigned.includes(currentDay)) {
-            console.log(`Nurse ${nurseId} not assigned on ${currentDay}`);
-            continue;
-          }
-          
-          try {
-            // Get nurse details
-            const nurseDoc = await admin.firestore()
-              .collection('nurses')
-              .doc(nurseId)
-              .get();
-              
-            if (!nurseDoc.exists) {
-              console.log(`Nurse ${nurseId} not found`);
-              continue;
-            }
-            
-            const nurseData = nurseDoc.data();
-            const nurseName = `${nurseData.nurse_fname || ''} ${nurseData.nurse_lname || ''}`.trim();
-            
-            // Get pending vitals for this nurse's elderly residents
-            const elderlyQuery = await admin.firestore()
-              .collection('elderly')
-              .where('house_id', '==', houseId)
-              .get();
-              
-            const elderlyIds = elderlyQuery.docs.map(doc => doc.id);
-            
-            if (elderlyIds.length === 0) {
-              console.log(`No elderly found for house ${houseId}`);
-              continue;
-            }
-            
-            // Get today's date for vitals query
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const todayTimestamp = admin.firestore.Timestamp.fromDate(today);
-            
-            // Count pending vitals for today
-            let totalPendingVitals = 0;
-            const vitalsByElderly = {};
-            
-            for (const elderlyId of elderlyIds) {
-              const vitalsQuery = await admin.firestore()
-                .collection('vital_activity_logs')
-                .where('elderly_id', '==', elderlyId)
-                .where('date', '==', todayTimestamp)
-                .where('shift', '==', shift.name)
-                .where('status', '==', 'pending')
-                .get();
-                
-              if (vitalsQuery.size > 0) {
-                // Get elderly name
-                const elderlyDoc = await admin.firestore()
-                  .collection('elderly')
-                  .doc(elderlyId)
-                  .get();
-                  
-                const elderlyData = elderlyDoc.data();
-                const elderlyName = `${elderlyData.elderly_fname || ''} ${elderlyData.elderly_lname || ''}`.trim();
-                
-                vitalsByElderly[elderlyName] = vitalsQuery.size;
-                totalPendingVitals += vitalsQuery.size;
-              }
-            }
-            
-            // Only send notification if there are pending vitals
-            if (totalPendingVitals > 0) {
-              console.log(`Found ${totalPendingVitals} pending vitals for nurse ${nurseName}`);
-              
-              // Check if we already sent a vitals reminder for this shift today to prevent duplicates
-              const today = new Date();
-              const todayDateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
-              
-              const existingReminderQuery = await admin.firestore()
-                .collection('scheduled_notifications')
-                .where('type', '==', 'vitals_reminder')
-                .where('nurseId', '==', nurseId)
-                .where('shift', '==', shift.name)
-                .where('status', '==', 'sent')
-                .orderBy('sentAt', 'desc')
-                .limit(1)
-                .get();
-                
-              if (!existingReminderQuery.empty) {
-                const lastReminder = existingReminderQuery.docs[0].data();
-                const lastReminderDate = lastReminder.sentAt.toDate();
-                const lastReminderDateStr = lastReminderDate.toISOString().split('T')[0];
-                
-                if (lastReminderDateStr === todayDateStr) {
-                  console.log(`⚠️ Vitals reminder already sent today for nurse ${nurseName} in ${shift.name} shift, skipping duplicate`);
-                  continue;
-                }
-              }
-              
-              // Get nurse FCM token
-              const tokenDoc = await admin.firestore()
-                .collection('fcm_tokens')
-                .doc(nurseId)
-                .get();
-                
-              if (!tokenDoc.exists || !tokenDoc.data().token) {
-                console.log(`No FCM token found for nurse: ${nurseId}`);
-                continue;
-              }
-              
-              const token = tokenDoc.data().token;
-              
-              // Create summary message
-              const elderlyList = Object.entries(vitalsByElderly)
-                .map(([name, count]) => `${name} (${count})`)
-                .join(', ');
-                
-              const title = '📊 Vitals Reminder - 2 Hours Left';
-              const body = `${totalPendingVitals} pending vitals need completion before your ${shift.name} shift ends. Residents: ${elderlyList}`;
-              
-              const message = {
-                notification: {
-                  title: title,
-                  body: body,
-                },
-                data: {
-                  type: 'vitals_reminder',
-                  shift: shift.name,
-                  totalPending: totalPendingVitals.toString(),
-                  houseId: houseId,
-                  nurseId: nurseId,
-                  nurseName: nurseName,
-                  elderlyDetails: JSON.stringify(vitalsByElderly),
-                  click_action: 'FLUTTER_NOTIFICATION_CLICK',
-                },
-                android: {
-                  priority: 'high',
-                  notification: {
-                    channelId: 'vitals_channel',
-                    priority: 'max',
-                    sound: 'default',
-                    tag: `vitals_reminder_${nurseId}_${shift.name}`,
-                  },
-                },
-                apns: {
-                  payload: {
-                    aps: {
-                      sound: 'default',
-                      contentAvailable: true,
-                    },
-                  },
-                },
-                token: token
-              };
-              
-              await admin.messaging().send(message);
-              console.log(`Sent vitals reminder to ${nurseName}: ${totalPendingVitals} pending vitals`);
-              
-              // Log the reminder in scheduled_notifications for tracking
-              await admin.firestore().collection('scheduled_notifications').add({
-                type: 'vitals_reminder',
-                nurseId: nurseId,
-                nurseName: nurseName,
-                shift: shift.name,
-                houseId: houseId,
-                totalPendingVitals: totalPendingVitals,
-                elderlyDetails: vitalsByElderly,
-                status: 'sent',
-                sentAt: admin.firestore.FieldValue.serverTimestamp(),
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
-              });
-              
-            } else {
-              console.log(`No pending vitals found for nurse ${nurseName} in ${shift.name} shift`);
-            }
-            
-          } catch (error) {
-            console.error(`Error processing vitals reminder for nurse ${nurseId}:`, error);
-          }
-        }
-      }
-    }
-    
-    return { success: true, processedAt: now.toISOString() };
-  } catch (error) {
-    console.error('Error checking pending vitals reminders:', error);
-    return null;
-  }
-});
+// ============================================================================
+// NEW VITALS SYSTEM - AUTO-CREATE vitals_daily & HANDLE SHIFT TRANSITIONS
+// ============================================================================
 
-// Auto-mark pending vitals as missed at shift end (runs every 5 minutes)
-exports.markPendingVitalsAsMissedAtShiftEnd = onScheduleV2('every 5 minutes', async (event) => {
+// Auto-create vitals_daily documents at day start (runs every 5 minutes at midnight window)
+exports.autoCreateVitalsDaily = onScheduleV2('every 5 minutes', async (event) => {
   try {
-    console.log('🔄 Checking for shift transitions to mark pending vitals as missed...');
-    
-    // Use Philippines timezone (UTC+8) for shift timing
     const now = new Date();
     const philippinesTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
     const currentHour = philippinesTime.getHours();
     const currentMinute = philippinesTime.getMinutes();
     
-    console.log(`Current Philippines time: ${philippinesTime.toLocaleString()}`);
-    console.log(`Hour: ${currentHour}, Minute: ${currentMinute}`);
-    const today = philippinesTime.toISOString().split('T')[0]; // Format: YYYY-MM-DD (Philippines date)
+    // Only run between 12:00 AM and 12:30 AM Philippines time
+    if (currentHour !== 0 || currentMinute > 30) {
+      return { success: true, message: 'Not in auto-create window' };
+    }
+
+    console.log('🌅 Auto-creating vitals_daily documents for new day...');
+    
+    const today = philippinesTime.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // Get all active elderly residents
+    const elderlyQuery = await admin.firestore()
+      .collection('elderly')
+      .where('status', '==', 'active')
+      .get();
+    
+    if (elderlyQuery.empty) {
+      console.log('No active elderly found');
+      return { success: true, message: 'No active elderly found' };
+    }
+
+    console.log(`Found ${elderlyQuery.size} active elderly residents`);
+    
+    const batch = admin.firestore().batch();
+    let createdCount = 0;
+
+    for (const elderlyDoc of elderlyQuery.docs) {
+      const elderlyData = elderlyDoc.data();
+      const elderlyId = elderlyDoc.id;
+      const elderlyName = `${elderlyData.elderly_fname || ''} ${elderlyData.elderly_lname || ''}`.trim();
+      const houseId = elderlyData.house_id || '';
+
+      if (!houseId) {
+        console.log(`⚠️ Skipping elderly ${elderlyId} - no house_id`);
+        continue;
+      }
+
+      // Check if vitals_daily already exists for today
+      const vitalsId = `${elderlyId}_${today}`;
+      const existingVital = await admin.firestore()
+        .collection('vitals_daily')
+        .doc(vitalsId)
+        .get();
+
+      if (existingVital.exists) {
+        console.log(`✅ vitals_daily already exists for ${elderlyName} (${vitalsId})`);
+        continue;
+      }
+
+      // Create new vitals_daily document
+      const vitalsDailyRef = admin.firestore().collection('vitals_daily').doc(vitalsId);
+      batch.set(vitalsDailyRef, {
+        vitals_id: vitalsId,
+        elderly_id: elderlyId,
+        elderly_name: elderlyName,
+        assigned_date: today,
+        house_id: houseId,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+        created_by: 'system',
+        vital_values: {
+          blood_pressure: null,
+          temperature: null,
+          pulse_rate: null,
+          oxygen_saturation: null,
+          respiratory_rate: null,
+          notes: null,
+          last_updated_at: null,
+          last_updated_by: null
+        },
+        shift_status: {
+          '1st': { status: 'pending', completed_by: null, completed_at: null, missed_reason: null },
+          '2nd': { status: 'pending', completed_by: null, completed_at: null, missed_reason: null },
+          '3rd': { status: 'pending', completed_by: null, completed_at: null, missed_reason: null }
+        },
+        any_completed: false,
+        any_missed: false,
+        updated_at: null
+      });
+
+      createdCount++;
+      console.log(`✅ Created vitals_daily for ${elderlyName} (${vitalsId})`);
+    }
+
+    if (createdCount > 0) {
+      await batch.commit();
+      console.log(`🎉 Successfully created ${createdCount} vitals_daily documents`);
+    }
+
+    return {
+      success: true,
+      date: today,
+      created: createdCount,
+      totalElderly: elderlyQuery.size
+    };
+
+  } catch (error) {
+    console.error('❌ Error auto-creating vitals_daily:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Auto-mark pending shift_status as missed at shift end (runs every 5 minutes)
+exports.markShiftVitalsAsMissed = onScheduleV2('every 5 minutes', async (event) => {
+  try {
+    const now = new Date();
+    const philippinesTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
+    const currentHour = philippinesTime.getHours();
+    const currentMinute = philippinesTime.getMinutes();
+    const today = philippinesTime.toISOString().split('T')[0];
 
     let endedShift = '';
 
-    // Check if we're at shift transition time (with 30-minute buffer for reliability)
+    // Check if we're at shift transition time (with 30-minute buffer)
     if (currentHour === 14 && currentMinute >= 0 && currentMinute <= 30) {
-      endedShift = '1st'; // 1st shift ended at 2:00 PM (check until 2:30 PM)
+      endedShift = '1st';
     } else if (currentHour === 22 && currentMinute >= 0 && currentMinute <= 30) {
-      endedShift = '2nd'; // 2nd shift ended at 10:00 PM (check until 10:30 PM)
+      endedShift = '2nd';
     } else if (currentHour === 6 && currentMinute >= 0 && currentMinute <= 30) {
-      endedShift = '3rd'; // 3rd shift ended at 6:00 AM (check until 6:30 AM)
+      endedShift = '3rd';
     }
 
     if (!endedShift) {
-      console.log('Not at shift transition time, skipping');
       return { success: true, message: 'Not at shift transition time' };
     }
 
-    console.log(`🚨 Shift transition detected: ${endedShift} shift ended, marking pending vitals as missed`);
+    console.log(`🚨 Shift ${endedShift} ended - marking pending vitals as missed...`);
 
-    // STEP 1: Get all nurse assignments for the ended shift today
-    console.log(`📋 Finding nurses who worked ${endedShift} shift today...`);
-    const nurseAssignments = await admin.firestore()
-      .collection('house_shift_assignments')
-      .where('shift', '==', endedShift)
-      .where('day', '==', now.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Manila' }))
-      .where('is_current', '==', true)
+    // Get all vitals_daily for today with pending status for the ended shift
+    const vitalsDailyQuery = await admin.firestore()
+      .collection('vitals_daily')
+      .where('assigned_date', '==', today)
       .get();
 
-    if (nurseAssignments.empty) {
-      console.log(`No nurse assignments found for ${endedShift} shift today`);
-      return { success: true, message: `No nurse assignments found for ${endedShift} shift today` };
+    if (vitalsDailyQuery.empty) {
+      console.log('No vitals_daily documents found for today');
+      return { success: true, message: 'No vitals_daily found' };
     }
 
-    console.log(`Found ${nurseAssignments.size} nurse assignments for ${endedShift} shift`);
+    const batch = admin.firestore().batch();
+    let missedCount = 0;
 
-    let totalMissedVitals = 0;
-    const allProcessedVitals = [];
+    for (const vitalDoc of vitalsDailyQuery.docs) {
+      const vitalData = vitalDoc.data();
+      const shiftStatus = vitalData.shift_status || {};
+      const currentShiftStatus = shiftStatus[endedShift] || {};
 
-    // STEP 2: Process each nurse's assignments separately
-    for (const assignDoc of nurseAssignments.docs) {
-      const assignData = assignDoc.data();
-      const nurseId = assignData.user_id;
-      const houseId = assignData.house_id;
-      const elderlyIds = assignData.elderly_ids || [];
-
-      console.log(`👩‍⚕️ Processing nurse ${nurseId} in house ${houseId} with ${elderlyIds.length} elderly assignments`);
-
-      if (!nurseId || !houseId || elderlyIds.length === 0) {
-        console.log(`⚠️ Skipping incomplete assignment: nurseId=${nurseId}, houseId=${houseId}, elderlyCount=${elderlyIds.length}`);
-        continue;
-      }
-
-      // STEP 3: Get ONLY pending vitals for THIS nurse's assigned elderly
-      const nursePendingVitals = await admin.firestore()
-        .collection('vitals')
-        .where('assigned_date', '==', today)
-        .where('shift', '==', endedShift)
-        .where('status', '==', 'pending')
-        .where('assigned_nurse_id', '==', nurseId)
-        .where('house_id', '==', houseId)
-        .get();
-
-      if (nursePendingVitals.empty) {
-        console.log(`✅ No pending vitals found for nurse ${nurseId} in ${endedShift} shift`);
-        continue;
-      }
-
-      // STEP 4: Filter to ensure vitals are only for elderly assigned to this nurse
-      const validVitals = nursePendingVitals.docs.filter(doc => {
-        const vitalData = doc.data();
-        const isAssigned = elderlyIds.includes(vitalData.elderly_id);
-        if (!isAssigned) {
-          console.log(`⚠️ Skipping vital ${doc.id} - elderly ${vitalData.elderly_id} not assigned to nurse ${nurseId}`);
-        }
-        return isAssigned;
-      });
-
-      if (validVitals.length === 0) {
-        console.log(`✅ No valid pending vitals found for nurse ${nurseId}'s assigned elderly`);
-        continue;
-      }
-
-      console.log(`📊 Found ${validVitals.length} pending vitals to mark as missed for nurse ${nurseId}`);
-      totalMissedVitals += validVitals.length;
-
-      // STEP 5: Get nurse and elderly names for this nurse's assignments
-      let nurseName = 'Unknown Nurse';
-      try {
-        const nurseDoc = await admin.firestore().collection('users').doc(nurseId).get();
-        if (nurseDoc.exists) {
-          const userData = nurseDoc.data();
-          nurseName = `${userData.user_fname || ''} ${userData.user_lname || ''}`.trim();
-        }
-      } catch (error) {
-        console.error(`Error fetching nurse ${nurseId}:`, error);
-      }
-
-      const elderlyNames = {};
-      for (const elderlyId of elderlyIds) {
-        try {
-          const elderlyDoc = await admin.firestore().collection('elderly').doc(elderlyId).get();
-          if (elderlyDoc.exists) {
-            const elderlyData = elderlyDoc.data();
-            elderlyNames[elderlyId] = `${elderlyData.elderly_fname || ''} ${elderlyData.elderly_lname || ''}`.trim();
-          } else {
-            elderlyNames[elderlyId] = 'Unknown Elderly';
-          }
-        } catch (error) {
-          console.error(`Error fetching elderly ${elderlyId}:`, error);
-          elderlyNames[elderlyId] = 'Unknown Elderly';
-        }
-      }
-
-      // STEP 6: Mark this nurse's pending vitals as missed (with duplicate prevention)
-      const batch = admin.firestore().batch();
-      const nurseProcessedVitals = [];
-
-      validVitals.forEach(doc => {
-        const data = doc.data();
-        const elderlyId = data.elderly_id;
-
-        // Update vital status to missed
-        batch.update(doc.ref, {
-          status: 'missed',
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
-          missed_reason: `Auto-marked as missed - ${endedShift} shift ended without completion`,
-          missed_at: admin.firestore.FieldValue.serverTimestamp(),
-          auto_missed_by: 'system', // ✅ Mark as system processed
-          processed_shift: endedShift, // ✅ Track which shift was processed
+      // Only mark as missed if still pending
+      if (currentShiftStatus.status === 'pending') {
+        // Update shift_status
+        batch.update(vitalDoc.ref, {
+          [`shift_status.${endedShift}.status`]: 'missed',
+          [`shift_status.${endedShift}.missed_reason`]: `Auto-marked: ${endedShift} shift ended without completion`,
+          any_missed: true,
+          updated_at: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Create activity log for missed vital (with proper elderly name)
-        const elderlyName = elderlyNames[elderlyId] || `Elderly-${elderlyId}`;
-        const activityLogRef = admin.firestore().collection('vital_activity_logs').doc();
+        // Create activity log
+        const activityLogRef = admin.firestore().collection('vitals_activity_logs').doc();
         batch.set(activityLogRef, {
-          vital_id: doc.id,
-          elderly_id: elderlyId,
-          elderly_name: elderlyName, // ✅ Guaranteed proper name
-          nurse_id: nurseId,
-          nurse_name: nurseName,
-          house_id: houseId,
-          action_type: 'vital_missed',
-          old_value: { 
-            status: 'pending', // 🎯 CRITICAL: Store original status for UI filtering
-            assigned_date: today,
-            shift: endedShift
-          },
-          new_value: {
-            status: 'missed',
-            missed_reason: `Auto-marked as missed - ${endedShift} shift ended without completion`,
-            missed_at: admin.firestore.FieldValue.serverTimestamp()
-          },
-          remarks: `Automatically marked as missed at end of ${endedShift} shift (${philippinesTime.toTimeString().substring(0, 5)} PHT)`,
-          shift: endedShift,
+          activity_id: activityLogRef.id,
+          vitals_id: vitalDoc.id,
+          elderly_id: vitalData.elderly_id,
+          elderly_name: vitalData.elderly_name,
           assigned_date: today,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          auto_processed: true, // ✅ Mark as automatically processed
-          processing_time: philippinesTime.toISOString(), // ✅ Track when processed
-          original_status_verified: 'pending', // 🎯 Extra field for double verification
-        });
-
-        nurseProcessedVitals.push({
-          vital_id: doc.id,
-          elderly_name: elderlyNames[elderlyId] || 'Unknown Elderly',
-          nurse_name: nurseName,
-        });
-
-        console.log(`✅ Marking vital as missed: ${elderlyNames[elderlyId]} (Nurse: ${nurseName}) - ${endedShift} shift`);
-      });
-
-      await batch.commit();
-      console.log(`🎯 Successfully marked ${validVitals.length} vitals as missed for nurse ${nurseName}`);
-
-      allProcessedVitals.push(...nurseProcessedVitals);
-    }
-
-    if (totalMissedVitals === 0) {
-      console.log(`✅ No pending vitals found for any nurses in ${endedShift} shift`);
-      return { success: true, message: `No pending vitals found for any nurses in ${endedShift} shift` };
-    }
-
-    console.log(`🎉 COMPLETED: Marked ${totalMissedVitals} pending vitals as missed for ${endedShift} shift across all nurses`);
-
-    // STEP 7: Also mark pending medication takes as missed at shift end
-    let totalMissedMedications = 0;
-    const allProcessedMedications = [];
-
-    for (const assignDoc of nurseAssignments.docs) {
-      const assignData = assignDoc.data();
-      const nurseId = assignData.user_id;
-      const houseId = assignData.house_id;
-      const elderlyIds = assignData.elderly_ids || [];
-
-      console.log(`💊 Processing medications for nurse ${nurseId} in house ${houseId}`);
-
-      if (!nurseId || !houseId || elderlyIds.length === 0) {
-        continue;
-      }
-
-      // Get pending medication takes for this nurse's assigned elderly
-      const pendingMedicationTakes = await admin.firestore()
-        .collection('medication_takes')
-        .where('assigned_date', '==', today)
-        .where('shift', '==', endedShift)
-        .where('status', '==', 'pending')
-        .where('assigned_nurse_id', '==', nurseId)
-        .where('house_id', '==', houseId)
-        .get();
-
-      if (pendingMedicationTakes.empty) {
-        console.log(`✅ No pending medication takes for nurse ${nurseId}`);
-        continue;
-      }
-
-      // Filter to ensure medication takes are only for elderly assigned to this nurse
-      const validMedicationTakes = pendingMedicationTakes.docs.filter(doc => {
-        const takeData = doc.data();
-        const isAssigned = elderlyIds.includes(takeData.elderly_id);
-        if (!isAssigned) {
-          console.log(`⚠️ Skipping medication take ${doc.id} - elderly ${takeData.elderly_id} not assigned to nurse ${nurseId}`);
-        }
-        return isAssigned;
-      });
-
-      if (validMedicationTakes.length === 0) {
-        console.log(`✅ No valid pending medication takes for nurse ${nurseId}'s assigned elderly`);
-        continue;
-      }
-
-      console.log(`📊 Found ${validMedicationTakes.length} pending medication takes to mark as missed for nurse ${nurseId}`);
-      totalMissedMedications += validMedicationTakes.length;
-
-      // Get nurse name for logging
-      let nurseName = 'Unknown Nurse';
-      try {
-        const nurseDoc = await admin.firestore().collection('users').doc(nurseId).get();
-        if (nurseDoc.exists) {
-          const userData = nurseDoc.data();
-          nurseName = `${userData.user_fname || ''} ${userData.user_lname || ''}`.trim();
-        }
-      } catch (error) {
-        console.error(`Error fetching nurse ${nurseId}:`, error);
-      }
-
-      // Get elderly names for this nurse's assignments
-      const elderlyNames = {};
-      for (const elderlyId of elderlyIds) {
-        try {
-          const elderlyDoc = await admin.firestore().collection('elderly').doc(elderlyId).get();
-          if (elderlyDoc.exists) {
-            const elderlyData = elderlyDoc.data();
-            elderlyNames[elderlyId] = `${elderlyData.elderly_fname || ''} ${elderlyData.elderly_lname || ''}`.trim();
-          } else {
-            elderlyNames[elderlyId] = 'Unknown Elderly';
-          }
-        } catch (error) {
-          console.error(`Error fetching elderly ${elderlyId}:`, error);
-          elderlyNames[elderlyId] = 'Unknown Elderly';
-        }
-      }
-
-      // Mark medication takes as missed
-      const medicationBatch = admin.firestore().batch();
-      const nurseProcessedMedications = [];
-
-      validMedicationTakes.forEach(doc => {
-        const data = doc.data();
-        const elderlyId = data.elderly_id;
-
-        // Update medication take status to missed
-        medicationBatch.update(doc.ref, {
-          status: 'missed',
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
-          missed_reason: `Auto-marked as missed - ${endedShift} shift ended without administration`,
-          missed_at: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        // Create medication activity log
-        const medicationActivityLogRef = admin.firestore().collection('medication_activity_logs').doc();
-        medicationBatch.set(medicationActivityLogRef, {
-          take_id: doc.id,
-          elderly_id: elderlyId,
-          elderly_name: elderlyNames[elderlyId] || 'Unknown Elderly',
-          nurse_id: nurseId,
-          nurse_name: nurseName,
-          house_id: houseId,
-          action_type: 'medication_missed',
+          action_type: 'shift_missed',
+          shift: endedShift,
+          nurse_id: null,
+          nurse_name: 'system',
           old_value: { status: 'pending' },
-          new_value: {
+          new_value: { 
             status: 'missed',
-            missed_reason: `Auto-marked as missed - ${endedShift} shift ended without administration`,
+            missed_reason: `Auto-marked: ${endedShift} shift ended without completion`
           },
-          remarks: `Automatically marked as missed at end of ${endedShift} shift (${philippinesTime.toTimeString().substring(0, 5)} PHT)`,
-          shift: endedShift,
-          assigned_date: today,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          remarks: `Automatically marked as missed at ${philippinesTime.toTimeString().substring(0, 5)} PHT`,
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        nurseProcessedMedications.push({
-          take_id: doc.id,
-          elderly_name: elderlyNames[elderlyId] || 'Unknown Elderly',
-          nurse_name: nurseName,
-          medication_name: data.medication_name || 'Unknown Medication',
-        });
-
-        console.log(`✅ Marking medication take as missed: ${data.medication_name} for ${elderlyNames[elderlyId]} (Nurse: ${nurseName}) - ${endedShift} shift`);
-      });
-
-      await medicationBatch.commit();
-      console.log(`🎯 Successfully marked ${validMedicationTakes.length} medication takes as missed for nurse ${nurseName}`);
-
-      allProcessedMedications.push(...nurseProcessedMedications);
+        missedCount++;
+        console.log(`✅ Marked ${vitalData.elderly_name} - ${endedShift} shift as missed`);
+      }
     }
 
-    console.log(`🎉 COMPLETED: Marked ${totalMissedVitals} vitals and ${totalMissedMedications} medications as missed for ${endedShift} shift across all nurses`);
+    if (missedCount > 0) {
+      await batch.commit();
+      console.log(`🎉 Marked ${missedCount} shift vitals as missed`);
+    }
 
     return {
       success: true,
       shift: endedShift,
-      vitalsMarkedAsMissed: totalMissedVitals,
-      medicationsMarkedAsMissed: totalMissedMedications,
-      processedVitals: allProcessedVitals,
-      processedMedications: allProcessedMedications,
-      processedAt: now.toISOString()
+      missedCount: missedCount,
+      date: today
     };
 
   } catch (error) {
-    console.error('❌ Error marking pending vitals as missed:', error);
+    console.error('❌ Error marking shift vitals as missed:', error);
     return { success: false, error: error.message };
   }
 });

@@ -76,6 +76,10 @@ class DailyResetService {
         final elderlyNames = <String, String>{};
         final nurseNames = <String, String>{};
 
+        // If some vitals lack assigned_nurse_id, try to infer the assigned nurse
+        // from `elderly_assignments` (source of truth). Map elderlyId -> inferredNurseId
+        final inferredNurseByElderly = <String, String>{};
+
         for (final elderlyId in elderlyIds) {
           try {
             final doc = await _firestore
@@ -90,6 +94,31 @@ class DailyResetService {
             }
           } catch (e) {
             elderlyNames[elderlyId] = 'Unknown Elderly';
+          }
+
+          // Try to infer nurse assignment for this elderly if not already known
+          try {
+            final dayName = DateFormat('EEEE').format(now);
+            final assignmentQuery = await _firestore
+                .collection('elderly_assignments')
+                .where('is_current', isEqualTo: true)
+                .where('user_type', isEqualTo: 'nurse')
+                .where('day', isEqualTo: dayName)
+                .where('shift', isEqualTo: endedShift)
+                .where('elderly_ids', arrayContains: elderlyId)
+                .limit(1)
+                .get();
+
+            if (assignmentQuery.docs.isNotEmpty) {
+              final a = assignmentQuery.docs.first.data();
+              final inferredNurseId = a['user_id'] as String?;
+              if (inferredNurseId != null && inferredNurseId.isNotEmpty) {
+                inferredNurseByElderly[elderlyId] = inferredNurseId;
+                nurseIds.add(inferredNurseId);
+              }
+            }
+          } catch (e) {
+            // ignore inference errors - we'll fallback to system name
           }
         }
 
@@ -111,7 +140,10 @@ class DailyResetService {
         for (final doc in pendingVitals.docs) {
           final data = doc.data();
           final elderlyId = data['elderly_id'] as String? ?? 'unknown';
-          final nurseId = data['assigned_nurse_id'] as String? ?? 'unknown';
+          final assignedFromVital = data['assigned_nurse_id'] as String?;
+          // Prefer the assigned nurse from the vital doc; if missing, use inferred
+          final effectiveNurseId =
+              assignedFromVital ?? inferredNurseByElderly[elderlyId];
           final houseId = data['house_id'] as String? ?? 'unknown';
 
           // Update vital status to missed
@@ -124,12 +156,17 @@ class DailyResetService {
           });
 
           // Create activity log for missed vital
-          batch.set(_firestore.collection('vital_activity_logs').doc(), {
+          batch.set(_firestore.collection('vitals_activity_logs').doc(), {
             'vital_id': doc.id,
             'elderly_id': elderlyId,
             'elderly_name': elderlyNames[elderlyId] ?? 'Unknown Elderly',
-            'nurse_id': nurseId,
-            'nurse_name': nurseNames[nurseId] ?? 'Unknown Nurse',
+            // Log the nurse who was assigned (inferred if necessary). If we
+            // couldn't determine anyone, fall back to 'system' name and
+            // keep nurse_id as null to indicate system action.
+            'nurse_id': effectiveNurseId,
+            'nurse_name':
+                nurseNames[effectiveNurseId] ??
+                (effectiveNurseId == null ? 'system' : 'Unknown Nurse'),
             'house_id': houseId,
             'action_type': 'vital_missed',
             'old_value': {'status': 'pending'},
@@ -142,6 +179,11 @@ class DailyResetService {
                 'Automatically marked as missed at end of $endedShift shift (${DateFormat('HH:mm').format(now)})',
             'shift': endedShift,
             'assigned_date': today,
+            // Mark that this activity was created automatically by the system
+            // so the UI can render it differently (UI-only flag).
+            'auto_marked': true,
+            'created_by': 'system',
+            'source': 'system',
             'timestamp': FieldValue.serverTimestamp(),
           });
 
@@ -193,7 +235,7 @@ class DailyResetService {
       );
 
       // 🗑️ STEP 1: Remove ALL old vitals data (yesterday and older)
-      // Data is preserved in vital_activity_logs for history
+      // Data is preserved in vitals_activity_logs for history
       final oldVitals = await _firestore
           .collection('vitals')
           .where('assigned_date', isLessThan: todayString)
@@ -805,7 +847,7 @@ class DailyResetService {
       final defaultStartDate = startDate ?? now.subtract(Duration(days: 7));
       final defaultEndDate = endDate ?? now;
 
-      Query query = _firestore.collection('vital_activity_logs');
+      Query query = _firestore.collection('vitals_activity_logs');
 
       // Apply filters
       if (houseId != null) {
@@ -877,7 +919,7 @@ class DailyResetService {
       final startDate = now.subtract(Duration(days: daysBack));
 
       Query query = _firestore
-          .collection('vital_activity_logs')
+          .collection('vitals_activity_logs')
           .where('action_type', isEqualTo: 'vital_missed')
           .where(
             'timestamp',
