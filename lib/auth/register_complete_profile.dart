@@ -4,7 +4,7 @@ import '../services/auth_service.dart';
 
 class RegisterProfileScreen extends StatefulWidget {
   final String selectedRole;
-  
+
   const RegisterProfileScreen({super.key, required this.selectedRole});
 
   @override
@@ -56,17 +56,19 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       ),
     );
   }
+
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreed = false;
   bool _isLoading = false;
   DateTime? _selectedDate;
-  
+
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
   final TextEditingController _birthdayController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final AuthService _authService = AuthService();
@@ -93,10 +95,14 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
 
     try {
       final userData = {
-        'firstName': _firstNameController.text.trim(), // This will be mapped to user_fname in AuthService
-        'lastName': _lastNameController.text.trim(), // This will be mapped to user_lname in AuthService
-        'phone': _phoneController.text.trim(), // This will be mapped to user_contactNum in AuthService
-        'birthday': _selectedDate?.toIso8601String(), // This will be mapped to user_bday in AuthService
+        'firstName': _firstNameController.text
+            .trim(), // This will be mapped to user_fname in AuthService
+        'lastName': _lastNameController.text
+            .trim(), // This will be mapped to user_lname in AuthService
+        'phone': _phoneController.text
+            .trim(), // This will be mapped to user_contactNum in AuthService
+        'birthday': _selectedDate
+            ?.toIso8601String(), // This will be mapped to user_bday in AuthService
         'profileCompleted': true,
       };
 
@@ -110,7 +116,7 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       if (userCredential != null && mounted) {
         // Sign out the user after registration so they go through login flow
         await _authService.signOut();
-        
+
         if (mounted) {
           Navigator.pushNamedAndRemoveUntil(
             context,
@@ -144,7 +150,8 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
       return false;
     }
 
-    if (_passwordController.text.trim() != _confirmPasswordController.text.trim()) {
+    if (_passwordController.text.trim() !=
+        _confirmPasswordController.text.trim()) {
       _showErrorDialog('Passwords do not match.');
       return false;
     }
@@ -346,12 +353,12 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
 
                             TextField(
                               controller: _firstNameController,
-                              decoration: customInput('First Name')
+                              decoration: customInput('First Name'),
                             ),
                             const SizedBox(height: 15),
                             TextField(
                               controller: _lastNameController,
-                              decoration: customInput('Last Name')
+                              decoration: customInput('Last Name'),
                             ),
                             const SizedBox(height: 15),
                             TextField(
@@ -449,7 +456,8 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   color: Color(0xFF2D5260),
-                                                  decoration: TextDecoration.underline,
+                                                  decoration:
+                                                      TextDecoration.underline,
                                                   fontSize: 15,
                                                 ),
                                               ),
@@ -479,25 +487,30 @@ class _RegisterProfileScreenState extends State<RegisterProfileScreen> {
                                   ),
                                 ),
                                 onPressed: _agreed
-                                    ? _isLoading ? null : _handleRegistration
+                                    ? _isLoading
+                                          ? null
+                                          : _handleRegistration
                                     : null,
-                                child: _isLoading 
-                                  ? const SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Colors.white,
+                                              ),
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Register',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                        ),
                                       ),
-                                    )
-                                  : const Text(
-                                      'Register',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
                               ),
                             ),
                             const SizedBox(height: 20),

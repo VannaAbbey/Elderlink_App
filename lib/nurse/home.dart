@@ -497,10 +497,8 @@ class _NurseHomeScreenState extends State<NurseHomeScreen> {
                             firstDate: DateTime.now(),
                             lastDate: DateTime(2100),
                           );
-                          if (pickedDate != null) {
-                            setState(() => taskEndDate = pickedDate);
-                          }
-                        },
+                          setState(() => taskEndDate = pickedDate);
+                                                },
                       ),
                     const SizedBox(height: 20),
 
