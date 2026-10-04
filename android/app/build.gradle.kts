@@ -7,6 +7,9 @@ plugins {
 }
 
 dependencies { 
+  // Core library desugaring for flutter_local_notifications
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")  // << ADD THIS LINE
+    
   // Import the Firebase BoM
   implementation(platform("com.google.firebase:firebase-bom:34.0.0")) //added for firebase backend - july 30, 2025
 
@@ -27,12 +30,13 @@ android {
     ndkVersion = "27.0.12077973"
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_1_8   // << change from 11
+        targetCompatibility = JavaVersion.VERSION_1_8   // << change from 11
+        isCoreLibraryDesugaringEnabled = true           // << ADD THIS LINE
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        jvmTarget = "1.8"                               // << change from 11
     }
 
     defaultConfig {
@@ -44,6 +48,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true    // << ADD THIS LINE
     }
 
     buildTypes {

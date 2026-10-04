@@ -61,7 +61,7 @@ class _RegisterChooseRoleScreenState extends State<RegisterChooseRoleScreen> {
                     children: [
                       const SizedBox(height: 20), // ✅ Top padding above logo
                       Image.asset(
-                        'assets/images/logo.png',
+                        'assets/images/Elderlink_Logo.png',
                         height: size.height * 0.11,
                       ),
                       const SizedBox(height: 10),

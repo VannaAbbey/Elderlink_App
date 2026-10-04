@@ -4,15 +4,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../providers/auth_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile.dart';
-import 'settings.dart' as app_settings;
 import 'help_support.dart';
 import 'add_task.dart';
-import 'emergency_modal.dart';
 import 'incident.dart';
 import 'shift.dart';
 import 'notifications.dart';
 import 'caregiver_bottom_navbar.dart';
 import 'houses.dart';
+import 'emergency_handler.dart';
+import 'schedule.dart';
 
 void main() {
   runApp(
@@ -56,8 +56,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
   // Helper to get upcoming tasks from AddTaskScreen logic
   // Remove placeholder and use Firestore stream from AddTaskScreen
   Stream<List<Map<String, dynamic>>> getUpcomingTasksStream() {
-  final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
-  final caregiverId = user?.uid;
+    final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
+    final caregiverId = user?.uid;
     return FirebaseFirestore.instance
         .collection('care_tasks')
         .where('task_status', arrayContains: 'Upcoming')
@@ -108,8 +108,7 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
 
   void onNavTap(int index) {
     if (index == 2) {
-      // Emergency button pressed, show modal
-      showEmergencyModal(context);
+      openEmergencyIfAllowed(context);
       return;
     }
     setState(() {
@@ -421,7 +420,10 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                               ),
                               color: const Color(0xFFE6F3FA),
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
+                                  horizontal: 20,
+                                ),
                                 child: Row(
                                   children: [
                                     const Icon(
@@ -432,7 +434,8 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen> {
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: const [
                                           Text(
                                             'House of St. Sebastian',
@@ -625,14 +628,14 @@ class CaregiverSidebar extends StatelessWidget {
                     },
                   ),
                   ListTile(
-                    leading: Icon(Icons.settings, color: Color(0xFF00588e)),
-                    title: Text('Settings'),
+                    leading: Icon(Icons.schedule, color: Color(0xFF00588e)),
+                    title: Text('Schedule'),
                     onTap: () {
                       toggleSidebar();
                       Navigator.push(
                         parentContext,
                         MaterialPageRoute(
-                          builder: (context) => const app_settings.Settings(),
+                          builder: (context) => const ScheduleScreen(),
                         ),
                       );
                     },
